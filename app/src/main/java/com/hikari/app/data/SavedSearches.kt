@@ -170,37 +170,3 @@ object SavedSearchStore {
         return list
     }
 }
-
-/**
- * F4 — one window of a multi-view session, persisted so a grid the user was
- * watching survives a process kill ([AppStore.multiViewSessionsFlow]).
- */
-data class MultiViewSession(
-    val name: String,
-    val url: String,
-) {
-    companion object {
-        fun parse(raw: String?): List<MultiViewSession> {
-            if (raw.isNullOrBlank()) return emptyList()
-            return runCatching {
-                val arr = JSONArray(raw)
-                buildList {
-                    for (i in 0 until arr.length()) {
-                        val o = arr.optJSONObject(i) ?: continue
-                        val url = o.optString("url").trim()
-                        if (url.isEmpty()) continue
-                        add(MultiViewSession(o.optString("name").trim(), url))
-                    }
-                }
-            }.getOrDefault(emptyList())
-        }
-
-        fun encode(sessions: List<MultiViewSession>): String {
-            val arr = JSONArray()
-            sessions.forEach { s ->
-                arr.put(JSONObject().put("name", s.name).put("url", s.url))
-            }
-            return arr.toString()
-        }
-    }
-}

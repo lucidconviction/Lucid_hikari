@@ -26,17 +26,17 @@ class ChannelSurfController(
 
     val total get() = channels.size
 
-    fun next(): IptvChannel? {
+    suspend fun next(): IptvChannel? {
         val next = (currentIndex + 1) % total
         return switch(next)
     }
 
-    fun prev(): IptvChannel? {
+    suspend fun prev(): IptvChannel? {
         val prev = (currentIndex - 1 + total) % total
         return switch(prev)
     }
 
-    fun switch(index: Int): IptvChannel? {
+    suspend fun switch(index: Int): IptvChannel? {
         if (index < 0 || index >= total) return null
         currentIndex = index
         val ch = channels[index]

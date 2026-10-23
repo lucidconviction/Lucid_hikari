@@ -18,9 +18,9 @@ data class XtreamCredentials(
             if (!u.startsWith("http")) return null
             val uri = try { java.net.URI(u) } catch (_: Exception) { return null }
             val username = uri.query?.takeIf { it.contains("username=") }
-                ?.substringAfter("username=").substringBefore("&").ifBlank { null }
+                ?.substringAfter("username=")?.substringBefore("&")?.ifBlank { null }
             val password = uri.query?.takeIf { it.contains("password=") }
-                ?.substringAfter("password=").substringBefore("&").ifBlank { null }
+                ?.substringAfter("password=")?.substringBefore("&")?.ifBlank { null }
             if (username == null || password == null) return null
             return XtreamCredentials(u.substringBefore("?"), username, password)
         }

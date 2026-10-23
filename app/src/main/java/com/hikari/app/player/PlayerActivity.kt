@@ -4122,10 +4122,10 @@ class PlayerActivity : ComponentActivity() {
                 // showing the controller.
                 if (channelSurfController != null && !controllerVisible && !holdingFast && !controlsLocked) {
                     if (code == android.view.KeyEvent.KEYCODE_DPAD_UP) {
-                        channelSurfController?.prev()
+                        lifecycleScope.launch { channelSurfController?.prev() }
                         true
                     } else {
-                        channelSurfController?.next()
+                        lifecycleScope.launch { channelSurfController?.next() }
                         true
                     }
                 } else if (controllerVisible || holdingFast || controlsLocked) {
