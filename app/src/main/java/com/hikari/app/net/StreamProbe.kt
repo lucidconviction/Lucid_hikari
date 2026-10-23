@@ -55,6 +55,32 @@ object StreamProbe {
     data class Resolved(val url: String, val mime: String?)
 
     /**
+     * F2 — lightweight probe result: an HTTP status code and the elapsed
+     * milliseconds, or null when the probe timed out or errored out. A channel
+     * tile uses this to draw a 🔴 / 🟡 / 🟢 dot. Null means "not probed yet".
+     */
+    data class ProbeResult(val code: Int, val latencyMs: Long) {
+        /** True when the URL answered with a success-ish status (2xx / 3xx). */
+        val isAlive: Boolean get() = code in 200..399
+    }
+
+    /** Probes [url] once and returns the result (or null on any failure).
+     *  Uses a short 5-second GET with no body; suitable for bulk group-level
+     *  validation without hammering the provider. */
+    suspend fun probe(url: String): ProbeResult? = withContext(Dispatchers.IO) {
+        if (url.isBlank() || !url.startsWith("http")) return@withContext null
+        runCatching {
+            val t0 = System.currentTimeMillis()
+            val response = get(url, emptyMap()) ?: return@runCatching null
+            response.use { r ->
+                val code = r.code
+                val latency = System.currentTimeMillis() - t0
+                ProbeResult(code, latency)
+            }
+        }.getOrNull()
+    }
+
+    /**
      * URLs a probe reached and that answered a TERMINAL failure (an HTTP 5xx, a
      * 404/410). The player consults this before handing a URL to ExoPlayer: a
      * server the probe already proved dead would only cost a full prepare +

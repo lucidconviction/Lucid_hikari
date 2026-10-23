@@ -32,6 +32,10 @@ data class IptvChannel(
      *  (an embed page — resolved like any other embed, else opened as a link),
      *  [KIND_TERABOX] (a Terabox-family share — resolved at play time). */
     val kind: String = "",
+    /** Probe result for live-URLs (null = not probed yet). Set when the user
+     *  taps "Validate" on a group header in the IPTV tab; memoised per-playlist
+     *  with a 5-minute TTL so re-opening the app does not hammer the panel. */
+    val probeResult: com.hikari.app.net.StreamProbe.ProbeResult? = null,
 ) {
     companion object {
         const val KIND_DIRECT = "direct"
