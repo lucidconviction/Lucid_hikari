@@ -104,6 +104,8 @@ import com.hikari.app.ui.screens.HistoryScreen
 import com.hikari.app.ui.screens.HomeScreen
 import com.hikari.app.ui.screens.IptvPlaylistScreen
 import com.hikari.app.ui.screens.IptvScreen
+import com.hikari.app.ui.screens.MultiViewLayout
+import com.hikari.app.ui.screens.MultiViewScreen
 import com.hikari.app.ui.screens.LibraryScreen
 import com.hikari.app.ui.screens.MangaDetailScreen
 import com.hikari.app.ui.screens.MangaReaderScreen
@@ -144,6 +146,8 @@ object Routes {
     const val IPTV = "iptv"
     /** One playlist's own page: its groups, each opening a paged channel grid. */
     const val IPTV_PLAYLIST = "iptv-playlist?pid={pid}"
+    /** F4 — multi-view screen with a grid of ExoPlayer windows. */
+    const val MULTI_VIEW = "multi-view?{sessions}&layout={layout}"
 
     /**
      * The Manga tab — the same kind of extra page as [IPTV]: OFF by default and
@@ -313,6 +317,12 @@ object Routes {
     /** Opens one IPTV playlist's group list. */
     fun iptvPlaylist(providerId: String): String =
         "iptv-playlist?pid=${Uri.encode(providerId)}"
+    /** F4 — opens the multi-view screen with the given sessions and layout. */
+    fun multiView(sessions: List<com.hikari.app.data.MultiViewSession>, layout: String = ""): String {
+        val encoded = Uri.encode(com.hikari.app.data.MultiViewSession.encode(sessions))
+        val layoutArg = if (layout.isBlank()) "GRID_2x3" else Uri.encode(layout)
+        return "multi-view?sessions=$encoded&layout=$layoutArg"
+    }
     /**
      * Same Search screen, but pre-filled with a query (genre tags, "show all",
      * search suggestions…) and/or scoped to one provider (Home's "Search this
@@ -1369,6 +1379,24 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
             ) { entry ->
                 val pid = Uri.decode(entry.arguments?.getString("pid").orEmpty())
                 IptvPlaylistScreen(nav, pid)
+            }
+            composable(
+                route = Routes.MULTI_VIEW,
+                arguments = listOf(
+                    navArgument("sessions") { type = NavType.StringType },
+                    navArgument("layout") { type = NavType.StringType; defaultValue = "GRID_2x3" },
+                )
+            ) { entry ->
+                val sessions = com.hikari.app.data.MultiViewSession.parse(
+                    entry.arguments?.getString("sessions")
+                )
+                val layoutKey = entry.arguments?.getString("layout") ?: "GRID_2x3"
+                val layout = com.hikari.app.ui.screens.MultiViewLayout.fromKey(layoutKey)
+                MultiViewScreen(
+                    sessions = sessions,
+                    layout = layout,
+                    onBack = { nav.popBackStack() },
+                )
             }
             composable(Routes.EXTENSIONS) { ExtensionsScreen(nav) }
             // The Telegram tab (off by default — see Routes.TELEGRAM): the public

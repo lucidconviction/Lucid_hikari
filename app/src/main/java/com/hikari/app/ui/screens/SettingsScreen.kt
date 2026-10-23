@@ -205,6 +205,7 @@ import com.hikari.app.ui.components.SettingsThemeTile
 import com.hikari.app.ui.components.SettingsPageHeader
 import com.hikari.app.data.Profiles
 import com.hikari.app.ui.components.LocalHideHelp
+import com.hikari.app.ui.screens.MultiViewLayout
 import com.hikari.app.ui.components.TrackerLoginDialog
 import com.hikari.app.ui.components.helpShown
 import com.hikari.app.ui.LanguageManager
@@ -1083,6 +1084,8 @@ fun SettingsScreen(nav: NavHostController) {
                     if (!isTv) {
                         item { SettingsCard { FullscreenCard(app) } }
                     }
+                    // F4 — multi-view window layout picker
+                    item { SettingsCard { MultiViewLayoutCard(app) } }
                 }
                 SettingsFolder.LAYOUT_POSTER -> {
                     item { SettingsCard(top = 2.dp) { PosterStyleCard(app) } }
@@ -8615,6 +8618,67 @@ private fun ChannelSurfToastCard(app: HikariApp) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 8.dp)
             )
+        }
+    }
+}
+
+/** F4 — multi-view layout selector (Settings → App Layout). */
+@Composable
+private fun MultiViewLayoutCard(app: HikariApp) {
+    val scope = rememberCoroutineScope()
+    val flow = remember { app.store.multiViewLayoutFlow() }
+    val key by flow.collectAsState(initial = "")
+    val layout = MultiViewLayout.fromKey(key)
+
+    SettingsSection(
+        id = "layout.multiview",
+        icon = Icons.Filled.ViewCarousel,
+        title = tr("Multi-view layout"),
+        summary = "${tr("Grid shape for multi-view")} (${layout.cols}×${layout.rows})",
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    tr("Layout"),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.height(4.dp))
+                if (!LocalHideHelp.current) {
+                    Text(
+                        tr("How the multi-view grid is arranged. The pool supports up to %d windows.").replace("%s", 9.toString()),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Spacer(Modifier.width(12.dp))
+            FilterChip(
+                selected = true,
+                onClick = {},
+                label = {
+                    Text(
+                        "${layout.cols}×${layout.rows}",
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                },
+                modifier = Modifier.size(56.dp, 32.dp),
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            MultiViewLayout.entries.forEach { l ->
+                FilterChip(
+                    selected = l == layout,
+                    onClick = {
+                        scope.launch { app.store.setMultiViewLayout(l.name) }
+                    },
+                    label = { Text("${l.cols}×${l.rows}") },
+                )
+            }
         }
     }
 }
