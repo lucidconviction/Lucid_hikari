@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -78,6 +79,8 @@ import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
 import com.hikari.app.HikariApp
 import com.hikari.app.data.ContentRepository
+import com.hikari.app.data.SavedSearchFolder
+import com.hikari.app.data.SavedSearchStore
 import com.hikari.app.data.MediaItem
 import com.hikari.app.data.MediaType
 import com.hikari.app.data.ProviderType
@@ -329,6 +332,8 @@ fun SearchScreen(
     var targetLang by rememberSaveable { mutableStateOf("zh-CN") }
     var langMenu by remember { mutableStateOf(false) }
     var translating by remember { mutableStateOf(false) }
+    // F6 — saved-search folder dropdown state
+    var searchFolderMenu by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     // Television overscan: sets that crop the frame (~5-10% on every edge)
@@ -591,6 +596,80 @@ fun SearchScreen(
                                     translatedFrom = null
                                 },
                             )
+                        }
+                    }
+                    // F6 — saved-search folder button
+                    val ctx = LocalContext.current
+                    val app = ctx.applicationContext as HikariApp
+                    val folders by app.store.searchFoldersFlow().collectAsState(initial = emptyList())
+                    Box {
+                        Box(
+                            Modifier
+                                .padding(start = 4.dp)
+                                .clip(RoundedCornerShape(50))
+                                .tvPress { searchFolderMenu = !searchFolderMenu }
+                                .pointerInput(Unit) {
+                                    detectTapGestures(onTap = { searchFolderMenu = !searchFolderMenu })
+                                }
+                                .padding(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Filled.Folder,
+                                contentDescription = "Saved searches",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = searchFolderMenu,
+                            onDismissRequest = { searchFolderMenu = false },
+                        ) {
+                            if (query.trim().length >= 2) {
+                                DropdownMenuItem(
+                                    text = { Text(tr("Save current search")) },
+                                    onClick = {
+                                        val folder = folders.firstOrNull() ?: SavedSearchFolder(
+                                            SavedSearchStore.newFolderId(),
+                                            SavedSearchStore.GENERAL_NAME,
+                                        )
+                                        scope.launch {
+                                            runCatching {
+                                                app.store.setSearchFolders(
+                                                    SavedSearchStore.saveCurrent(folders, query, folder.id)
+                                                )
+                                            }
+                                        }
+                                        searchFolderMenu = false
+                                    },
+                                )
+                            }
+                            folders.forEach { f ->
+                                DropdownMenuItem(
+                                    text = { Text(f.name) },
+                                    onClick = { searchFolderMenu = !searchFolderMenu },
+                                )
+                                f.searches.take(5).forEach { s ->
+                                    DropdownMenuItem(
+                                        text = { Text("  · $s") },
+                                        onClick = {
+                                            vm.setQuery(s)
+                                            searchFolderMenu = false
+                                        },
+                                    )
+                                }
+                                if (f.searches.size > 5) {
+                                    DropdownMenuItem(
+                                        text = { Text("  … ${f.searches.size - 5} more") },
+                                        onClick = { searchFolderMenu = false },
+                                    )
+                                }
+                            }
+                            if (folders.isEmpty()) {
+                                DropdownMenuItem(
+                                    text = { Text(tr("No saved searches yet")) },
+                                    onClick = { searchFolderMenu = false },
+                                )
+                            }
                         }
                     }
                 }

@@ -684,6 +684,10 @@ class PlayerActivity : ComponentActivity() {
 
     private var sources: List<PlayerSource> = emptyList()
     private var currentIndex = 0
+    /** F1 — active channel-surf controller when watching a playlist channel;
+     *  null otherwise. Set when a playlist channel is launched, cleared on stop. */
+    var channelSurfController: com.hikari.app.player.ChannelSurfController? = null
+        private set
 
     /** True once [playSource] has actually chosen a server this session. Until
      *  then nothing may be drawn as "already selected": `currentIndex` starts
@@ -4113,7 +4117,18 @@ class PlayerActivity : ComponentActivity() {
 
             android.view.KeyEvent.KEYCODE_DPAD_UP,
             android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
-                if (controllerVisible || holdingFast || controlsLocked) {
+                // F1 — channel surf: when a playlist controller is active and
+                // controls are hidden, UP/DOWN cycles channels instead of
+                // showing the controller.
+                if (channelSurfController != null && !controllerVisible && !holdingFast && !controlsLocked) {
+                    if (code == android.view.KeyEvent.KEYCODE_DPAD_UP) {
+                        channelSurfController?.prev()
+                        true
+                    } else {
+                        channelSurfController?.next()
+                        true
+                    }
+                } else if (controllerVisible || holdingFast || controlsLocked) {
                     false
                 } else {
                     playerView?.showController()

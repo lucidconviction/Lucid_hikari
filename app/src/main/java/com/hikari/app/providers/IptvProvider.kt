@@ -258,16 +258,26 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
         val list = runCatching {
             withTimeoutOrNull(FETCH_TIMEOUT_MS) {
                 withContext(Dispatchers.IO) {
-                    val text = readSource(selfCheckUrl)
-                    // The playlist's own address is handed to the parser so a
-                    // relative `tvg-logo` resolves to a real URL (see
-                    // IptvPlaylist.resolveLogo). JSON playlists (plain or
-                    // TERAPLAY_ENC:-encrypted) parse by their own reader — and
-                    // stay JSON: falling through to the M3U reader would list
-                    // a config object as channels.
-                    if (text == null) null
-                    else com.hikari.app.data.JsonPlaylist.parse(text)?.channels
-                        ?: IptvPlaylist.parse(text, base = selfCheckUrl)
+                    // F3 — Xtream panel detection: if the URL looks like an
+                    // Xtream panel login, fetch the m3u_plus export instead
+                    // of parsing the raw config directly.
+                    val xtream = com.hikari.app.data.XtreamCredentials.fromUrl(selfCheckUrl)
+                    if (xtream != null) {
+                        val xtreamUrl = xtream.m3uUrl()
+                        com.hikari.app.net.Http.fetchStringRobust(xtreamUrl, HEADERS).getOrNull()
+                            ?.let { IptvPlaylist.parse(it, base = xtreamUrl) }
+                    } else {
+                        val text = readSource(selfCheckUrl)
+                        // The playlist's own address is handed to the parser so a
+                        // relative `tvg-logo` resolves to a real URL (see
+                        // IptvPlaylist.resolveLogo). JSON playlists (plain or
+                        // TERAPLAY_ENC:-encrypted) parse by their own reader — and
+                        // stay JSON: falling through to the M3U reader would list
+                        // a config object as channels.
+                        if (text == null) null
+                        else com.hikari.app.data.JsonPlaylist.parse(text)?.channels
+                            ?: IptvPlaylist.parse(text, base = selfCheckUrl)
+                    }
                 }
             }
         }.getOrNull()
