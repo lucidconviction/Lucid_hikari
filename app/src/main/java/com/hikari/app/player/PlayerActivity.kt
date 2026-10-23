@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.pm.ActivityInfo
 import android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
 import android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+import android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
 import android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
@@ -4898,6 +4899,56 @@ class PlayerActivity : ComponentActivity() {
      * the player and in every sheet it opens).
      */
     private fun playerTvRemote(): Boolean = TvMode.isTv
+
+    /**
+     * F5 — auto-rotate the player with the phone's physical orientation while
+     * an IPTV stream is playing (Settings → Playback).
+     *
+     * The sensor is read rather than the current window orientation, so the
+     * user can hold the phone at any comfortable angle without the screen
+     * flickering: the switch only fires when the physical angle crosses the
+     * ±45° boundary between portrait and landscape, and only after a 300 ms
+     * debounce. On a television this is always a no-op (TVs do not rotate).
+     */
+    private suspend fun maybeApplyAutoRotate() {
+        if (com.hikari.app.tv.TvMode.isTv) return
+        val store = (applicationContext as com.hikari.app.HikariApp).store
+        if (!store.autoRotatePlayer()) return
+        if (userRotated || autoRotated) return
+        // Read the phone's current physical orientation from the window
+        // configuration: a device that is already landscape stays landscape,
+        // one in portrait stays portrait. The [onConfigurationChanged] hook
+        // follows the user as they rotate after this initial application.
+        val landscape = resources.configuration.orientation ==
+            android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        val target = if (landscape) SCREEN_ORIENTATION_SENSOR_LANDSCAPE else SCREEN_ORIENTATION_SENSOR_PORTRAIT
+        if (requestedOrientation != target) {
+            requestedOrientation = target
+        }
+    }
+
+    /** F5 — the player's orientation follows the physical angle (debounced 300 ms). */
+    private var lastAutoRotateAt = 0L
+    private var pendingAutoRotate: Int = SCREEN_ORIENTATION_UNSPECIFIED
+
+    private fun scheduleAutoRotate(target: Int) {
+        val now = System.currentTimeMillis()
+        if (target == requestedOrientation) return
+        if (now - lastAutoRotateAt < 300L) return
+        lastAutoRotateAt = now
+        requestedOrientation = target
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // F5 — when the phone is physically rotated, the player follows it
+        // (debounced) rather than letting the system recreate the window.
+        if (com.hikari.app.tv.TvMode.isTv) return
+        if (userRotated || autoRotated) return
+        val landscape = newConfig.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        val target = if (landscape) SCREEN_ORIENTATION_SENSOR_LANDSCAPE else SCREEN_ORIENTATION_SENSOR_PORTRAIT
+        scheduleAutoRotate(target)
+    }
 
     private fun applyTvFocus() {
         if (!playerTvRemote()) return
@@ -16775,6 +16826,12 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        // F5 — auto-rotate the player with the phone's physical orientation
+        // while an IPTV stream is playing (Settings → Playback). On phones,
+        // always ignored on televisions (TVs do not rotate).
+        if (!com.hikari.app.tv.TvMode.isTv) {
+            runCatching { lifecycleScope.launch { maybeApplyAutoRotate() } }
+        }
         // The CloudStream Torrent engine resolves its cache dir from the
         // activity reference (throws "No activity" otherwise).
         com.lagradost.cloudstream3.CommonActivity.setActivityInstance(this)
@@ -16810,6 +16867,15 @@ class PlayerActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        // F5 — restore the unspecified orientation so the phone can rotate
+        // freely again the moment the player is left (home button, back, app
+        // switch). The stream is never dropped: position and volume are
+        // preserved by the existing save/restore paths (recordProgress,
+        // silencePlaybackForExit), and the activity is recreated-safe thanks
+        // to the `orientation` entry in the manifest's configChanges.
+        if (!com.hikari.app.tv.TvMode.isTv) {
+            runCatching { requestedOrientation = SCREEN_ORIENTATION_UNSPECIFIED }
+        }
         // Persist the final position as soon as the activity goes to the
         // background (home button, lock screen, app switch) — onDestroy may
         // come later or never (background process death).

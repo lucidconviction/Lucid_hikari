@@ -761,6 +761,25 @@ class AppStore(private val ctx: Context) {
          *  play. Off by default: on a device that keeps up, none of it is worth
          *  giving up. See [perfModeFlow]. */
         val PERF_MODE = booleanPreferencesKey("perfMode")
+        /**
+         * F5 — auto-rotate the player with the phone's physical orientation
+         * while an IPTV stream is playing (Settings → Playback). On by default
+         * on phones; always ignored on televisions (TVs do not rotate).
+         */
+        val AUTO_ROTATE_PLAYER = booleanPreferencesKey("autoRotatePlayer")
+        /** F1 — flash a toast when channel surf moves to another channel
+         *  (Settings → TV & Remote). On by default. */
+        val CHANNEL_SURF_TOAST = booleanPreferencesKey("channelSurfToast")
+        /** F4 — the multi-view window layout key (see
+         *  [com.hikari.app.ui.screens.MultiViewLayout]), per orientation
+         *  bucket. */
+        val MULTI_VIEW_LAYOUT = stringPreferencesKey("multiViewLayout")
+        /** F4 — the multi-view session's window URLs, as JSON (a JSON array of
+         *  `{"name","url"}` objects), so a grid survives a process kill. */
+        val MULTI_VIEW_SESSIONS = stringPreferencesKey("multiViewSessions")
+        /** F6 — the user's saved-search folders, as one JSON blob (see
+         *  [com.hikari.app.data.SavedSearchStore]). */
+        val SEARCH_FOLDERS = stringPreferencesKey("search_folders")
     }
 
     /**
@@ -2276,6 +2295,69 @@ fun searchExceptionOnFlow(): Flow<Boolean> =
     /** Forgets every remembered search ("Clear all"). */
     suspend fun clearSearchHistory() {
         write("SEARCH_HISTORY") { it[K.SEARCH_HISTORY] = encodeStringList(emptyList()) }
+    }
+
+    // ---- F6: saved-search folders ----
+    /** The user's saved-search folders, as a JSON array (see
+     *  [com.hikari.app.data.SavedSearchStore]). One blob, one read, one write. */
+    fun searchFoldersFlow(): Flow<List<com.hikari.app.data.SavedSearchFolder>> =
+        store.data.map { com.hikari.app.data.SavedSearchStore.parse(it[K.SEARCH_FOLDERS]) }
+            .distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    suspend fun searchFolders(): List<com.hikari.app.data.SavedSearchFolder> =
+        searchFoldersFlow().first()
+
+    suspend fun setSearchFolders(folders: List<com.hikari.app.data.SavedSearchFolder>) {
+        write("SEARCH_FOLDERS") { it[K.SEARCH_FOLDERS] = com.hikari.app.data.SavedSearchStore.encode(folders) }
+    }
+
+    // ---- F5: auto-rotate the player ----
+    /** Auto-rotate the player with the phone's physical orientation (ON by
+     *  default on phones; always ignored on televisions). */
+    fun autoRotatePlayerFlow(): Flow<Boolean> =
+        store.data.map { it[K.AUTO_ROTATE_PLAYER] ?: true }.distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    suspend fun autoRotatePlayer(): Boolean = autoRotatePlayerFlow().first()
+
+    suspend fun setAutoRotatePlayer(on: Boolean) {
+        write("AUTO_ROTATE_PLAYER") { it[K.AUTO_ROTATE_PLAYER] = on }
+    }
+
+    // ---- F1: channel-surf toast ----
+    /** Flash a toast when channel surf moves to another channel (ON by default). */
+    fun channelSurfToastFlow(): Flow<Boolean> =
+        store.data.map { it[K.CHANNEL_SURF_TOAST] ?: true }.distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    suspend fun channelSurfToast(): Boolean = channelSurfToastFlow().first()
+
+    suspend fun setChannelSurfToast(on: Boolean) {
+        write("CHANNEL_SURF_TOAST") { it[K.CHANNEL_SURF_TOAST] = on }
+    }
+
+    // ---- F4: multi-view layout ----
+    /** The multi-view window layout key for the current orientation bucket (see
+     *  [com.hikari.app.ui.screens.MultiViewLayout]). Empty = use the default
+     *  for the device size bucket. */
+    fun multiViewLayoutFlow(): Flow<String> =
+        store.data.map { it[K.MULTI_VIEW_LAYOUT].orEmpty() }.distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    suspend fun multiViewLayout(): String = multiViewLayoutFlow().first()
+
+    suspend fun setMultiViewLayout(key: String) {
+        write("MULTI_VIEW_LAYOUT") { it[K.MULTI_VIEW_LAYOUT] = key }
+    }
+
+    /** The multi-view session's window URLs, as JSON — restored after a
+     *  process kill so the grid the user was watching comes back. */
+    fun multiViewSessionsFlow(): Flow<List<com.hikari.app.data.MultiViewSession>> =
+        store.data.map { com.hikari.app.data.MultiViewSession.parse(it[K.MULTI_VIEW_SESSIONS]) }
+            .distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    suspend fun multiViewSessions(): List<com.hikari.app.data.MultiViewSession> =
+        multiViewSessionsFlow().first()
+
+    suspend fun setMultiViewSessions(sessions: List<com.hikari.app.data.MultiViewSession>) {
+        write("MULTI_VIEW_SESSIONS") { it[K.MULTI_VIEW_SESSIONS] = com.hikari.app.data.MultiViewSession.encode(sessions) }
     }
 
     /** Slow / mobile-data mode: raise the source-search and stream-probe

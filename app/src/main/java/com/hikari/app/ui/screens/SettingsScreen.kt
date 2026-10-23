@@ -894,6 +894,8 @@ fun SettingsScreen(nav: NavHostController) {
                     // lives here — it is a decision about SERVERS — and only here:
                     // the same card used to show up in the Player folder too.
                     item { SettingsCard { PlaybackStartCard(app) } }
+                    // F5 — auto-rotate player with phone orientation
+                    item { SettingsCard { AutoRotateCard(app) } }
                 }
                 SettingsFolder.NETWORK -> {
                     item {
@@ -1107,6 +1109,8 @@ fun SettingsScreen(nav: NavHostController) {
                     item { SettingsCard { TvOverscanCard(app) } }
                     item { SettingsCard { TvPerformanceCard(app) } }
                     item { SettingsCard { TvRemoteCard() } }
+                    // F1 — channel surf toast toggle
+                    item { SettingsCard { ChannelSurfToastCard(app) } }
                 }
                 SettingsFolder.CATALOG -> {
                     item {
@@ -8549,6 +8553,68 @@ private fun MatchThemeCard(
                 enabled = playerAccentKey != appAccentKey,
                 shape = GlassShape,
             ) { Text(tr("Player \u2192 app")) }
+        }
+    }
+}
+
+/** F5 — auto-rotate player with phone orientation (Settings → Playback & Servers). */
+@Composable
+private fun AutoRotateCard(app: HikariApp) {
+    val scope = rememberCoroutineScope()
+    val flow = remember { app.store.autoRotatePlayerFlow() }
+    val enabled by flow.collectAsState(initial = true)
+
+    SettingsSection(
+        id = "playback.auto-rotate",
+        icon = Icons.Filled.AutoAwesome,
+        title = tr("Auto-rotate player"),
+        summary = if (enabled) tr("Player follows phone orientation") else tr("Player stays locked to video orientation")
+    ) {
+        SettingsToggle(
+            label = tr("Rotate with phone"),
+            checked = enabled,
+            onCheckedChange = { on ->
+                scope.launch { runCatching { app.store.setAutoRotatePlayer(on) } }
+            }
+        )
+        if (!LocalHideHelp.current) {
+            Text(
+                tr("When on, the player respects the phone's physical orientation while watching an IPTV channel. When off, the player stays locked to the video's aspect ratio."),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+        }
+    }
+}
+
+/** F1 — channel surf toast toggle (Settings → TV & Remote). */
+@Composable
+private fun ChannelSurfToastCard(app: HikariApp) {
+    val scope = rememberCoroutineScope()
+    val flow = remember { app.store.channelSurfToastFlow() }
+    val enabled by flow.collectAsState(initial = true)
+
+    SettingsSection(
+        id = "tv.channel-surf-toast",
+        icon = Icons.Filled.Tv,
+        title = tr("Channel surf toast"),
+        summary = if (enabled) tr("Shows channel name on D-pad change") else tr("No toast when channel surfing")
+    ) {
+        SettingsToggle(
+            label = tr("Show channel toast"),
+            checked = enabled,
+            onCheckedChange = { on ->
+                scope.launch { runCatching { app.store.setChannelSurfToast(on) } }
+            }
+        )
+        if (!LocalHideHelp.current) {
+            Text(
+                tr("When on, a brief toast appears when D-pad Up/Down (or the on-screen pill) changes the channel in the player."),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp)
+            )
         }
     }
 }
