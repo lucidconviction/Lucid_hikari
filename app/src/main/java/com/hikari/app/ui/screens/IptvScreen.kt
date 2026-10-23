@@ -29,10 +29,12 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
@@ -63,6 +65,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
@@ -75,6 +78,7 @@ import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
 import com.hikari.app.HikariApp
 import com.hikari.app.data.IptvPlaylist
+import com.hikari.app.data.MultiViewSession
 import com.hikari.app.data.MediaItem
 import com.hikari.app.data.MediaType
 import com.hikari.app.data.NetworkStream
@@ -90,8 +94,13 @@ import com.hikari.app.ui.navigation.LocalTaskbarInset
 import com.hikari.app.ui.navigation.Routes
 import com.hikari.app.ui.theme.rememberGlassTokens
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
@@ -151,6 +160,10 @@ fun IptvScreen(nav: NavHostController) {
     // is what the link IS (a list of channels, or one file on some host that has
     // to be resolved before it plays) — see [NetworkStream].
     var addStream by remember { mutableStateOf(false) }
+    var addXtream by remember { mutableStateOf(false) }
+    var addXtreamUrl by remember { mutableStateOf("") }
+    var addXtreamUser by remember { mutableStateOf("") }
+    var addXtreamPass by remember { mutableStateOf("") }
     var addTorrent by remember { mutableStateOf(false) }
     var addFileLabel by remember { mutableStateOf("") }
     var addFilePath by remember { mutableStateOf("") }
@@ -178,9 +191,16 @@ fun IptvScreen(nav: NavHostController) {
         val name = addName
         val wasStream = addStream
         val wantTorrent = addTorrent
+        val wasXtream = addXtream
         adding = true
         scope.launch {
-            val result = if (wasStream) {
+            val result = if (wasXtream) {
+                // F3 — Xtream panel: create the m3u_plus URL from credentials
+                // and add it as a regular playlist.
+                val creds = com.hikari.app.data.XtreamCredentials.fromUrl(addXtreamUrl.trim())
+                val xtreamLink = creds?.m3uUrl() ?: addXtreamUrl.trim()
+                addIptvPlaylist(app, xtreamLink, local, name.ifBlank { xtreamLink })
+            } else if (wasStream) {
                 addNetworkStream(app, link, name)
             } else {
                 addIptvPlaylist(app, link, local, name)
@@ -196,6 +216,7 @@ fun IptvScreen(nav: NavHostController) {
                     Toast.makeText(uiContext, msg, Toast.LENGTH_LONG).show()
                     showAdd = false
                     addStream = false
+                    addXtream = false
                     addTorrent = false
                     addLink = ""
                     addName = ""
@@ -439,6 +460,18 @@ fun IptvScreen(nav: NavHostController) {
                             selected = addTorrent,
                             onClick = { addStream = true; addTorrent = true },
                         )
+                        Spacer(Modifier.width(8.dp))
+                        AddModePill(
+                            label = tr("Xtream panel"),
+                            selected = addXtream,
+                            onClick = {
+                                addXtream = !addXtream
+                                if (addXtream) {
+                                    addStream = false
+                                    addTorrent = false
+                                }
+                            },
+                        )
                     }
                     Spacer(Modifier.height(10.dp))
                     if (!LocalHideHelp.current) {
@@ -478,7 +511,8 @@ fun IptvScreen(nav: NavHostController) {
                         onValueChange = { addLink = it },
                         placeholder = {
                             Text(
-                                if (addStream) tr("https://…/m3u8, terabox, mdisk…")
+                                if (addXtream) tr("https://panel.example.com")
+                                else if (addStream) tr("https://…/m3u8, terabox, mdisk…")
                                 else tr("https://…/playlist.m3u or .json")
                             )
                         },
@@ -487,7 +521,61 @@ fun IptvScreen(nav: NavHostController) {
                         modifier = Modifier.fillMaxWidth().tvTextFieldKeys(addLink),
                     )
                     Spacer(Modifier.height(8.dp))
-                    if (!addStream) Row(verticalAlignment = Alignment.CenterVertically) {
+                    // F3 — Xtream panel inputs (URL, username, password) shown when the
+                    // panel pill is selected instead of a raw playlist link.
+                    if (addXtream) {
+                        OutlinedTextField(
+                            value = addXtreamUrl,
+                            onValueChange = { addXtreamUrl = it },
+                            label = { Text(tr("Panel URL")) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().tvTextFieldKeys(addXtreamUrl),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = addXtreamUser,
+                            onValueChange = { addXtreamUser = it },
+                            label = { Text(tr("Username")) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().tvTextFieldKeys(addXtreamUser),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = addXtreamPass,
+                            onValueChange = { addXtreamPass = it },
+                            label = { Text(tr("Password")) },
+                            singleLine = true,
+                            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                            modifier = Modifier.fillMaxWidth().tvTextFieldKeys(addXtreamPass),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedButton(
+                                onClick = {
+                                    addLink = runCatching {
+                                        com.hikari.app.data.XtreamCredentials.fromUrl(addXtreamUrl.trim())?.m3uUrl()
+                                            ?: addXtreamUrl.trim()
+                                    }.getOrDefault(addXtreamUrl.trim())
+                                },
+                                enabled = addXtreamUrl.isNotBlank(),
+                            ) {
+                                Text(tr("Test / Fill"))
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            if (addLink.isNotEmpty() && addLink != addXtreamUrl) {
+                                Text(
+                                    addLink,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    if (!addStream && !addXtream) Row(verticalAlignment = Alignment.CenterVertically) {
                         OutlinedButton(onClick = { filePicker.launch(arrayOf("*/*")) }) {
                             Icon(
                                 Icons.Filled.FolderOpen,
@@ -848,12 +936,45 @@ fun IptvPlaylistScreen(nav: NavHostController, providerId: String) {
     val scope = rememberCoroutineScope()
 
     var groups by remember(providerId) { mutableStateOf<List<IptvGroupTile>?>(null) }
+    /** F2 — loaded channel list, used for validation and health-dot computation. */
+    var channels by remember(providerId) { mutableStateOf<List<com.hikari.app.data.IptvChannel>?>(null) }
+    /** F2 — true while a Validate probe is in flight. */
+    var validating by remember { mutableStateOf(false) }
+    /** F2 — a version counter that recomposes the screen when validation completes. */
+    var validateVersion by remember { mutableStateOf(0) }
     LaunchedEffect(providerId, playlist, groupMode) {
         if (playlist == null) {
             groups = emptyList()
+            channels = emptyList()
             return@LaunchedEffect
         }
         groups = withContext(Dispatchers.IO) { readGroups(playlist, groupMode) }
+        channels = withContext(Dispatchers.IO) { playlist.channels() }
+    }
+    /** F2 — probe every channel URL in the current playlist and cache results. */
+    fun validate() {
+        val chs = channels
+        if (chs == null || chs.isEmpty()) return
+        validating = true
+        scope.launch {
+            val sem = Semaphore(8)
+            try {
+                coroutineScope {
+                    chs.map { c ->
+                        async(Dispatchers.IO) {
+                            sem.withPermit {
+                                if (c.url.startsWith("http")) {
+                                    IptvProbeCache.put(c.url, com.hikari.app.net.StreamProbe.probe(c.url))
+                                }
+                            }
+                        }
+                    }.awaitAll()
+                }
+            } finally {
+                validating = false
+                validateVersion++
+            }
+        }
     }
     val isTorrent = playlist != null && NetworkStream.isTorrentLink(playlist.config.url)
 
@@ -938,6 +1059,8 @@ fun IptvPlaylistScreen(nav: NavHostController, providerId: String) {
                 }
             },
             onAdd = null,
+            onValidate = { validate() },
+            validating = validating,
         )
         if (folderSearchOpen && !isTorrent) {
             Row(
@@ -1148,12 +1271,20 @@ fun IptvPlaylistScreen(nav: NavHostController, providerId: String) {
                         )
                     }
                 }
+                // F2 — compute health from the current channels
+                val groupChannels = remember(channels, validateVersion, g.catalogId) {
+                    channels.orEmpty().filter { IptvPlaylist.groupOf(it) == g.name }
+                }
+                val health = remember(groupChannels, validateVersion) {
+                    healthOf(groupChannels)
+                }
                 IptvTile(
                     cover = null,
                     art = art,
                     name = g.name,
                     subtitle = I18n.t("%s channels").replace("%s", g.count.toString()),
                     shape = shape,
+                    health = health,
                 ) {
                     Routes.safeNavigate(
                         nav,
@@ -1173,6 +1304,59 @@ fun IptvPlaylistScreen(nav: NavHostController, providerId: String) {
 }
 
 // ------------------------------------------------------------------ building --
+
+/**
+ * F2 — cache of probe results per channel URL, with a 5-minute TTL so re-opening
+ * the app or re-tapping Validate doesn't hammer the provider panel. Stored
+ * outside IptvChannel (which is immutable once parsed) so results survive
+ * recompositions and channel-list re-reads.
+ */
+private object IptvProbeCache {
+    private val cache = mutableMapOf<String, com.hikari.app.net.StreamProbe.ProbeResult?>()
+    private val timestamps = mutableMapOf<String, Long>()
+    private const val TTL_MS = 5 * 60 * 1000L
+
+    fun put(url: String, result: com.hikari.app.net.StreamProbe.ProbeResult?) {
+        cache[url] = result
+        timestamps[url] = System.currentTimeMillis()
+    }
+
+    fun get(url: String): com.hikari.app.net.StreamProbe.ProbeResult? {
+        val ts = timestamps[url] ?: return null
+        if (System.currentTimeMillis() - ts > TTL_MS) {
+            cache.remove(url)
+            timestamps.remove(url)
+            return null
+        }
+        return cache[url]
+    }
+
+    fun clear() {
+        cache.clear()
+        timestamps.clear()
+    }
+}
+
+/** F2 — aggregate health of a group's channels, drawn as a colored dot. */
+private enum class HealthDot { ALL_ALIVE, MIXED, ALL_DEAD, NONE }
+
+/**
+ * Computes the aggregate health of [channels] from the probe cache: green when
+ * every probed channel answered, red when every probed channel failed, yellow
+ * when results are mixed. NONE means nothing has been probed yet.
+ */
+private fun healthOf(channels: List<com.hikari.app.data.IptvChannel>): HealthDot {
+    if (channels.isEmpty()) return HealthDot.NONE
+    val results = channels.mapNotNull { IptvProbeCache.get(it.url) }
+    if (results.isEmpty()) return HealthDot.NONE
+    val alive = results.count { it.isAlive }
+    val dead = results.size - alive
+    return when {
+        dead == 0 -> HealthDot.ALL_ALIVE
+        alive == 0 -> HealthDot.ALL_DEAD
+        else -> HealthDot.MIXED
+    }
+}
 
 /** A playlist as the tab draws it. */
 private data class IptvCard(
@@ -1595,6 +1779,10 @@ private fun IptvHeader(
     onCycleShape: () -> Unit,
     onSearch: (() -> Unit)?,
     onAdd: (() -> Unit)?,
+    /** F2 — Validate button callback for probing this playlist's channels. */
+    onValidate: (() -> Unit)? = null,
+    /** F2 — true while a validation probe is in flight. */
+    validating: Boolean = false,
 ) {
     Row(
         Modifier
@@ -1655,6 +1843,25 @@ private fun IptvHeader(
                 Icon(Icons.Filled.Add, contentDescription = tr("Add playlist"))
             }
         }
+        if (onValidate != null) {
+            IconButton(
+                onClick = onValidate,
+                enabled = !validating,
+            ) {
+                if (validating) {
+                    CircularProgressIndicator(
+                        Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                } else {
+                    Icon(
+                        Icons.Filled.VerifiedUser,
+                        contentDescription = tr("Validate channels"),
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -1676,6 +1883,9 @@ private fun IptvTile(
      *  badge already owns the top-right). Only the tab's own tiles pass it —
      *  a group inside a playlist has nothing to delete. */
     onRemove: (() -> Unit)? = null,
+    /** F2 — health dot drawn at the bottom-right of the cover: green all alive,
+     *  yellow mixed, red all dead. NONE draws no dot. */
+    health: HealthDot = HealthDot.NONE,
     onClick: () -> Unit,
 ) {
     val tokens = rememberGlassTokens()
@@ -1724,6 +1934,22 @@ private fun IptvTile(
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
                     )
                 }
+            }
+            if (health != HealthDot.NONE) {
+                val dotColor = when (health) {
+                    HealthDot.ALL_ALIVE -> Color(0xFF4CAF50)
+                    HealthDot.MIXED -> Color(0xFFFFC107)
+                    HealthDot.ALL_DEAD -> Color(0xFFF44336)
+                    HealthDot.NONE -> Color.Transparent
+                }
+                Surface(
+                    color = dotColor,
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(6.dp)
+                        .size(10.dp),
+                ) {}
             }
             if (onRemove != null) {
                 Surface(
