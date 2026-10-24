@@ -38,6 +38,13 @@ object Http {
      *  agree on what browser is "visiting" (Cloudflare checks consistency). */
     const val WEBVIEW_UA = UA
 
+    /** VLC-style UA for IPTV channels that prefer a media-player fingerprint
+     *  over a desktop browser. Many live-channel CDNs and signed HLS endpoints
+     *  gate their manifests on the UA — CloudStream's reference player uses a
+     *  VLC fingerprint for the same reason, and some providers return 403 to a
+     *  plain Chrome UA but serve to VLC/LibVLC. */
+    const val IPTV_UA = "VLC/3.0.18 LibVLC/3.0.18"
+
     private lateinit var client: OkHttpClient
 
     /** Same tuning, WITHOUT the Cloudflare interceptor — see [getQuiet]. */

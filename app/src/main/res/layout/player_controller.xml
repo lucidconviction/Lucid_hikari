@@ -324,6 +324,12 @@
               android:text="@string/player_autoplay_on" />
 
           <TextView
+              android:id="@+id/auto_next_btn"
+              style="@style/HikariPill"
+              android:drawableStart="@drawable/ic_next_ep"
+              android:text="@string/player_auto_next_on" />
+
+          <TextView
               android:id="@+id/sources_btn"
               style="@style/HikariPill.Accent"
               android:drawableStart="@drawable/ic_server"

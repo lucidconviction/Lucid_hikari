@@ -164,6 +164,11 @@ fun IptvScreen(nav: NavHostController) {
     var addXtreamUrl by remember { mutableStateOf("") }
     var addXtreamUser by remember { mutableStateOf("") }
     var addXtreamPass by remember { mutableStateOf("") }
+    // F3 — errors from validating the Xtream credentials: shown inline in the Add
+    // dialog instead of letting a broken source be saved as a silent empty tile.
+    var xtreamError by remember { mutableStateOf("") }
+    var xtreamTestResult by remember { mutableStateOf("") }
+    var xtreamTesting by remember { mutableStateOf(false) }
     var addTorrent by remember { mutableStateOf(false) }
     var addFileLabel by remember { mutableStateOf("") }
     var addFilePath by remember { mutableStateOf("") }
@@ -195,11 +200,40 @@ fun IptvScreen(nav: NavHostController) {
         adding = true
         scope.launch {
             val result = if (wasXtream) {
-                // F3 — Xtream panel: create the m3u_plus URL from credentials
-                // and add it as a regular playlist.
-                val creds = com.hikari.app.data.XtreamCredentials.fromUrl(addXtreamUrl.trim())
-                val xtreamLink = creds?.m3uUrl() ?: addXtreamUrl.trim()
-                addIptvPlaylist(app, xtreamLink, local, name.ifBlank { xtreamLink })
+                // F3 — Xtream panel: validate the credentials (URL shape, then the
+                // panel's own player_api.php) BEFORE anything is saved, so a dead
+                // host or a wrong password is reported here instead of becoming
+                // an empty tile that only shows up later as "Didn't load".
+                val creds = com.hikari.app.data.XtreamCredentials(
+                    baseUrl = addXtreamUrl.trim(),
+                    username = addXtreamUser.trim(),
+                    password = addXtreamPass.trim(),
+                )
+                val credError = creds.validate()
+                if (credError != null) {
+                    adding = false
+                    Toast.makeText(uiContext, credError, Toast.LENGTH_LONG).show()
+                    return@launch
+                }
+                val probe = IptvProvider.previewXtream(creds)
+                val preview = probe.getOrNull()
+                if (preview == null) {
+                    adding = false
+                    xtreamError = probe.exceptionOrNull()?.message
+                        ?: I18n.t("Could not reach that panel")
+                    Toast.makeText(
+                        uiContext,
+                        xtreamError,
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    return@launch
+                }
+                addIptvPlaylist(
+                    app,
+                    preview.m3uUrl,
+                    local,
+                    name.ifBlank { preview.serverName },
+                )
             } else if (wasStream) {
                 addNetworkStream(app, link, name)
             } else {
@@ -215,13 +249,19 @@ fun IptvScreen(nav: NavHostController) {
                     }
                     Toast.makeText(uiContext, msg, Toast.LENGTH_LONG).show()
                     showAdd = false
-                    addStream = false
-                    addXtream = false
+addStream = false
                     addTorrent = false
+                    addXtream = false
                     addLink = ""
                     addName = ""
                     addFileLabel = ""
                     addFilePath = ""
+                    addXtreamUrl = ""
+                    addXtreamUser = ""
+                    addXtreamPass = ""
+                    xtreamError = ""
+                    xtreamTestResult = ""
+                    xtreamTesting = false
                     if (playAfter && wasStream) {
                         val saved = app.store.providers().firstOrNull { p ->
                             p.type == com.hikari.app.data.ProviderType.IPTV &&
@@ -264,6 +304,19 @@ fun IptvScreen(nav: NavHostController) {
                         t.message ?: I18n.t("Could not read that playlist"),
                         Toast.LENGTH_LONG,
                     ).show()
+addStream = false
+                    addTorrent = false
+                    addXtream = false
+                    addLink = ""
+                    addName = ""
+                    addFileLabel = ""
+                    addFilePath = ""
+                    addXtreamUrl = ""
+                    addXtreamUser = ""
+                    addXtreamPass = ""
+                    xtreamError = ""
+                    xtreamTestResult = ""
+                    xtreamTesting = false
                 },
             )
         }
@@ -390,6 +443,11 @@ fun IptvScreen(nav: NavHostController) {
         addName = ""
         addFileLabel = ""
         addFilePath = ""
+        // Drop any Xtream entry left over from a previous dialog session so the
+        // + button lands on a clean playlist link, not a stale panel form.
+        addXtream = false
+        xtreamError = ""
+        xtreamTestResult = ""
         showAdd = true
     }
 
@@ -434,7 +492,15 @@ fun IptvScreen(nav: NavHostController) {
 
     if (showAdd) {
         AlertDialog(
-            onDismissRequest = { if (!adding) showAdd = false },
+            onDismissRequest = {
+                if (!adding) {
+                    showAdd = false
+                    addStream = false; addTorrent = false; addXtream = false
+                    addLink = ""; addName = ""; addFileLabel = ""; addFilePath = ""
+                    addXtreamUrl = ""; addXtreamUser = ""; addXtreamPass = ""
+                    xtreamError = ""; xtreamTestResult = ""; xtreamTesting = false
+                }
+            },
             title = { Text(if (addTorrent) tr("Add torrent") else if (addStream) tr("Add network stream") else tr("Add IPTV playlist")) },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
@@ -469,6 +535,12 @@ fun IptvScreen(nav: NavHostController) {
                                 if (addXtream) {
                                     addStream = false
                                     addTorrent = false
+                                    // The panel fields are the input here; the
+                                    // plain link field below is for the other
+                                    // modes and only clutters the Xtream entry.
+                                    addLink = ""
+                                    xtreamError = ""
+                                    xtreamTestResult = ""
                                 }
                             },
                         )
@@ -488,6 +560,14 @@ fun IptvScreen(nav: NavHostController) {
                                     "installed extension can open. It is resolved when you " +
                                     "press play."
                             )
+                        } else if (addXtream) {
+                            tr(
+                                "Enter your Xtream panel's host URL plus the username and " +
+                                    "password the panel gave you. The app logs in to the " +
+                                    "panel (player_api.php) before saving, so a wrong " +
+                                    "password or a dead host is reported here instead of " +
+                                    "becoming an empty tile."
+                            )
                         } else {
                             tr(
                                 "Paste an M3U playlist link — an Xtream panel's " +
@@ -506,35 +586,40 @@ fun IptvScreen(nav: NavHostController) {
                     )
                     }
                     Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = addLink,
-                        onValueChange = { addLink = it },
-                        placeholder = {
-                            Text(
-                                if (addXtream) tr("https://panel.example.com")
-                                else if (addStream) tr("https://…/m3u8, terabox, mdisk…")
-                                else tr("https://…/playlist.m3u or .json")
-                            )
-                        },
-                        singleLine = false,
-                        maxLines = 3,
-                        modifier = Modifier.fillMaxWidth().tvTextFieldKeys(addLink),
-                    )
-                    Spacer(Modifier.height(8.dp))
+                    // The plain link field is for playlist / network stream /
+                    // torrent modes; the Xtream fields below take over when that
+                    // pill is selected, so hide this one to avoid two URL inputs.
+                    if (!addXtream) {
+                        OutlinedTextField(
+                            value = addLink,
+                            onValueChange = { addLink = it },
+                            placeholder = {
+                                Text(
+                                    if (addStream) tr("https://…/m3u8, terabox, mdisk…")
+                                    else tr("https://…/playlist.m3u or .json")
+                                )
+                            },
+                            singleLine = false,
+                            maxLines = 3,
+                            modifier = Modifier.fillMaxWidth().tvTextFieldKeys(addLink),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
                     // F3 — Xtream panel inputs (URL, username, password) shown when the
                     // panel pill is selected instead of a raw playlist link.
                     if (addXtream) {
                         OutlinedTextField(
                             value = addXtreamUrl,
-                            onValueChange = { addXtreamUrl = it },
+                            onValueChange = { addXtreamUrl = it; xtreamError = "" },
                             label = { Text(tr("Panel URL")) },
                             singleLine = true,
+                            isError = xtreamError.isNotBlank(),
                             modifier = Modifier.fillMaxWidth().tvTextFieldKeys(addXtreamUrl),
                         )
                         Spacer(Modifier.height(8.dp))
                         OutlinedTextField(
                             value = addXtreamUser,
-                            onValueChange = { addXtreamUser = it },
+                            onValueChange = { addXtreamUser = it; xtreamError = "" },
                             label = { Text(tr("Username")) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth().tvTextFieldKeys(addXtreamUser),
@@ -542,36 +627,82 @@ fun IptvScreen(nav: NavHostController) {
                         Spacer(Modifier.height(8.dp))
                         OutlinedTextField(
                             value = addXtreamPass,
-                            onValueChange = { addXtreamPass = it },
+                            onValueChange = { addXtreamPass = it; xtreamError = "" },
                             label = { Text(tr("Password")) },
                             singleLine = true,
+                            isError = xtreamError.isNotBlank(),
                             visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
                             modifier = Modifier.fillMaxWidth().tvTextFieldKeys(addXtreamPass),
                         )
                         Spacer(Modifier.height(8.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             OutlinedButton(
+                                enabled = addXtreamUrl.isNotBlank() &&
+                                    addXtreamUser.isNotBlank() &&
+                                    addXtreamPass.isNotBlank() && !xtreamTesting,
                                 onClick = {
-                                    addLink = runCatching {
-                                        com.hikari.app.data.XtreamCredentials.fromUrl(addXtreamUrl.trim())?.m3uUrl()
-                                            ?: addXtreamUrl.trim()
-                                    }.getOrDefault(addXtreamUrl.trim())
+                                    val creds = com.hikari.app.data.XtreamCredentials(
+                                        baseUrl = addXtreamUrl.trim(),
+                                        username = addXtreamUser.trim(),
+                                        password = addXtreamPass.trim(),
+                                    )
+                                    val credError = creds.validate()
+                                    if (credError != null) {
+                                        xtreamError = credError
+                                    } else {
+                                        xtreamError = ""
+                                        xtreamTesting = true
+                                        scope.launch {
+                                            IptvProvider.validateXtream(creds).fold(
+                                                onSuccess = {
+                                                    addLink = creds.m3uUrl()
+                                                    xtreamTestResult = I18n.t("Login OK — the panel is reachable")
+                                                    xtreamTesting = false
+                                                },
+                                                onFailure = { t ->
+                                                    xtreamError = t.message
+                                                        ?: I18n.t("Could not reach that panel")
+                                                    xtreamTesting = false
+                                                },
+                                            )
+                                        }
+                                    }
                                 },
-                                enabled = addXtreamUrl.isNotBlank(),
                             ) {
-                                Text(tr("Test / Fill"))
+                                if (xtreamTesting) {
+                                    CircularProgressIndicator(
+                                        Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                    )
+                                } else {
+                                    Text(tr("Test / Fill"))
+                                }
                             }
                             Spacer(Modifier.width(8.dp))
-                            if (addLink.isNotEmpty() && addLink != addXtreamUrl) {
+                            if (xtreamTesting) {
                                 Text(
-                                    addLink,
+                                    tr("Signing in…"),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            } else if (xtreamTestResult.isNotBlank()) {
+                                Text(
+                                    xtreamTestResult,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
                                     maxLines = 1,
                                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f),
                                 )
                             }
+                        }
+                        if (xtreamError.isNotBlank()) {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                xtreamError,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
                         }
                         Spacer(Modifier.height(8.dp))
                     }
@@ -633,19 +764,23 @@ fun IptvScreen(nav: NavHostController) {
                         Spacer(Modifier.width(8.dp))
                     }
                     Button(
-                        enabled = !adding && (addLink.isNotBlank() || addFilePath.isNotBlank()),
+                        enabled = !adding && (
+                            addLink.isNotBlank() ||
+                            addFilePath.isNotBlank() ||
+                            (addXtream && addXtreamUrl.isNotBlank() &&
+                                addXtreamUser.isNotBlank() && addXtreamPass.isNotBlank())
+                        ),
                         onClick = { addNow(playAfter = false) },
                     ) { Text(tr("Add")) }
                 }
             },
             dismissButton = {
                 TextButton(onClick = {
+                    addStream = false; addTorrent = false; addXtream = false
+                    addLink = ""; addName = ""; addFileLabel = ""; addFilePath = ""
+                    addXtreamUrl = ""; addXtreamUser = ""; addXtreamPass = ""
+                    xtreamError = ""; xtreamTestResult = ""; xtreamTesting = false
                     showAdd = false
-                    addStream = false; addTorrent = false
-                    addLink = ""
-                    addName = ""
-                    addFileLabel = ""
-                    addFilePath = ""
                 }) { Text(tr("Cancel")) }
             },
         )

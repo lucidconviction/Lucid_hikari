@@ -393,6 +393,9 @@ class AppStore(private val ctx: Context) {
          *  default, like the reference clients; the player's own pill toggles
          *  it). */
         val PLAYER_AUTOPLAY = booleanPreferencesKey("playerAutoplayNext")
+        /** Auto-advance to the next IPTV stream in the playlist when the current
+         *  one ends (ON by default; the player's Auto-Next pill toggles it). */
+        val PLAYER_AUTO_NEXT = booleanPreferencesKey("playerAutoNext")
         /** Size of player icons when the text labels are hidden, in dp. */
         val PLAYER_ICON_SIZE = intPreferencesKey("playerIconSize")
         val PLAYER_TOP_ICON_SIZE = intPreferencesKey("playerTopIconSize")
@@ -3735,6 +3738,17 @@ fun searchExceptionOnFlow(): Flow<Boolean> =
 
     suspend fun setAutoplayNext(on: Boolean) {
         write("PLAYER_AUTOPLAY") { it[K.PLAYER_AUTOPLAY] = on }
+    }
+
+    /** Whether the player advances to the next IPTV stream in the playlist
+     *  when the current one ends (ON by default; the Auto-Next pill toggles it). */
+    fun autoNextFlow(): Flow<Boolean> =
+        store.data.map { it[K.PLAYER_AUTO_NEXT] ?: true }.distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    suspend fun autoNext(): Boolean = autoNextFlow().first()
+
+    suspend fun setAutoNext(on: Boolean) {
+        write("PLAYER_AUTO_NEXT") { it[K.PLAYER_AUTO_NEXT] = on }
     }
 
     /** Size of player icons when the text labels are hidden (20–44dp). */

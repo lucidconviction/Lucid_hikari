@@ -22,6 +22,8 @@
     <string name="player_next_episode">Next</string>
     <string name="player_autoplay_on">Autoplay: On</string>
     <string name="player_autoplay_off">Autoplay: Off</string>
+    <string name="player_auto_next_on">Auto-next: On</string>
+    <string name="player_auto_next_off">Auto-next: Off</string>
     <string name="player_source">Source</string>
     <string name="player_quality">Quality</string>
     <string name="player_audio">Audio</string>

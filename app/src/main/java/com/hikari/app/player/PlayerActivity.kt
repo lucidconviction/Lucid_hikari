@@ -123,6 +123,7 @@ import com.hikari.app.net.NetTuning
 import com.hikari.app.net.PlayerHttp
 import com.hikari.app.net.SlowNetTip
 import com.hikari.app.net.StreamProbe
+import com.hikari.app.net.IptvPlaybackForklift
 import com.hikari.app.tracker.TrackerSync
 import com.hikari.app.tv.TvInput
 import com.hikari.app.tv.TvMode
@@ -1188,6 +1189,7 @@ class PlayerActivity : ComponentActivity() {
     private var prevEpBtn: TextView? = null
     private var nextEpBtn: TextView? = null
     private var autoplayBtn: TextView? = null
+    private var autoNextBtn: TextView? = null
     private var subsBtn: TextView? = null
     private var audioBtn: TextView? = null
     private var errorPanel: View? = null
@@ -1903,6 +1905,7 @@ class PlayerActivity : ComponentActivity() {
         prevEpBtn = findViewById(R.id.prev_ep_btn)
         nextEpBtn = findViewById(R.id.next_ep_btn)
         autoplayBtn = findViewById(R.id.autoplay_btn)
+        autoNextBtn = findViewById(R.id.auto_next_btn)
         subsBtn = findViewById(R.id.subs_btn)
         audioBtn = findViewById(R.id.audio_btn)
         lockBtn = findViewById(R.id.lock_btn)
@@ -2031,6 +2034,8 @@ class PlayerActivity : ComponentActivity() {
         nextEpBtn?.setOnClickListener { stepEpisode(1) }
         autoplayBtn?.visibility = View.GONE
         autoplayBtn?.setOnClickListener { toggleAutoplay() }
+        autoNextBtn?.visibility = View.GONE
+        autoNextBtn?.setOnClickListener { toggleAutoNext() }
         subsBtn?.setOnClickListener { showSubsDialog() }
         audioBtn?.setOnClickListener { showAudioDialog() }
         findViewById<TextView>(R.id.download_btn)?.setOnClickListener { showDownloadDialog() }
@@ -2302,6 +2307,12 @@ class PlayerActivity : ComponentActivity() {
                 (applicationContext as HikariApp).store.autoplayNext()
             }.getOrDefault(true)
             updateAutoplayPill()
+        }
+        lifecycleScope.launch {
+            autoNextOn = runCatching {
+                (applicationContext as HikariApp).store.autoNext()
+            }.getOrDefault(true)
+            updateAutoNextPill()
         }
         lifecycleScope.launch {
             iconOnlyControls = runCatching {
@@ -2655,6 +2666,7 @@ class PlayerActivity : ComponentActivity() {
         prevEpBtn?.visibility = if (seriesKnown) View.VISIBLE else View.GONE
         nextEpBtn?.visibility = if (seriesKnown) View.VISIBLE else View.GONE
         autoplayBtn?.visibility = if (seriesKnown) View.VISIBLE else View.GONE
+        autoNextBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
 
         sources = runCatching {
             val arr = JSONArray(intent.getStringExtra("sources").orEmpty())
@@ -4426,7 +4438,7 @@ class PlayerActivity : ComponentActivity() {
      *  Player UI skin can restyle the whole row in one pass. */
     private val pillIds = intArrayOf(
         R.id.speed_btn, R.id.episodes_btn, R.id.prev_ep_btn, R.id.next_ep_btn,
-        R.id.autoplay_btn, R.id.sources_btn, R.id.quality_btn,
+        R.id.autoplay_btn, R.id.auto_next_btn, R.id.sources_btn, R.id.quality_btn,
         R.id.audio_btn, R.id.subs_btn, R.id.rotate_btn, R.id.skip_btn, R.id.enhance_btn,
         R.id.fav_btn, R.id.download_btn, R.id.pip_btn, R.id.options_btn, R.id.lock_btn,
         R.id.external_btn
@@ -5211,6 +5223,12 @@ class PlayerActivity : ComponentActivity() {
     private var playerEpisodes: List<Episode> = emptyList()
     /** Advance to the next episode by itself on natural end (Autoplay pill). */
     private var autoplayNextOn = true
+    /** Auto-advance to the next IPTV stream in the playlist when the current
+     *  one ends (Auto-Next pill). Live streams wrap around the playlist. */
+    private var autoNextOn = true
+    /** An auto-next advance is in flight — a second ENDED event must not stack
+     *  another one behind it. */
+    private var autoNextRunning = false
     /** An autoplay advance is in flight — a second ENDED event must not stack
      *  another one behind it. */
     private var autoplayRunning = false
@@ -7906,11 +7924,52 @@ class PlayerActivity : ComponentActivity() {
         originalPillLabels[R.id.autoplay_btn] = label
     }
 
+    /** The Auto-Next pill: advance to the next IPTV stream in the playlist
+     *  when the current one ends (live streams wrap around). */
+    private fun toggleAutoNext() {
+        autoNextOn = !autoNextOn
+        updateAutoNextPill()
+        lifecycleScope.launch {
+            runCatching { (applicationContext as HikariApp).store.setAutoNext(autoNextOn) }
+        }
+        Toast.makeText(
+            this,
+            I18n.t(
+                if (autoNextOn) "Auto-Next on — playlist streams advance to the next channel on end"
+                else "Auto-Next off"
+            ),
+            Toast.LENGTH_SHORT,
+        ).show()
+    }
+
+    private fun updateAutoNextPill() {
+        val v = findViewById<TextView>(R.id.auto_next_btn) ?: return
+        val label = getString(
+            if (autoNextOn) R.string.player_auto_next_on else R.string.player_auto_next_off
+        )
+        v.text = label
+        // The icon-only pass restores this map's text, so it must follow the
+        // toggle — otherwise the first icon-only flip shows a stale state.
+        originalPillLabels[R.id.auto_next_btn] = label
+    }
+
     /** A video that played to its real end advances itself when autoplay is on.
      *  Movies, live channels and the last episode stay put; an already-running
      *  advance (or a switch the user just made) wins over a second ENDED event. */
     private fun onPlaybackEnded() {
         if (isFinishing || isDestroyed) return
+        if (autoNextOn && channelSurfController != null && !autoNextRunning) {
+            autoNextRunning = true
+            val ctrl = channelSurfController
+            lifecycleScope.launch {
+                try {
+                    ctrl?.next()
+                } finally {
+                    autoNextRunning = false
+                }
+            }
+            return
+        }
         if (!autoplayNextOn || autoplayRunning) return
         val item = favouriteItem ?: return
         if (item.type == MediaType.MOVIE) return
@@ -11554,7 +11613,7 @@ class PlayerActivity : ComponentActivity() {
                 .setLoadErrorHandlingPolicy(RetryFriendlyLoadErrorPolicy())
             val dual = ExoPlayer.Builder(this)
                 .setMediaSourceFactory(mediaFactory)
-                .setLoadControl(buildLoadControl())
+                .setLoadControl(buildLoadControl(isLive = isLiveSource(src)))
                 .setAudioAttributes(
                     androidx.media3.common.AudioAttributes.Builder()
                         .setUsage(C.USAGE_MEDIA)
@@ -12330,13 +12389,29 @@ class PlayerActivity : ComponentActivity() {
      * costs one pause instead of ten. RAM only: TDLib's on-disk store and the
      * video quality are untouched.
      */
-    private fun buildLoadControl(isTd: Boolean = false): DefaultLoadControl =
+    private fun buildLoadControl(isTd: Boolean = false, isLive: Boolean = false): DefaultLoadControl =
         DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                if (isTd) 90_000 else 60_000,   // minBufferMs — the steady-state bank to keep topped up
-                if (isTd) 180_000 else 150_000, // maxBufferMs — ceiling when the link can outrun playback
-                1_000,    // bufferForPlaybackMs — how little we need to start
-                if (isTd) 8_000 else 2_000,     // bufferForPlaybackAfterRebufferMs — how little to resume
+                when {
+                    isTd -> 90_000                         // minBufferMs — MTProto-tuned bank
+                    isLive -> 30_000                       // minBufferMs —IPTV live: fast start, shallow bank
+                    else -> 60_000                         // minBufferMs — default VOD bank
+                },
+                when {
+                    isTd -> 180_000                        // maxBufferMs — MTProto ceiling
+                    isLive -> 60_000                       // maxBufferMs —IPTV live: never let the buffer grow too deep
+                    else -> 150_000                        // maxBufferMs — VOD ceiling
+                },
+                when {
+                    isTd -> 1_000                          // bufferForPlaybackMs — MTProto
+                    isLive -> 500                          // bufferForPlaybackMs — IPTV live: start sooner
+                    else -> 1_000                          // bufferForPlaybackMs — VOD
+                },
+                when {
+                    isTd -> 8_000                          // bufferForPlaybackAfterRebufferMs — MTProto
+                    isLive -> 500                          // bufferForPlaybackAfterRebufferMs — IPTV live
+                    else -> if (isTd) 8_000 else 2_000    // VOD rebuffer resume
+                },
             )
             .setTargetBufferBytes(
                 // media3's own byte target defaults to off, so without this a
@@ -12721,7 +12796,10 @@ class PlayerActivity : ComponentActivity() {
             2 -> if (mandatoryRef2) baseHeaders.filterKeys { it.equals("Referer", ignoreCase = true) || it.equals("User-Agent", ignoreCase = true) } else emptyMap()
             else -> baseHeaders
         }
-        val ua = uaFor(sourceHeaders)
+        val ua = if (uaVariant == 1) exoPlayerUa
+            else if (!isCs3Source && IptvPlaybackForklift.shouldTryIptvUa(src.url))
+                IptvPlaybackForklift.pickUa(sourceHeaders["User-Agent"], src.url)
+            else sourceHeaders["User-Agent"]?.takeIf { it.isNotBlank() } ?: Http.UA
         // CloudStream parity for CloudStream sources (CS3-only): play through
         // CloudStream's OWN shared client (MainActivityKt.getApp().baseClient —
         // the exact client extraction used, same cookies/TLS/profile), plus
@@ -12826,7 +12904,7 @@ class PlayerActivity : ComponentActivity() {
             .setMediaSourceFactory(mediaSourceFactory)
             // Deep-buffer, stall-resistant buffering policy — Telegram videos
             // get the MTProto-tuned variant (see buildLoadControl).
-            .setLoadControl(buildLoadControl(src.url.startsWith("hikari-td:")))
+            .setLoadControl(buildLoadControl(isTd = src.url.startsWith("hikari-td:"), isLive = isLiveSource(src)))
             // Hold the CPU + Wi-Fi radio awake for the whole session (including
             // PiP/background audio). A radio that drops into power-save
             // mid-stream is a classic "it randomly stops to buffer" cause on
@@ -17224,11 +17302,16 @@ private class RetryFriendlyLoadErrorPolicy :
 /** Attempts allowed before a *transient* error is treated as fatal (also the
  *  ceiling the Loader itself consults; the time window below usually stops the
  *  ladder first). */
-private const val TRANSIENT_RETRIES = 8
+private const val TRANSIENT_RETRIES = 15
 
 /** How long one load task may keep retrying a transient error before it is
  *  escalated to the app's own failover / source-refresh logic. */
-private const val MAX_RETRY_WINDOW_MS = 15_000L
+private const val MAX_RETRY_WINDOW_MS = 45_000L
+
+/** Live-only retry window: identical ceiling to [MAX_RETRY_WINDOW_MS] but kept
+ *  as its own constant so the live path can be tuned independently in the
+ *  future (e.g., longer for flaky IPTV mirrors, shorter for VOD). */
+private const val LIVE_RETRY_WINDOW_MS = 45_000L
 
 /** How long the live progress tally may stay completely unchanged before the
  *  Sources panel stops describing the search as still running. A search that is

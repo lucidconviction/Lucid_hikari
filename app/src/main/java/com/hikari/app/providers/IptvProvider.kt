@@ -9,6 +9,7 @@ import com.hikari.app.data.MediaItem
 import com.hikari.app.data.MediaType
 import com.hikari.app.data.ProviderConfig
 import com.hikari.app.data.ProviderType
+import com.hikari.app.data.XtreamCredentials
 import com.hikari.app.data.StreamSource
 import com.hikari.app.net.Http
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +17,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
@@ -208,6 +210,157 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
                 }
             }.getOrNull()
         }
+
+        /** F3 — a validated Xtream panel, counted before it is saved. */
+        data class XtreamPreview(
+            val channelCount: Int,
+            val serverName: String,
+            val m3uUrl: String,
+        )
+
+        /**
+         * Validates an Xtream panel and counts its channels BEFORE the playlist
+         * is saved, so a dead host or a wrong password is reported in the Add
+         * dialog instead of becoming an empty tile the user has to notice later.
+         *
+         * Two requests, in order:
+         *  1. `player_api.php?username=…&password=…` — the panel's own auth
+         *     check. A 401/403 here is a bad username or password; anything
+         *     else is a host problem. That is what separates "wrong password"
+         *     from "host down", which the generic "could not download this
+         *     playlist" the old path showed could not.
+         *  2. `get.php?username=…&password=…&type=m3u_plus` — the channel
+         *     list, parsed the same way every other playlist is, so the count
+         *     is real.
+         *
+         * Both run on [Dispatchers.IO] through the shared OkHttp client (the
+         * same one [readSource] uses for M3U), off the main thread, with the
+         * same fetch timeout every playlist gets.
+         */
+        suspend fun previewXtream(creds: XtreamCredentials): Result<XtreamPreview> =
+            withContext(Dispatchers.IO) {
+                val info = fetchWithStatus(creds.apiInfoUrl())
+                val infoText = info.getOrNull()
+                if (infoText == null) {
+                    return@withContext Result.failure(
+                        Exception(
+                            describeXtreamFailure(
+                                info.exceptionOrNull()?.message ?: "Could not reach the panel",
+                                creds,
+                            ),
+                        ),
+                    )
+                }
+                val listReq = fetchWithStatus(creds.m3uUrl())
+                val text = listReq.getOrNull()
+                if (text == null) {
+                    return@withContext Result.failure(
+                        Exception(
+                            describeXtreamFailure(
+                                listReq.exceptionOrNull()?.message ?: "Could not download the channel list",
+                                creds,
+                            ),
+                        ),
+                    )
+                }
+                val list = IptvPlaylist.parse(text, base = creds.m3uUrl())
+                if (list.isEmpty()) {
+                    return@withContext Result.failure(
+                        Exception("That panel answered but listed no channels — check the panel URL."),
+                    )
+                }
+                // Populate the preview cache so the add flow's own [preview] call
+                // later hits the cache and skips the redundant get.php download.
+                previewCache[creds.m3uUrl()] = list.size
+                Result.success(
+                    XtreamPreview(
+                        channelCount = list.size,
+                        serverName = xtreamServerName(infoText, creds),
+                        m3uUrl = creds.m3uUrl(),
+                    ),
+                )
+            }
+
+        /**
+         * One request, auth only: hits `player_api.php?username=…&password=…`
+         * (the panel's own login check) and reports success/failure — used by
+         * the Add dialog's "Test / Fill" button so the user knows whether the
+         * credentials work BEFORE hitting Add. A 401/403 is the "wrong
+         * password" case the Add flow would otherwise have silently saved; a
+         * 200 (a `user_info` / `server_info` JSON object, or even `[]`) is the
+         * "these credentials log in" case. Runs on [Dispatchers.IO] through the
+         * same shared OkHttp client and [FETCH_TIMEOUT_MS] as every other
+         * playlist fetch.
+         */
+        suspend fun validateXtream(creds: XtreamCredentials): Result<Unit> =
+            withContext(Dispatchers.IO) {
+                fetchWithStatus(creds.apiInfoUrl()).fold(
+                    onSuccess = { Result.success(Unit) },
+                    onFailure = {
+                        Result.failure(
+                            Exception(
+                                describeXtreamFailure(
+                                    it.message ?: "Could not reach the panel",
+                                    creds,
+                                ),
+                            ),
+                        )
+                    },
+                )
+            }
+
+        /**
+         * One GET through the shared client with [FETCH_TIMEOUT_MS], returned as
+         * a [Result] whose failure message says WHICH way it failed —
+         * "HTTP 401 from host", "HTTP 403 from host", "timed out reaching host",
+         * or the underlying exception text. [previewXtream] needs that detail so
+         * a wrong password is not reported the same way as a dead host.
+         */
+        private suspend fun fetchWithStatus(url: String): Result<String> =
+            withTimeoutOrNull(FETCH_TIMEOUT_MS) {
+                runCatching {
+                    Http.get(url, HEADERS).use { resp ->
+                        if (!resp.isSuccessful) {
+                            Result.failure(
+                                Exception("HTTP ${resp.code} from ${url.substringAfter("://")}"),
+                            )
+                        } else {
+                            Result.success(resp.body?.string().orEmpty())
+                        }
+                    }
+                }.getOrNull()
+                    ?: Result.failure(Exception("timed out reaching ${url.substringAfter("://")}"))
+            } ?: Result.failure(Exception("timed out reaching ${url.substringAfter("://")}"))
+
+        /** One line the user can act on, for a panel request that did not work. */
+        private fun describeXtreamFailure(msg: String, creds: XtreamCredentials): String {
+            val host = creds.baseUrl.substringAfter("://").substringBefore('/')
+                .ifBlank { creds.baseUrl }
+            return when {
+                msg.startsWith("HTTP 401") || msg.startsWith("HTTP 403") ->
+                    "Wrong username or password for $host — check the Xtream panel credentials and try again."
+                msg.startsWith("HTTP 404") ->
+                    "$host is not an Xtream panel (HTTP 404) — check the panel URL."
+                msg.startsWith("HTTP 4") ->
+                    "The panel at $host refused the request ($msg) — check the URL and credentials."
+                msg.startsWith("HTTP 5") ->
+                    "The panel at $host is having trouble ($msg) — try again in a minute."
+                msg.startsWith("timed out", ignoreCase = true) ->
+                    "Timed out reaching $host — check the panel address and your connection."
+                else -> "Could not reach the Xtream panel at $host — $msg"
+            }
+        }
+
+        /** The panel's own name, from its `server_info` JSON, else the host. */
+        private fun xtreamServerName(infoText: String, creds: XtreamCredentials): String =
+            runCatching {
+                val obj = JSONObject(infoText)
+                val info = obj.optJSONObject("server_info")
+                info?.getString("name")?.takeIf { it.isNotBlank() }
+                    ?: info?.getString("hostname")?.takeIf { it.isNotBlank() }
+            }.getOrNull()
+                ?: creds.baseUrl.substringAfter("://").substringBefore('/')
+                    .ifBlank { "IPTV" }
     }
 
     private val loadLock = Mutex()
