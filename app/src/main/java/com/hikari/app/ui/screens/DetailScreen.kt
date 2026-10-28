@@ -5457,9 +5457,16 @@ fun DetailScreen(
                             // not attached yet — the user can still walk to it
                         }
                     }
+                    // Horizontally scrollable: on a narrow phone the three fixed
+                    // buttons (MultiView + Download + Library) plus their gaps
+                    // used to eat the whole row and squeeze the Play pill down
+                    // to a sliver — "the Play button is not there" on portrait.
+                    // Scrolling keeps Play pinned at the left (it is first) so
+                    // it is ALWAYS visible, and the rest are one swipe away.
                     Row(
                         Modifier
                             .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
                             .padding(horizontal = 16.dp, vertical = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -5503,18 +5510,48 @@ fun DetailScreen(
                                 ),
                             )
                         }
-                        // Send to MultiView button — opens the multi-view grid
-                        // so the user can browse IPTV channels and add them.
+                        // Send to MultiView button — when on an IPTV page, adds the
+                        // current channel to the next open slot in the multi-view
+                        // grid (so playback starts immediately there). On non-IPTV
+                        // pages just opens the multi-view tab for manual browsing.
+                        // Icon-only, same footprint as the Download button: a
+                        // labelled pill beside Play used to be the widest item in
+                        // the row and, on a narrow phone, pushed Play off the
+                        // start of the screen entirely.
                         FilledTonalButton(
-                            onClick = { Routes.navigateTab(nav, Routes.MULTI_VIEW) },
+                            onClick = {
+                                if (isIptvPage) {
+                                    val slot = MultiWindowStore.nextAvailableSlot() ?: 0
+                                    MultiWindowStore.addToSlot(savedItem.title, savedItem.id, slotIndex = slot)
+                                    android.widget.Toast.makeText(
+                                        com.hikari.app.HikariApp.instance.applicationContext,
+                                        I18n.t("Added to multi-view"),
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                    Routes.navigateTab(nav, Routes.MULTI_VIEW)
+                                } else {
+                                    Routes.navigateTab(nav, Routes.MULTI_VIEW)
+                                }
+                            },
                             modifier = Modifier.tvPress(
                                 previewPass = true,
-                                onClick = { Routes.navigateTab(nav, Routes.MULTI_VIEW) }
+                                onClick = {
+                                    if (isIptvPage) {
+                                        val slot = MultiWindowStore.nextAvailableSlot() ?: 0
+                                        MultiWindowStore.addToSlot(savedItem.title, savedItem.id, slotIndex = slot)
+                                        android.widget.Toast.makeText(
+                                            com.hikari.app.HikariApp.instance.applicationContext,
+                                            I18n.t("Added to multi-view"),
+                                            android.widget.Toast.LENGTH_SHORT,
+                                        ).show()
+                                        Routes.navigateTab(nav, Routes.MULTI_VIEW)
+                                    } else {
+                                        Routes.navigateTab(nav, Routes.MULTI_VIEW)
+                                    }
+                                }
                             )
                         ) {
                             Icon(Icons.Filled.GridView, contentDescription = tr("MultiView"))
-                            Spacer(Modifier.width(6.dp))
-                            Text(tr("MultiView"))
                         }
                         // The MARK state is deliberately NOT a button in this row
                         // any more. It was one (a check beside Play, mirroring the

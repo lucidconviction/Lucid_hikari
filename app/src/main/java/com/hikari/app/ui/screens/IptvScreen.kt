@@ -2257,14 +2257,33 @@ private fun XtreamAccountPill(account: com.hikari.app.data.XtreamAccount, onClic
 private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvProvider>) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; encodeDefaults = true }
     val prefs = remember { ctx.getSharedPreferences("hikari_iptv", Context.MODE_PRIVATE) }
     val cacheDir = remember { (ctx.applicationContext as? HikariApp)?.cacheDir ?: ctx.cacheDir }
 
-    // Quick channel region tabs
-    val qcTabs = listOf("All", "US", "UK", "CA", "Premium", "Sports", "News", "Custom")
+    // Custom regions defined by the user, stored as JSON in prefs.
+    data class CustomRegion(val name: String, val tag: String)
+    val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    var customRegions by remember {
+        mutableStateOf<List<CustomRegion>>(runCatching {
+            val raw = prefs.getString("quick_custom_regions", "") ?: ""
+            if (raw.isBlank()) emptyList()
+            else json.decodeFromString<List<CustomRegion>>(raw)
+        }.getOrDefault(emptyList()))
+    }
+    fun persistCustomRegions() {
+        runCatching { prefs.edit().putString("quick_custom_regions", json.encodeToString(customRegions)).apply() }
+    }
+
+    // Dynamic region tabs: fixed set + any custom regions the user has added.
+    val fixedQcTabs = listOf("All", "US", "UK", "CA", "Premium", "Sports", "News", "Custom")
+    val qcTabs = buildList {
+        addAll(fixedQcTabs)
+        add("Add Region")
+        customRegions.forEach { add(it.name) }
+    }
     var selectedQcRegion by remember { mutableStateOf("All") }
-    
+    var showAddRegionDialog by remember { mutableStateOf(false) }
+
     // Modal bottom sheet state
     var showSheet by remember { mutableStateOf(false) }
     var selectedQc by remember { mutableStateOf<QuickChannel?>(null) }
@@ -2272,31 +2291,25 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
     var aliveByUrl by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
     var qcLoading by remember { mutableStateOf(false) }
     var sheetExpanded by remember { mutableStateOf(false) }
+    var showAddChannelSheet by remember { mutableStateOf(false) }
 
-    // Filtered quick channels
+    // Filtered quick channels — uses QuickChannelList for everything including
+    // "Custom" (which reads from cacheDir) so prefs and QuickChannelList stay in sync.
     val filtered = remember(selectedQcRegion) {
-        when (selectedQcRegion) {
-            "All" -> QuickChannelList.default
-            "US" -> QuickChannelList.default.filter { "US" in it.regions }
-            "UK" -> QuickChannelList.default.filter { "UK" in it.regions }
-            "CA" -> QuickChannelList.default.filter { "CA" in it.regions }
-            "Premium" -> QuickChannelList.default.filter { "premium" in it.tags }
-            "Sports" -> QuickChannelList.default.filter { "sports" in it.tags }
-            "News" -> QuickChannelList.default.filter { "news" in it.tags }
-            "Custom" -> {
-                val raw = prefs.getString("quick_custom", "") ?: ""
-                try { json.decodeFromString<List<QuickChannel>>(raw) } catch (_: Exception) { emptyList() }
+        when {
+            selectedQcRegion == "All" -> QuickChannelList.default
+            selectedQcRegion == "US" -> QuickChannelList.default.filter { "US" in it.regions }
+            selectedQcRegion == "UK" -> QuickChannelList.default.filter { "UK" in it.regions }
+            selectedQcRegion == "CA" -> QuickChannelList.default.filter { "CA" in it.regions }
+            selectedQcRegion == "Premium" -> QuickChannelList.default.filter { "premium" in it.tags }
+            selectedQcRegion == "Sports" -> QuickChannelList.default.filter { "sports" in it.tags }
+            selectedQcRegion == "News" -> QuickChannelList.default.filter { "news" in it.tags }
+            selectedQcRegion == "Custom" -> QuickChannelList.getCustomChannels(cacheDir, emptyList())
+            else -> {
+                // Custom user-defined region tab — match channels whose region list
+                // contains the tab name (case-insensitive).
+                QuickChannelList.default.filter { it.regions.any { r -> r.equals(selectedQcRegion, ignoreCase = true) } }
             }
-            else -> QuickChannelList.default
-        }
-    }
-
-    // Load custom channels on first show
-    LaunchedEffect(Unit) {
-        val raw = prefs.getString("quick_custom", "") ?: ""
-        if (raw.isBlank()) {
-            // Initialize with empty list if not exists
-            prefs.edit().putString("quick_custom", "[]").apply()
         }
     }
 
@@ -2341,13 +2354,24 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
             )
-            // Add custom button
+            // Add custom button — opens the channel adder sheet (same as MultiView)
             IconButton(
-                onClick = { /* TODO: Add custom channel dialog */ },
+                onClick = { showAddChannelSheet = true },
             ) {
                 Icon(
                     Icons.Default.Add,
                     contentDescription = "Add custom channel",
+                    tint = Color.White.copy(alpha = 0.7f),
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            // Add region button — opens a dialog to create a new region tab
+            IconButton(
+                onClick = { showAddRegionDialog = true },
+            ) {
+                Icon(
+                    Icons.Default.Add,
+                    contentDescription = "Add custom region",
                     tint = Color.White.copy(alpha = 0.7f),
                     modifier = Modifier.size(20.dp),
                 )
@@ -2367,17 +2391,25 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 items(qcTabs) { tab ->
-                    val isActive = selectedQcRegion == tab
+                    val isAddRegion = tab == "Add Region"
+                    val isActive = !isAddRegion && selectedQcRegion == tab
                     Box(
                         modifier = Modifier
                             .clip(CircleShape)
-                            .background(if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
-                            .clickable { selectedQcRegion = tab }
+                            .background(if (isActive) MaterialTheme.colorScheme.primary
+                                else if (isAddRegion) MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f)
+                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                            .clickable {
+                                if (isAddRegion) showAddRegionDialog = true
+                                else selectedQcRegion = tab
+                            }
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                     ) {
                         Text(
                             tab,
-                            color = if (isActive) Color.White else Color.White.copy(alpha = 0.7f),
+                            color = if (isActive) Color.White
+                                else if (isAddRegion) MaterialTheme.colorScheme.onSecondary
+                                else Color.White.copy(alpha = 0.7f),
                             fontSize = 12.sp,
                             fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
                         )
@@ -2501,6 +2533,147 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                             )
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // Add channel sheet
+    if (showAddChannelSheet) {
+        QuickChannelsAddChannelSheet(
+            cacheDir = cacheDir,
+            onDismiss = { showAddChannelSheet = false },
+            onAdded = { /* refresh not needed — state recomputes */ },
+        )
+    }
+
+    // Add region dialog
+    if (showAddRegionDialog) {
+        AddCustomRegionDialog(
+            currentRegions = customRegions.map { Pair(it.name, it.tag) },
+            onDismiss = { showAddRegionDialog = false },
+            onAdded = { name, tag ->
+                customRegions = customRegions + CustomRegion(name, tag)
+                persistCustomRegions()
+            },
+        )
+    }
+}
+
+/**
+ * Add-custom quick channel bottom sheet — delegates to the one in MultiViewScreen
+ * (same package) so both screens share the same add-dialog UI.
+ */
+@Composable
+private fun QuickChannelsAddChannelSheet(
+    cacheDir: java.io.File,
+    onDismiss: () -> Unit,
+    onAdded: () -> Unit,
+) {
+    AddCustomQuickChannelSheet(cacheDir = cacheDir, onDismiss = onDismiss, onAdded = onAdded)
+}
+
+/**
+ * Dialog for creating a new custom region tab.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AddCustomRegionDialog(
+    currentRegions: List<Pair<String, String>>,
+    onDismiss: () -> Unit,
+    onAdded: (String, String) -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    var tag by remember { mutableStateOf("") }
+    var saved by remember { mutableStateOf(false) }
+
+    ModalBottomSheet(
+        onDismissRequest = { if (!saved) onDismiss() },
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
+        ) {
+            Text(
+                "Add Custom Region",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.height(16.dp))
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("Region Name (e.g. \"Europe\")") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(
+                value = tag,
+                onValueChange = { tag = it },
+                label = { Text("Region Tag (used to filter channels, e.g. \"EU\", \"Europe\")") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+            if (currentRegions.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "Existing regions:",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 120.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    items(currentRegions) { (n, t) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(n, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "tag: $t",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 11.sp,
+                            )
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(20.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Cancel")
+                }
+                Button(
+                    onClick = {
+                        val trimmedName = name.trim()
+                        val trimmedTag = tag.trim()
+                        if (trimmedName.isNotEmpty() && trimmedTag.isNotEmpty()) {
+                            onAdded(trimmedName, trimmedTag)
+                            saved = true
+                            onDismiss()
+                        }
+                    },
+                    enabled = name.trim().isNotEmpty() && tag.trim().isNotEmpty(),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Add Region")
                 }
             }
         }

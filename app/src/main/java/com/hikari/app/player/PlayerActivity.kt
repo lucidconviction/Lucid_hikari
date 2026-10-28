@@ -1884,6 +1884,13 @@ class PlayerActivity : ComponentActivity() {
                 // An UNPINNED codec readout lives and dies with the controls —
                 // pin it and it stays on the picture (see showCodecOverlay).
                 if (!controllerVisible && !codecOverlayPinned) hideCodecOverlay()
+                // Channel-surf overlay buttons live on the activity frame, not
+                // inside the PlayerControlView — mirror the controls' hide/show
+                // so they time out together with the rest of the pill row.
+                val hasSurf = channelSurfController != null
+                chPrevBtn?.visibility = if (controllerVisible && hasSurf) View.VISIBLE else View.GONE
+                chNextBtn?.visibility = if (controllerVisible && hasSurf) View.VISIBLE else View.GONE
+                channelsBtn?.visibility = if (controllerVisible && hasSurf) View.VISIBLE else View.GONE
                 if (controllerVisible && playerTvRemote()) {
                     // Late-bound click listeners and GONE pills are only
                     // focusable after a walk that sees them (see
