@@ -1,3 +1,15 @@
+## 0.11.92 (continuous build only)
+
+### Added (IPTV / Xtream / MultiView / player)
+- Player channel-surf buttons: oval glass overlays on the far left (CH-) and far right (CH+) of the player, visible only while an IPTV playlist stream is playing — tap to jump to the previous/next channel in the playlist
+- PortalNutz multiview: the quick-nav overlay row no longer appears over every screen, the PortalNutz button opens the nutz portal (crash from the missing nav route fixed), and one stream going fullscreen pauses its grid siblings and resumes them when it closes
+- Xtream account pills on the IPTV quick row show working status and expiration date; accounts are auto-saved after a successful add/preview with their real status and expiry from the panel
+- Faster Xtream loading: account auth and the M3U download now run in parallel
+
+### Fixed
+- Player no longer rotates the screen before a stream actually starts: the video's aspect-based rotation is deferred until playback is confirmed playing, so the screen stays in whatever orientation the user is holding it in
+- MultiView screen compile fixes (interaction source import, stray layout params, pool parameter)
+
 ## 0.11.91 (continuous build only)
 
 ### Changed (batch: exact phone provider box, grouped phone search, TV search manage-feed fix)
