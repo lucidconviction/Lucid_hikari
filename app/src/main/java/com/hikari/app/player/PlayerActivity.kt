@@ -2830,12 +2830,20 @@ class PlayerActivity : ComponentActivity() {
                         channelId = surfId,
                         channels = chs,
                         onChannelChanged = { channel ->
-                            // Swap the active source to the channel the controller
-                            // selected: the player re-loads that channel's URL in
-                            // the same session without a re-open.
-                            val idx = sources.indexOfFirst { it.url == channel.url }
-                            if (idx >= 0) {
-                                lifecycleScope.launch { playSource(idx) }
+                            // The controller picked a DIFFERENT channel from the
+                            // same playlist. `sources` holds the CURRENT channel's
+                            // stream rows — a sibling's URL is not in it — so
+                            // looking it up by url used to find nothing and the
+                            // tap did nothing. Fetch the picked channel's streams
+                            // (same IptvProvider.getStreams path the first play
+                            // used), swap them in, and start at index 0.
+                            lifecycleScope.launch {
+                                val fresh = fetchChannelStreams(channel)
+                                if (fresh.isNotEmpty()) {
+                                    sources = fresh
+                                    notifySourcesChanged()
+                                    preferredStartIndex().let { playSource(it) }
+                                }
                             }
                         },
                     )
@@ -13775,6 +13783,27 @@ class PlayerActivity : ComponentActivity() {
                 it.url.isNotBlank() && it.url != deadUrl
         } ?: return null
         return AltFeed(hit.url, hit.headers, provider.displayName)
+    }
+
+    /**
+     * Fetch the stream rows for a DIFFERENT channel of the same IPTV playlist
+     * (called from the channel-surf controller when the user picks a sibling
+     * from the channel list or taps CH−/CH+). The player was opened with only
+     * the FIRST channel's streams, so a sibling's URL is not in [sources] —
+     * this re-runs the same IptvProvider.getStreams path the first play used and
+     * returns the rows to swap in.
+     */
+    private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel): List<PlayerSource> {
+        val cfg = runCatching { (applicationContext as HikariApp).store.providers() }
+            .getOrDefault(emptyList()).firstOrNull { it.id == originProviderId } ?: return emptyList()
+        val item = AppMediaItem(
+            providerId = cfg.id,
+            id = channel.url,
+            title = channel.name,
+            type = MediaType.MOVIE,
+        )
+        val streams = runCatching { contentRepo.streamsFor(item, null) }.getOrDefault(emptyList())
+        return streams.mapNotNull { runCatching { it.toPlayerSource() }.getOrNull() }
     }
 
     /**
