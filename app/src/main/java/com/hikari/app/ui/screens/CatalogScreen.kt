@@ -33,6 +33,8 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -40,6 +42,9 @@ import androidx.compose.material.icons.filled.Grid4x4
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -109,6 +114,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.Semaphore
 
 /** A wall's own words (see verifyWanted): only these offer the WebView. */
 private val WALL_HINT = Regex(
@@ -567,6 +574,10 @@ fun CatalogScreen(
     val hikari = app as HikariApp
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // F1 — per-channel stream validation for IPTV channel shelves.
+    var channelsValidating by remember { mutableStateOf(false) }
+    var channelsValidateVersion by remember { mutableStateOf(0) }
+    var hideDeadChannels by remember { mutableStateOf(false) }
     // "Verify site" is only offered when the failure looks like a bot wall
     // (403/429/503/Cloudflare) — the only case where passing a check in the
     // WebView can help. A site that is simply down (521/404/500) or an
@@ -769,6 +780,98 @@ fun CatalogScreen(
                             )
                         }
                     }
+                    // Validate button — probes every channel URL and caches results.
+                    val probeIcon = if (channelsValidating) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(
+                            Icons.Filled.Refresh,
+                            contentDescription = tr("Validate channels"),
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                    Surface(
+                        onClick = {
+                            scope.launch {
+                                channelsValidating = true
+                                val allUrls = items.filter { it.rawType == "channel" }.map { it.id }
+                                val semaphore = Semaphore(10)
+                                allUrls.forEach { url ->
+                                    scope.launch {
+                                        semaphore.acquire()
+                                        try {
+                                            val result = withTimeoutOrNull(6_000) {
+                                                com.hikari.app.net.StreamProbe.probe(url)
+                                            }
+                                            com.hikari.app.ui.screens.IptvProbeCache.put(url, result)
+                                        } finally {
+                                            semaphore.release()
+                                        }
+                                    }
+                                }
+                                channelsValidateVersion++
+                                channelsValidating = false
+                            }
+                        },
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                        tonalElevation = 0.dp,
+                        modifier = Modifier
+                            .height(36.dp)
+                            .padding(end = 4.dp),
+                    ) {
+                        Row(
+                            Modifier.padding(horizontal = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Text(
+                                "✓",
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                if (channelsValidating) tr("Validating…") else tr("Validate"),
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    // Hide-dead toggle: only shown after validation has run.
+                    if (channelsValidateVersion > 0) {
+                        Surface(
+                            onClick = { hideDeadChannels = !hideDeadChannels },
+                            shape = RoundedCornerShape(50),
+                            color = if (hideDeadChannels) MaterialTheme.colorScheme.error.copy(alpha = 0.20f)
+                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                            tonalElevation = 0.dp,
+                            modifier = Modifier
+                                .height(36.dp)
+                                .padding(end = 4.dp),
+                        ) {
+                            Row(
+                                Modifier.padding(horizontal = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Icon(
+                                    if (hideDeadChannels) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                    contentDescription = tr("Hide dead channels"),
+                                    modifier = Modifier.size(14.dp),
+                                    tint = if (hideDeadChannels) MaterialTheme.colorScheme.error
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Text(
+                                    tr("Hide dead"),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    color = if (hideDeadChannels) MaterialTheme.colorScheme.error
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
                 }
             }
             // The Cloudflare-verification WebView. A manga site behind a bot wall
@@ -902,6 +1005,26 @@ fun CatalogScreen(
             val style = rememberPosterStyle().let {
                 if (iptvCinema) it.copy(posterType = PosterTypes.CINEMA) else it
             }
+            // F1 — filter dead channels when the user has toggled it on.
+            val visibleItems = remember(items, channelsValidateVersion, hideDeadChannels) {
+                if (!hideDeadChannels) uniqueItems
+                else uniqueItems.filter { item ->
+                    if (item.rawType != "channel") return@filter true
+                    val result = com.hikari.app.ui.screens.IptvProbeCache.get(item.id)
+                    result?.isAlive == true || result == null // keep unprobed
+                }
+            }
+            // F1 — per-channel health dot from the probe cache.
+            fun channelHealth(item: MediaItem): HealthDot =
+                if (item.rawType != "channel") HealthDot.NONE
+                else {
+                    val result = IptvProbeCache.get(item.id)
+                    when {
+                        result == null -> HealthDot.NONE
+                        result.isAlive -> HealthDot.ALL_ALIVE
+                        else -> HealthDot.ALL_DEAD
+                    }
+                }
             LazyVerticalGrid(
                 // Nuvio's catalogue grid: a fixed column count chosen from the
                 // screen, sixteen-dp gutters and a real vertical gap so every
@@ -997,6 +1120,7 @@ fun CatalogScreen(
                                 ).show()
                             }
                         } else null,
+                        healthDot = channelHealth(item),
                     )
                     }
                 }
@@ -1084,6 +1208,8 @@ private fun CatalogCard(
     /** Slot 2 re-pick for IPTV channel cards: adds to multi-view instead of
      *  the library sheet. Null for non-channel items (keeps the library sheet). */
     onMultiView: (() -> Unit)? = null,
+    /** F1 — per-channel health dot (green/yellow/red) from probe cache. */
+    healthDot: HealthDot = HealthDot.NONE,
 ) {
     // The score badge, when Settings → App Layout has it on: warm the ratings
     // cache for this title and print whatever is known (see
@@ -1173,6 +1299,22 @@ private fun CatalogCard(
                         .align(Alignment.TopEnd)
                         .padding(4.dp),
                 )
+            }
+            if (healthDot != HealthDot.NONE) {
+                val dotColor = when (healthDot) {
+                    HealthDot.ALL_ALIVE -> Color(0xFF4CAF50)
+                    HealthDot.MIXED -> Color(0xFFFFC107)
+                    HealthDot.ALL_DEAD -> Color(0xFFF44336)
+                    else -> Color.Transparent
+                }
+                Surface(
+                    color = dotColor,
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(6.dp)
+                        .size(10.dp),
+                ) {}
             }
             if (quickMenu.visible) QuickMenuOverlay(quickMenu.selected)
         }

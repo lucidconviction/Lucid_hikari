@@ -514,8 +514,8 @@ addStream = false
         // Quick Channels section at the TOP of IPTV tab (no separate tab)
         QuickChannelsSection(nav, playlists)
 
-        // Xtream accounts + PortalNutz quick access row
-        XtreamAndPortalRow(app = app, nav = nav)
+        // Xtream accounts quick access row
+        XtreamAccountRow(app = app)
 
         Spacer(Modifier.height(8.dp))
         IptvSectionStrip(
@@ -1491,7 +1491,7 @@ fun IptvPlaylistScreen(nav: NavHostController, providerId: String) {
  * outside IptvChannel (which is immutable once parsed) so results survive
  * recompositions and channel-list re-reads.
  */
-private object IptvProbeCache {
+internal object IptvProbeCache {
     private val cache = mutableMapOf<String, com.hikari.app.net.StreamProbe.ProbeResult?>()
     private val timestamps = mutableMapOf<String, Long>()
     private const val TTL_MS = 5 * 60 * 1000L
@@ -1518,7 +1518,7 @@ private object IptvProbeCache {
 }
 
 /** F2 — aggregate health of a group's channels, drawn as a colored dot. */
-private enum class HealthDot { ALL_ALIVE, MIXED, ALL_DEAD, NONE }
+internal enum class HealthDot { ALL_ALIVE, MIXED, ALL_DEAD, NONE }
 
 /**
  * Computes the aggregate health of [channels] from the probe cache: green when
@@ -2168,13 +2168,12 @@ private fun tileMinFor(shape: String): Dp = when (TileShapes.normalize(shape)) {
 // -------------------------------------------------------------------- Quick Channels --
 
 /**
- * Xtream saved accounts + PortalNutz quick access — shown at the top of the
- * IPTV tab so the user can jump to configured panels or the portal discovery
- * feature without hunting through Settings.
+ * Xtream saved accounts — shown at the top of the IPTV tab so the user can
+ * jump to configured panels without hunting through Settings.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun XtreamAndPortalRow(app: HikariApp, nav: NavHostController) {
+private fun XtreamAccountRow(app: HikariApp) {
     val scope = rememberCoroutineScope()
     val xtreamAccounts by app.store.xtreamAccountsFlow().collectAsState(initial = emptyList())
 
@@ -2203,38 +2202,6 @@ private fun XtreamAndPortalRow(app: HikariApp, nav: NavHostController) {
                         onClick = { /* TODO: open panel detail */ },
                     )
                 }
-            }
-        } else {
-            Text(
-                "No Xtream panels saved",
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                fontSize = 12.sp,
-                modifier = Modifier.weight(1f),
-            )
-        }
-
-        // PortalNutz button — navigate to IPTV NutZ screen
-        Surface(
-            onClick = {
-                nav.navigate(Routes.IPTV_NUTZ)
-            },
-            shape = RoundedCornerShape(9999.dp),
-            color = MaterialTheme.colorScheme.primaryContainer,
-            modifier = Modifier,
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text("★", color = MaterialTheme.colorScheme.onPrimaryContainer, fontSize = 12.sp)
-                Text(
-                    "PortalNutz",
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.5.sp,
-                )
             }
         }
     }

@@ -18,7 +18,7 @@ import com.hikari.app.data.IptvChannel
 class ChannelSurfController(
     private val store: AppStore,
     private val channelId: String,
-    private val channels: List<IptvChannel>,
+    internal val channels: List<IptvChannel>,
     private val onChannelChanged: (IptvChannel) -> Unit,
 ) {
     var currentIndex by mutableStateOf(channels.indexOfFirst { it.url == channelId }.coerceAtLeast(0))
