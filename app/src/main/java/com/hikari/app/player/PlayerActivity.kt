@@ -1435,6 +1435,9 @@ class PlayerActivity : ComponentActivity() {
     private var autoRotated = false
     /** Cached auto-rotate setting read on startup — avoids suspending in the size callback. */
     private var _autoRotatePlayer = true
+    /** Video dimensions seen before playback actually starts; applied once
+      *  [maybeApplyAutoRotate] or [onPlayerStateChanged] confirms play has begun. */
+    private var pendingAutoRotateSize: Pair<Int, Int>? = null
 
     /** True once the user has explicitly picked a subtitle/audio setting; while
      *  set, onTracksChanged must NOT re-assert the default (first) track. */
@@ -12027,6 +12030,7 @@ class PlayerActivity : ComponentActivity() {
             firstFrameRetried = false
         }
         autoRotated = false
+        pendingAutoRotateSize = null
         userRotated = false
         userPickedSubs = false
         currentIndex = index
@@ -15001,6 +15005,14 @@ class PlayerActivity : ComponentActivity() {
         // Respect the user's auto-rotate setting — when disabled, keep the
         // device's current orientation regardless of video aspect ratio.
         if (!_autoRotatePlayer) return
+        // Skip auto-rotate before the stream has actually started playing —
+        // the video size is known early but the user is still watching in
+        // whatever orientation they held the phone in. Store the dimensions
+        // so we can apply rotation once play is confirmed.
+        if (!_hasStartedPlaying) {
+            pendingAutoRotateSize = Pair(width, height)
+            return
+        }
         autoRotated = true
         val landscape = width > height
         requestedOrientation = if (landscape) {
@@ -15108,6 +15120,19 @@ class PlayerActivity : ComponentActivity() {
             // Mark that playback has started so auto-rotate can apply on subsequent starts
             if (playWhenReady && playbackState == Player.STATE_READY) {
                 _hasStartedPlaying = true
+                // If we captured video dimensions before play started, apply
+                // the rotation now so the screen matches the content.
+                if (!autoRotated && !userRotated && pendingAutoRotateSize != null) {
+                    val (w, h) = pendingAutoRotateSize!!
+                    pendingAutoRotateSize = null
+                    autoRotated = true
+                    val landscape = w > h
+                    requestedOrientation = if (landscape) {
+                        SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                    } else {
+                        SCREEN_ORIENTATION_PORTRAIT
+                    }
+                }
             }
             if (playbackState == Player.STATE_READY) {
                 // Duration badge (total runtime) — known once media is ready.
