@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -93,6 +94,7 @@ import com.hikari.app.HikariApp
 import com.hikari.app.data.IptvPlaylist
 import com.hikari.app.data.MultiViewSession
 import com.hikari.app.data.QuickChannel
+import com.hikari.app.data.CustomRegion
 import com.hikari.app.data.QuickChannelList
 import com.hikari.app.data.IptvChannel
 import com.hikari.app.data.MediaItem
@@ -2257,14 +2259,21 @@ private fun XtreamAccountPill(account: com.hikari.app.data.XtreamAccount, onClic
 private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvProvider>) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; encodeDefaults = true }
-    val prefs = remember { ctx.getSharedPreferences("hikari_iptv", Context.MODE_PRIVATE) }
     val cacheDir = remember { (ctx.applicationContext as? HikariApp)?.cacheDir ?: ctx.cacheDir }
 
     // Quick channel region tabs
     val qcTabs = listOf("All", "US", "UK", "CA", "Premium", "Sports", "News", "Custom")
     var selectedQcRegion by remember { mutableStateOf("All") }
-    
+
+    // Custom regions (user-added tabs): JSON array in the cache dir, rendered
+    // as extra tabs between "News" and "Custom".
+    var customRegions by remember { mutableStateOf(emptyList<CustomRegion>()) }
+    LaunchedEffect(cacheDir) {
+        customRegions = QuickChannelList.getCustomRegions(cacheDir)
+    }
+    var showAddRegion by remember { mutableStateOf(false) }
+    var showAddChannel by remember { mutableStateOf(false) }
+
     // Modal bottom sheet state
     var showSheet by remember { mutableStateOf(false) }
     var selectedQc by remember { mutableStateOf<QuickChannel?>(null) }
@@ -2273,8 +2282,9 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
     var qcLoading by remember { mutableStateOf(false) }
     var sheetExpanded by remember { mutableStateOf(false) }
 
-    // Filtered quick channels
-    val filtered = remember(selectedQcRegion) {
+    // Filtered quick channels — the "Custom" tab reads from the cacheDir
+    // file (QuickChannelList.CUSTOM_FILE), never from prefs directly.
+    val filtered = remember(selectedQcRegion, customRegions) {
         when (selectedQcRegion) {
             "All" -> QuickChannelList.default
             "US" -> QuickChannelList.default.filter { "US" in it.regions }
@@ -2283,21 +2293,20 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
             "Premium" -> QuickChannelList.default.filter { "premium" in it.tags }
             "Sports" -> QuickChannelList.default.filter { "sports" in it.tags }
             "News" -> QuickChannelList.default.filter { "news" in it.tags }
-            "Custom" -> {
-                val raw = prefs.getString("quick_custom", "") ?: ""
-                try { json.decodeFromString<List<QuickChannel>>(raw) } catch (_: Exception) { emptyList() }
+            "Custom" -> QuickChannelList.getCustomChannels(cacheDir, emptyList())
+            else -> {
+                // A user-added custom region tab: channels tagged with that tag.
+                val tag = selectedQcRegion
+                QuickChannelList.getCustomChannels(cacheDir, emptyList())
+                    .filter { tag in it.regions } +
+                    QuickChannelList.default.filter { tag in it.regions }
             }
-            else -> QuickChannelList.default
         }
     }
-
-    // Load custom channels on first show
-    LaunchedEffect(Unit) {
-        val raw = prefs.getString("quick_custom", "") ?: ""
-        if (raw.isBlank()) {
-            // Initialize with empty list if not exists
-            prefs.edit().putString("quick_custom", "[]").apply()
-        }
+    // Re-read custom channels whenever the selection or region list changes
+    // (a new custom channel was added/removed while the sheet was open).
+    LaunchedEffect(selectedQcRegion, customRegions) {
+        customRegions = QuickChannelList.getCustomRegions(cacheDir)
     }
 
     // Show sheet when a quick channel is selected
@@ -2327,7 +2336,8 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
     }
 
     Column(Modifier.fillMaxWidth()) {
-        // Section header
+        // Section header — top-right: "+ Region" and "+ CH" buttons to add
+        // custom region tabs and custom quick channels.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -2341,16 +2351,33 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
             )
-            // Add custom button
-            IconButton(
-                onClick = { /* TODO: Add custom channel dialog */ },
-            ) {
-                Icon(
-                    Icons.Default.Add,
-                    contentDescription = "Add custom channel",
-                    tint = Color.White.copy(alpha = 0.7f),
-                    modifier = Modifier.size(20.dp),
-                )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedButton(
+                    onClick = { showAddRegion = true },
+                    shape = RoundedCornerShape(20.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = Color.White.copy(alpha = 0.85f),
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                    modifier = Modifier.height(32.dp).border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(20.dp)),
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Region", fontSize = 12.sp)
+                }
+                OutlinedButton(
+                    onClick = { showAddChannel = true },
+                    shape = RoundedCornerShape(20.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = Color.White.copy(alpha = 0.85f),
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                    modifier = Modifier.height(32.dp).border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(20.dp)),
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("CH", fontSize = 12.sp)
+                }
             }
         }
 
@@ -2366,7 +2393,8 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                items(qcTabs) { tab ->
+                val allTabs = qcTabs + customRegions.map { it.name }
+                items(allTabs) { tab ->
                     val isActive = selectedQcRegion == tab
                     Box(
                         modifier = Modifier
@@ -2486,9 +2514,13 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                     }
                     Spacer(Modifier.height(8.dp))
 
-                    // Channel list
+                    // Channel list — live-validated channels float to the top so the
+                    // working ones are always the first taps.
+                    val sortedMatches = remember(qcMatches, aliveByUrl) {
+                        qcMatches.sortedByDescending { aliveByUrl[it.url] == true }
+                    }
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(qcMatches) { ch ->
+                        items(sortedMatches) { ch ->
                             val isWorking = aliveByUrl[ch.url] == true
                             ChannelListItem(
                                 channel = ch,
@@ -2504,6 +2536,112 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                 }
             }
         }
+    }
+    
+    // Add Region dialog
+    if (showAddRegion) {
+        var regionName by remember { mutableStateOf("") }
+        var regionTag by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showAddRegion = false },
+            title = { Text("Add Region Tab") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = regionName,
+                        onValueChange = { regionName = it },
+                        label = { Text("Region Name") },
+                        placeholder = { Text("e.g. French, Sports Extra") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = regionTag,
+                        onValueChange = { regionTag = it },
+                        label = { Text("Tag") },
+                        placeholder = { Text("e.g. french, sports2") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = regionName.isNotBlank() && regionTag.isNotBlank(),
+                    onClick = {
+                        QuickChannelList.addCustomRegion(cacheDir, CustomRegion(regionName, regionTag))
+                        customRegions = QuickChannelList.getCustomRegions(cacheDir)
+                        showAddRegion = false
+                    },
+                ) {
+                    Text("Add")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddRegion = false }) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
+    
+    // Add Channel dialog
+    if (showAddChannel) {
+        var channelName by remember { mutableStateOf("") }
+        var channelAlias by remember { mutableStateOf("") }
+        var channelTags by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showAddChannel = false },
+            title = { Text("Add Quick Channel") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = channelName,
+                        onValueChange = { channelName = it },
+                        label = { Text("Display Name") },
+                        placeholder = { Text("e.g. My Channel") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = channelAlias,
+                        onValueChange = { channelAlias = it },
+                        label = { Text("Search Alias") },
+                        placeholder = { Text("e.g. CNN, ESPN") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = channelTags,
+                        onValueChange = { channelTags = it },
+                        label = { Text("Tags (comma-separated)") },
+                        placeholder = { Text("e.g. news, sports, us") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = channelName.isNotBlank() && channelAlias.isNotBlank(),
+                    onClick = {
+                        val qc = QuickChannel(
+                            displayName = channelName,
+                            aliases = listOf(channelAlias),
+                            regions = channelTags.split(",").map { it.trim() }.filter { it.isNotBlank() },
+                            tags = channelTags.split(",").map { it.trim() }.filter { it.isNotBlank() },
+                        )
+                        QuickChannelList.addCustomChannel(cacheDir, qc)
+                        showAddChannel = false
+                    },
+                ) {
+                    Text("Add")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddChannel = false }) {
+                    Text("Cancel")
+                }
+            },
+        )
     }
 }
 

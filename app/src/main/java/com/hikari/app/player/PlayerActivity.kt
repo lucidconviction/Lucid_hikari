@@ -1193,6 +1193,7 @@ class PlayerActivity : ComponentActivity() {
     private var nextEpBtn: TextView? = null
     private var chPrevBtn: ImageButton? = null
     private var chNextBtn: ImageButton? = null
+    private var channelsBtn: TextView? = null
     private var autoplayBtn: TextView? = null
     private var autoNextBtn: TextView? = null
     private var subsBtn: TextView? = null
@@ -1917,8 +1918,10 @@ class PlayerActivity : ComponentActivity() {
         nextEpBtn = findViewById(R.id.next_ep_btn)
         chPrevBtn = findViewById(R.id.ch_prev_btn)
         chNextBtn = findViewById(R.id.ch_next_btn)
+        channelsBtn = findViewById(R.id.channels_btn)
         chPrevBtn?.setOnClickListener { lifecycleScope.launch { channelSurfController?.prev() } }
         chNextBtn?.setOnClickListener { lifecycleScope.launch { channelSurfController?.next() } }
+        channelsBtn?.setOnClickListener { showChannelsDialog() }
         autoplayBtn = findViewById(R.id.autoplay_btn)
         autoNextBtn = findViewById(R.id.auto_next_btn)
         subsBtn = findViewById(R.id.subs_btn)
@@ -2054,6 +2057,7 @@ class PlayerActivity : ComponentActivity() {
         autoNextBtn?.setOnClickListener { toggleAutoNext() }
         chPrevBtn?.visibility = View.GONE
         chNextBtn?.visibility = View.GONE
+        channelsBtn?.visibility = View.GONE
         subsBtn?.setOnClickListener { showSubsDialog() }
         audioBtn?.setOnClickListener { showAudioDialog() }
         findViewById<TextView>(R.id.download_btn)?.setOnClickListener { showDownloadDialog() }
@@ -2328,10 +2332,22 @@ class PlayerActivity : ComponentActivity() {
             updateAutoplayPill()
         }
         lifecycleScope.launch {
+            (applicationContext as HikariApp).store.autoplayNextFlow().collect { on ->
+                autoplayNextOn = on
+                updateAutoplayPill()
+            }
+        }
+        lifecycleScope.launch {
             autoNextOn = runCatching {
                 (applicationContext as HikariApp).store.autoNext()
             }.getOrDefault(true)
             updateAutoNextPill()
+        }
+        lifecycleScope.launch {
+            (applicationContext as HikariApp).store.autoNextFlow().collect { on ->
+                autoNextOn = on
+                updateAutoNextPill()
+            }
         }
         lifecycleScope.launch {
             iconOnlyControls = runCatching {
@@ -2688,6 +2704,7 @@ class PlayerActivity : ComponentActivity() {
         autoNextBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
         chPrevBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
         chNextBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
+        channelsBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
         multiWindowBtn?.visibility = View.VISIBLE
 
         sources = runCatching {
@@ -2813,12 +2830,26 @@ class PlayerActivity : ComponentActivity() {
                         channelId = surfId,
                         channels = chs,
                         onChannelChanged = { channel ->
-                            // Swap the active source to the channel the controller
-                            // selected: the player re-loads that channel's URL in
-                            // the same session without a re-open.
-                            val idx = sources.indexOfFirst { it.url == channel.url }
-                            if (idx >= 0) {
-                                lifecycleScope.launch { playSource(idx) }
+                            // The controller picked a DIFFERENT channel from the
+                            // same playlist. `sources` holds the CURRENT channel's
+                            // stream rows — a sibling's URL is not in it — so
+                            // looking it up by url used to find nothing and the
+                            // tap did nothing. Fetch the picked channel's
+                            // streams in the BACKGROUND (same IptvProvider
+                            // .getStreams path the first play used) and only
+                            // swap them in once they're ready, so the picture
+                            // never cuts to a dead stream mid-frame.
+                            coverPlaybackLine = I18n.t("Switching to %s…").replace("%s", channel.name)
+                            lifecycleScope.launch {
+                                val fresh = fetchChannelStreams(channel)
+                                coverPlaybackLine = null
+                                if (fresh.isNotEmpty()) {
+                                    sources = fresh
+                                    notifySourcesChanged()
+                                    preferredStartIndex().let { playSource(it) }
+                                } else {
+                                    showError(I18n.t("That channel has no stream."), false)
+                                }
                             }
                         },
                     )
@@ -2831,6 +2862,7 @@ class PlayerActivity : ComponentActivity() {
         autoNextBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
         chPrevBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
         chNextBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
+        channelsBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
 
         // Cover the very first frames with the title card: the detail screen
         // showed the same card while it searched, so this keeps the "finding
@@ -7654,6 +7686,96 @@ class PlayerActivity : ComponentActivity() {
             addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
         }
         return dialog
+    }
+
+    /** F1 — Channels pill: lists all channels in the current IPTV playlist so
+     *  the user can jump directly to any one without pressing CH+/CH− repeatedly. */
+    private fun showChannelsDialog() {
+        val controller = channelSurfController ?: return
+        val dialog = Dialog(this, android.R.style.Theme_Translucent_NoTitleBar)
+        val density = resources.displayMetrics.density
+        dialog.setContentView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding((14 * density).toInt(), (8 * density).toInt(),
+                (14 * density).toInt(), (6 * density).toInt())
+        })
+        val list = ScrollView(this).apply {
+            val inner = LinearLayout(this@PlayerActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding((12 * density).toInt(), 0, (12 * density).toInt(), (12 * density).toInt())
+            }
+            val idx = controller.currentIndex
+            val total = controller.total
+            controller.channels.forEachIndexed { i, ch ->
+                val row = LinearLayout(this@PlayerActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    setPadding(0, (8 * density).toInt(), 0, (8 * density).toInt())
+                    weightSum = 1f
+                }
+                val dot = View(this@PlayerActivity).apply {
+                    val color = if (i == idx) 0xFF4CAF50.toInt() else 0xFF3A3F4A.toInt()
+                    setBackgroundColor(color)
+                    layoutParams = LinearLayout.LayoutParams((10 * density).toInt(), (10 * density).toInt()).apply {
+                        marginEnd = (10 * density).toInt()
+                    }
+                }
+                row.addView(dot)
+                val name = TextView(this@PlayerActivity).apply {
+                    text = "${i + 1}. ${ch.name}"
+                    setTextColor(0xFFFFFFFF.toInt())
+                    textSize = 15f
+                    if (i == idx) setTypeface(typeface, android.graphics.Typeface.BOLD)
+                    setPadding((12 * density).toInt(), (10 * density).toInt(), 0, (10 * density).toInt())
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                }
+                row.addView(name, android.widget.LinearLayout.LayoutParams(0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                row.setOnClickListener {
+                    lifecycleScope.launch { controller.switch(i) }
+                    dialog.dismiss()
+                }
+                row.background = GradientDrawable().apply {
+                    setColor(if (i == idx) 0xFF2A3040.toInt() else 0x00000000.toInt())
+                    cornerRadius = (8 * density).toFloat()
+                }
+                inner.addView(row)
+            }
+            addView(inner, android.view.ViewGroup.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+        }
+        val footer = TextView(this).apply {
+            text = "Channel ${controller.currentIndex + 1}/${controller.total}"
+            setTextColor(0xFF8A94A6.toInt())
+            textSize = 12f
+            setPadding((12 * density).toInt(), (6 * density).toInt(), 0, 0)
+        }
+        dialog.setCancelable(true)
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.window?.let { w ->
+            w.setBackgroundDrawable(ColorDrawable(0x99000000.toInt()))
+            w.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
+        }
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding((16 * density).toInt(), 0, (16 * density).toInt(), (16 * density).toInt())
+            addView(list, LinearLayout.LayoutParams(
+                (resources.displayMetrics.widthPixels * 0.88f).toInt(),
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+            addView(footer, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+        }
+        dialog.setContentView(col, LinearLayout.LayoutParams(
+            (resources.displayMetrics.widthPixels * 0.88f).toInt(),
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.CENTER
+        })
+        dialog.show()
     }
 
     /** The Episodes pill: lists the title's episodes (fetched from the provider
@@ -13667,6 +13789,27 @@ class PlayerActivity : ComponentActivity() {
                 it.url.isNotBlank() && it.url != deadUrl
         } ?: return null
         return AltFeed(hit.url, hit.headers, provider.displayName)
+    }
+
+    /**
+     * Fetch the stream rows for a DIFFERENT channel of the same IPTV playlist
+     * (called from the channel-surf controller when the user picks a sibling
+     * from the channel list or taps CH−/CH+). The player was opened with only
+     * the FIRST channel's streams, so a sibling's URL is not in [sources] —
+     * this re-runs the same IptvProvider.getStreams path the first play used and
+     * returns the rows to swap in.
+     */
+    private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel): List<PlayerSource> {
+        val cfg = runCatching { (applicationContext as HikariApp).store.providers() }
+            .getOrDefault(emptyList()).firstOrNull { it.id == originProviderId } ?: return emptyList()
+        val item = AppMediaItem(
+            providerId = cfg.id,
+            id = channel.url,
+            title = channel.name,
+            type = MediaType.MOVIE,
+        )
+        val streams = runCatching { contentRepo.streamsFor(item, null) }.getOrDefault(emptyList())
+        return streams.mapNotNull { runCatching { it.toPlayerSource() }.getOrNull() }
     }
 
     /**
