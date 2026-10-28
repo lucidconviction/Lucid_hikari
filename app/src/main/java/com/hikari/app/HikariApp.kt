@@ -156,6 +156,16 @@ class HikariApp : Application() {
      *  when there is none pending — the Extensions screen consumes it. */
     val repoLinkRequest = MutableStateFlow<String?>(null)
 
+    /** A multi-view navigation request from PlayerActivity (or any other
+     *  Activity). AppRoot watches this and navigates to the multi-view route
+     *  with the encoded sessions and layout. Null when there is none pending. */
+    val multiViewRequest = MutableStateFlow<Pair<String, String>?>(null)
+
+    /** When non-null, the slot-picker bottom sheet should be shown in the
+     *  Compose layer so the player can stay visible. Carries (name, url, layout).
+     *  Consumed by AppRoot after showing the dialog. */
+    val slotPickerRequest = MutableStateFlow<Pair<Pair<String, String>, String>?>(null)
+
     /** Bumped by [onContentLanguageChanged] whenever the language TMDB titles
      *  and overviews are fetched in changes. Screens that hold localized
      *  content watch this and rebuild (see HomeViewModel). */

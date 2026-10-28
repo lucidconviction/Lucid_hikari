@@ -365,6 +365,12 @@
               style="@style/HikariPill.Accent"
               android:drawableStart="@drawable/ic_skip"
               android:text="@string/player_skip_intro" />
+
+           <TextView
+              android:id="@+id/multi_window_btn"
+              style="@style/HikariPill"
+              android:drawableStart="@drawable/ic_multi_window"
+              android:text="@string/player_multi_view" />
         </LinearLayout>
       </HorizontalScrollView>
 

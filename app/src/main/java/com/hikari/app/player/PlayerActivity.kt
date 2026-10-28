@@ -130,6 +130,9 @@ import com.hikari.app.tv.TvMode
 import com.hikari.app.ui.AccentStore
 import com.hikari.app.ui.PosterLoader
 import com.hikari.app.ui.UiScale
+import com.hikari.app.ui.navigation.Routes
+import com.hikari.app.ui.screens.MultiViewLayout
+import com.hikari.app.data.MultiViewSession
 import com.hikari.app.ui.theme.HikariAccent
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
 import kotlin.math.abs
@@ -1201,6 +1204,7 @@ class PlayerActivity : ComponentActivity() {
     private var skipBtn: TextView? = null
     private var rotateBtn: TextView? = null
     private var unlockBtn: ImageButton? = null
+    private var multiWindowBtn: TextView? = null
     private var playHint: TextView? = null
 
     /**
@@ -1427,6 +1431,8 @@ class PlayerActivity : ComponentActivity() {
     /** Auto-rotation already applied for the current source (once the screen
      *  matched the video's aspect we stop fighting the user's rotate button). */
     private var autoRotated = false
+    /** Cached auto-rotate setting read on startup — avoids suspending in the size callback. */
+    private var _autoRotatePlayer = true
 
     /** True once the user has explicitly picked a subtitle/audio setting; while
      *  set, onTracksChanged must NOT re-assert the default (first) track. */
@@ -1913,6 +1919,7 @@ class PlayerActivity : ComponentActivity() {
         skipBtn = findViewById(R.id.skip_btn)
         rotateBtn = findViewById(R.id.rotate_btn)
         unlockBtn = findViewById(R.id.unlock_btn)
+        multiWindowBtn = findViewById(R.id.multi_window_btn)
         errorPanel = findViewById(R.id.error_panel)
         errorText = findViewById(R.id.error_text)
         nextBtn = findViewById(R.id.next_btn)
@@ -2224,6 +2231,7 @@ class PlayerActivity : ComponentActivity() {
             seekBoth(target)
         }
         unlockBtn?.setOnClickListener { unlockControls() }
+        multiWindowBtn?.setOnClickListener { openMultiWindow() }
 
         // ---- Player accent, control layout, video enhance ------------------
         // The accent comes from the AccentStore mirror (Settings → Appearance & Theme →
@@ -2667,6 +2675,7 @@ class PlayerActivity : ComponentActivity() {
         nextEpBtn?.visibility = if (seriesKnown) View.VISIBLE else View.GONE
         autoplayBtn?.visibility = if (seriesKnown) View.VISIBLE else View.GONE
         autoNextBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
+        multiWindowBtn?.visibility = View.VISIBLE
 
         sources = runCatching {
             val arr = JSONArray(intent.getStringExtra("sources").orEmpty())
@@ -2751,6 +2760,62 @@ class PlayerActivity : ComponentActivity() {
             showError(I18n.t("No playable sources received."), false)
             return
         }
+
+        // F1 — Channel-surf: when launched from an IPTV catalog/detail for a
+        // playlist channel, the starting screen hands us the sibling channels
+        // as a JSON array ("channelSurfChannels"). The controller lets the
+        // D-pad up/down or Auto-Next advance through the playlist without
+        // re-opening the search. (Nuvio ports the same controller.)
+        val surfChannelsJson = intent.getStringExtra("channelSurfChannels")
+        if (surfChannelsJson.isNullOrBlank()) {
+            channelSurfController = null
+        } else {
+            try {
+                val arr = org.json.JSONArray(surfChannelsJson)
+                val chs = (0 until arr.length()).mapNotNull { i ->
+                    runCatching {
+                        val o = arr.getJSONObject(i)
+                        com.hikari.app.data.IptvChannel(
+                            name = o.optString("name", "").ifBlank { o.optString("title", "") },
+                            url = o.optString("url", o.optString("id", "")),
+                            logo = o.optString("logo", o.optString("poster", "")),
+                            group = o.optString("group", o.optString("overview", "")),
+                            tvgId = o.optString("tvgId"),
+                            language = o.optString("language"),
+                            country = o.optString("country"),
+                            headers = emptyMap(),
+                            drmKid = null,
+                            drmKey = null,
+                            cookie = null,
+                            kind = "",
+                            probeResult = null,
+                        )
+                    }.getOrNull()
+                }
+                val currentUrl = sources.getOrNull(currentIndex)?.url ?: ""
+                val surfId = currentUrl.ifEmpty { intent.getStringExtra("title").orEmpty() }
+                if (chs.isNotEmpty()) {
+                    channelSurfController = com.hikari.app.player.ChannelSurfController(
+                        store = (applicationContext as HikariApp).store,
+                        channelId = surfId,
+                        channels = chs,
+                        onChannelChanged = { channel ->
+                            // Swap the active source to the channel the controller
+                            // selected: the player re-loads that channel's URL in
+                            // the same session without a re-open.
+                            val idx = sources.indexOfFirst { it.url == channel.url }
+                            if (idx >= 0) {
+                                lifecycleScope.launch { playSource(idx) }
+                            }
+                        },
+                    )
+                }
+            } catch (e: Exception) {
+                com.hikari.app.data.Logs.log("Player", "channelSurfChannels parse: ${e.message}")
+                channelSurfController = null
+            }
+        }
+        autoNextBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
 
         // Cover the very first frames with the title card: the detail screen
         // showed the same card while it searched, so this keeps the "finding
@@ -4927,21 +4992,21 @@ class PlayerActivity : ComponentActivity() {
      */
     private fun playerTvRemote(): Boolean = TvMode.isTv
 
-    /**
-     * F5 — auto-rotate the player with the phone's physical orientation while
-     * an IPTV stream is playing (Settings → Playback).
-     *
-     * The sensor is read rather than the current window orientation, so the
-     * user can hold the phone at any comfortable angle without the screen
-     * flickering: the switch only fires when the physical angle crosses the
-     * ±45° boundary between portrait and landscape, and only after a 300 ms
-     * debounce. On a television this is always a no-op (TVs do not rotate).
-     */
+    /** F5 — auto-rotate the player with the phone's physical orientation
+     *  while an IPTV stream is playing (Settings → Playback). On phones,
+     *  always ignored on televisions (TVs do not rotate).
+     *  Skips rotation on initial stream start to prevent unwanted spinning. */
+    private var _hasStartedPlaying = false
     private suspend fun maybeApplyAutoRotate() {
         if (com.hikari.app.tv.TvMode.isTv) return
         val store = (applicationContext as com.hikari.app.HikariApp).store
         if (!store.autoRotatePlayer()) return
         if (userRotated || autoRotated) return
+        // Skip auto-rotate on first play — let the stream start in current orientation
+        if (!_hasStartedPlaying) {
+            _hasStartedPlaying = true
+            return
+        }
         // Read the phone's current physical orientation from the window
         // configuration: a device that is already landscape stays landscape,
         // one in portrait stays portrait. The [onConfigurationChanged] hook
@@ -7951,6 +8016,27 @@ class PlayerActivity : ComponentActivity() {
         // The icon-only pass restores this map's text, so it must follow the
         // toggle — otherwise the first icon-only flip shows a stale state.
         originalPillLabels[R.id.auto_next_btn] = label
+    }
+
+    /** Open the slot-picker dialog so the current stream can be placed into an
+     *  empty multi-view slot without leaving this player screen.
+     *
+     *  Nuvio workflow: the picker is a Compose bottom-sheet shown by AppRoot.
+     *  We signal the request via [com.hikari.app.HikariApp.slotPickerRequest]
+     *  which AppRoot observes and turns into [showSlotPickerDialog]. */
+    fun openMultiWindow() {
+        val currentSource = sources.getOrNull(currentIndex) ?: return
+        val name = currentSource.name
+        val url = currentSource.url
+        // Send a request that AppRoot will consume and turn into the slot-picker.
+        // The old `multiViewRequest` navigated AWAY from the player; this one
+        // keeps the player visible and asks the Compose layer for a slot.
+        val intent = android.content.Intent(this, com.hikari.app.MainActivity::class.java).apply {
+            addFlags(android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            putExtra("multiViewSlotsOnly", "$name|||$url")
+            putExtra("multiViewLayout", "GRID_2x3")
+        }
+        startActivity(intent)
     }
 
     /** A video that played to its real end advances itself when autoplay is on.
@@ -14900,6 +14986,9 @@ class PlayerActivity : ComponentActivity() {
                 ?.setAspectRatio(width.toFloat() / height.toFloat())
         }
         if (autoRotated || userRotated) return
+        // Respect the user's auto-rotate setting — when disabled, keep the
+        // device's current orientation regardless of video aspect ratio.
+        if (!_autoRotatePlayer) return
         autoRotated = true
         val landscape = width > height
         requestedOrientation = if (landscape) {
@@ -15003,6 +15092,10 @@ class PlayerActivity : ComponentActivity() {
             if (playbackState == Player.STATE_ENDED) {
                 onPlaybackEnded()
                 return
+            }
+            // Mark that playback has started so auto-rotate can apply on subsequent starts
+            if (playWhenReady && playbackState == Player.STATE_READY) {
+                _hasStartedPlaying = true
             }
             if (playbackState == Player.STATE_READY) {
                 // Duration badge (total runtime) — known once media is ready.
@@ -16923,7 +17016,19 @@ class PlayerActivity : ComponentActivity() {
         // while an IPTV stream is playing (Settings → Playback). On phones,
         // always ignored on televisions (TVs do not rotate).
         if (!com.hikari.app.tv.TvMode.isTv) {
+            // Reset the "has started playing" flag so the first auto-rotate
+            // attempt after each onStart() is skipped — the stream has not
+            // actually started yet and we don't want to spin before media.
+            _hasStartedPlaying = false
             runCatching { lifecycleScope.launch { maybeApplyAutoRotate() } }
+            // Cache the auto-rotate setting so [onKnownVideoSize] can read it
+            // without suspending.
+            val arStore = (applicationContext as com.hikari.app.HikariApp).store
+            runCatching {
+                lifecycleScope.launch {
+                    _autoRotatePlayer = arStore.autoRotatePlayer()
+                }
+            }
         }
         // The CloudStream Torrent engine resolves its cache dir from the
         // activity reference (throws "No activity" otherwise).

@@ -165,6 +165,8 @@ class MainActivity : AppCompatActivity() {
         // A repo link forwarded by RepoLinkActivity ("Open with → Hikari" in
         // a browser) lands here the same way on a cold start.
         handleRepoLink(intent)
+        // A multi-view request from PlayerActivity (or any other Activity).
+        handleMultiViewIntent(intent)
         // A television shows this app LANDSCAPE, always.
         //
         // The TV layout is a landscape design (a rail down the left, rows to the
@@ -787,6 +789,7 @@ class MainActivity : AppCompatActivity() {
         setIntent(intent)
         handleTrackerRedirect(intent)
         handleRepoLink(intent)
+        handleMultiViewIntent(intent)
     }
 
     /**
@@ -801,6 +804,31 @@ class MainActivity : AppCompatActivity() {
         if (url.isBlank()) return
         (application as HikariApp).repoLinkRequest.value = url
         intent?.removeExtra(com.hikari.app.deeplink.RepoLinkActivity.EXTRA_REPO_LINK)
+    }
+
+    private fun handleMultiViewIntent(intent: android.content.Intent?) {
+        val slotsOnly = intent?.getStringExtra("multiViewSlotsOnly").orEmpty().trim()
+        val layout = intent?.getStringExtra("multiViewLayout") ?: "GRID_2x3"
+        // If slotsOnly is set, we want the SLOTS_PICKER path (stay on current
+        // screen, show picker, add to slot) rather than navigating away.
+        if (slotsOnly.isNotBlank()) {
+            val sep = "|||"
+            val parts = slotsOnly.split(sep)
+            if (parts.size >= 2) {
+                val name = parts[0]
+                val url = parts.subList(1, parts.size).joinToString(sep)
+                (application as HikariApp).slotPickerRequest.value = Pair(Pair(name, url), layout)
+            }
+            intent?.removeExtra("multiViewSlotsOnly")
+            intent?.removeExtra("multiViewLayout")
+            return
+        }
+        // Legacy path: navigate to multi-view screen with the sessions.
+        val sessions = intent?.getStringExtra("multiViewSessions").orEmpty().trim()
+        if (sessions.isBlank()) return
+        (application as HikariApp).multiViewRequest.value = sessions to layout
+        intent?.removeExtra("multiViewSessions")
+        intent?.removeExtra("multiViewLayout")
     }
 
     /** Set MainAPI.app to this activity, whichever form the jar compiles it

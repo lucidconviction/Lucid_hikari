@@ -38,6 +38,7 @@
     <string name="player_top_settings">Settings</string>
     <string name="player_top_lock">Lock</string>
     <string name="player_external">External</string>
+    <string name="player_multi_view">MultiView</string>
     <string name="cd_external_player">Open in external player</string>
     <string name="cd_back">Back</string>
     <string name="cd_add_to_library">Add to library</string>

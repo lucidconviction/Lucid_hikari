@@ -249,6 +249,12 @@ class AppStore(private val ctx: Context) {
          * a default-on tab could not be expressed there).
          */
         val TELEGRAM_TAB = booleanPreferencesKey("showTelegramTab")
+        /**
+         * Whether the MultiView tab's button is drawn in the taskbar. ON by
+         * default — the grid of concurrent streams is the app's flagship
+         * feature, so a fresh install gets a button for it.
+         */
+        val MULTI_VIEW_TAB = booleanPreferencesKey("showMultiViewTab")
         /** The Telegram channels the Telegram tab browses, as JSON. */
         val TELEGRAM_CHANNELS = stringPreferencesKey("telegramChannels")
         /**
@@ -666,6 +672,12 @@ class AppStore(private val ctx: Context) {
         val SEARCH_FAMILY_IDS = stringSetPreferencesKey("searchFamilyIds")
         val PLAY_SCOPE_ASK = booleanPreferencesKey("playScopeAsk")
         val IPTV_GROUP_MODE = stringPreferencesKey("iptvGroupMode")
+        /** Pinned quick channel display names, stored as JSON array of strings. */
+        val IPTV_QUICK_PINNED = stringPreferencesKey("iptvQuickPinned")
+        /** Custom quick channels the user has added, stored as JSON array of QuickChannel objects. */
+        val IPTV_QUICK_CUSTOM = stringPreferencesKey("iptvQuickCustom")
+        /** Saved Xtream panel accounts, stored as JSON array of XtreamAccount objects. */
+        val IPTV_XTREAM_ACCOUNTS = stringPreferencesKey("iptvXtreamAccounts")
          val TRACKER_SERVER_SEARCH_ALL = booleanPreferencesKey("trackerServerSearchAll")
          val TRACKER_NUVIO_SEARCH_ALL = booleanPreferencesKey("trackerNuvioSearchAll")
          val TRACKER_STREMIO_SEARCH_ALL = booleanPreferencesKey("trackerStremioSearchAll")
@@ -2637,6 +2649,113 @@ fun searchExceptionOnFlow(): Flow<Boolean> =
         write("IPTV_STREAM_SHAPE") { it[K.IPTV_STREAM_SHAPE] = TileShapes.normalize(shape) }
     }
 
+    // ---- Quick Channels (pin + custom) ----
+
+    /** Pinned quick channel names, newest first. Empty when none are pinned. */
+    fun quickPinnedFlow(): Flow<List<String>> =
+        store.data.map { raw ->
+            try {
+                val arr = org.json.JSONArray(raw ?: "")
+                (0 until arr.length()).mapNotNull { i -> arr.optString(i).takeIf { it.isNotEmpty() } }
+            } catch (_: Exception) { emptyList() }
+        }.distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    suspend fun quickPinned(): List<String> = quickPinnedFlow().first()
+
+    suspend fun setQuickPinned(names: List<String>) {
+        val arr = org.json.JSONArray()
+        for (n in names) arr.put(n)
+        write("IPTV_QUICK_PINNED") { it[K.IPTV_QUICK_PINNED] = arr.toString() }
+    }
+
+    /** Custom quick channels the user has added via the + button. */
+    fun quickCustomFlow(): Flow<List<com.hikari.app.data.QuickChannel>> =
+        store.data.map { raw ->
+            try {
+                val arr = org.json.JSONArray(raw ?: "")
+                (0 until arr.length()).mapNotNull { i ->
+                    val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                    com.hikari.app.data.QuickChannel(
+                        displayName = o.optString("displayName", ""),
+                        aliases = o.optJSONArray("aliases")?.let { ja ->
+                            (0 until ja.length()).map { ja.optString(it) }.filter { it.isNotEmpty() }
+                        } ?: emptyList(),
+                        regions = o.optJSONArray("regions")?.let { ja ->
+                            (0 until ja.length()).map { ja.optString(it) }.filter { it.isNotEmpty() }
+                        } ?: emptyList(),
+                        tags = o.optJSONArray("tags")?.let { ja ->
+                            (0 until ja.length()).map { ja.optString(it) }.filter { it.isNotEmpty() }
+                        } ?: emptyList(),
+                    ).takeIf { it.displayName.isNotEmpty() }
+                }
+            } catch (_: Exception) { emptyList() }
+        }.distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    suspend fun quickCustom(): List<com.hikari.app.data.QuickChannel> = quickCustomFlow().first()
+
+    suspend fun setQuickCustom(channels: List<com.hikari.app.data.QuickChannel>) {
+        val arr = org.json.JSONArray()
+        for (ch in channels) {
+            val o = org.json.JSONObject()
+            o.put("displayName", ch.displayName)
+            val aliases = org.json.JSONArray()
+            for (a in ch.aliases) aliases.put(a)
+            o.put("aliases", aliases)
+            val regions = org.json.JSONArray()
+            for (r in ch.regions) regions.put(r)
+            o.put("regions", regions)
+            val tags = org.json.JSONArray()
+            for (t in ch.tags) tags.put(t)
+            o.put("tags", tags)
+            arr.put(o)
+        }
+        write("IPTV_QUICK_CUSTOM") { it[K.IPTV_QUICK_CUSTOM] = arr.toString() }
+    }
+
+    // ---- Xtream accounts ----
+
+    /** Saved Xtream panel accounts. */
+    fun xtreamAccountsFlow(): Flow<List<com.hikari.app.data.XtreamAccount>> =
+        store.data.map { raw ->
+            try {
+                val arr = org.json.JSONArray(raw ?: "")
+                (0 until arr.length()).mapNotNull { i ->
+                    val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                    com.hikari.app.data.XtreamAccount(
+                        name = o.optString("name", ""),
+                        baseUrl = o.optString("baseUrl", ""),
+                        username = o.optString("username", ""),
+                        password = o.optString("password", ""),
+                        channels = o.optInt("channels", 0),
+                        movies = o.optInt("movies", 0),
+                        series = o.optInt("series", 0),
+                        status = o.optString("status", "Unknown"),
+                        expDate = if (o.has("expDate") && o.optLong("expDate", 0L) > 0) o.optLong("expDate") else null,
+                    ).takeIf { it.name.isNotEmpty() }
+                }
+            } catch (_: Exception) { emptyList() }
+        }.distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    suspend fun xtreamAccounts(): List<com.hikari.app.data.XtreamAccount> = xtreamAccountsFlow().first()
+
+    suspend fun setXtreamAccounts(accounts: List<com.hikari.app.data.XtreamAccount>) {
+        val arr = org.json.JSONArray()
+        for (acc in accounts) {
+            val o = org.json.JSONObject()
+            o.put("name", acc.name)
+            o.put("baseUrl", acc.baseUrl)
+            o.put("username", acc.username)
+            o.put("password", acc.password)
+            o.put("channels", acc.channels)
+            o.put("movies", acc.movies)
+            o.put("series", acc.series)
+            o.put("status", acc.status)
+            if (acc.expDate != null) o.put("expDate", acc.expDate)
+            arr.put(o)
+        }
+        write("IPTV_XTREAM_ACCOUNTS") { it[K.IPTV_XTREAM_ACCOUNTS] = arr.toString() }
+    }
+
     // ---- The Manga tab (ON by default; Settings → Taskbar buttons) ----
 
     /**
@@ -2686,6 +2805,15 @@ fun searchExceptionOnFlow(): Flow<Boolean> =
 
     suspend fun setTelegramTab(shown: Boolean) {
         write("TELEGRAM_TAB") { it[K.TELEGRAM_TAB] = shown }
+    }
+
+    fun multiViewTabFlow(): Flow<Boolean> =
+        store.data.map { it[K.MULTI_VIEW_TAB] ?: true }.distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    suspend fun multiViewTab(): Boolean = multiViewTabFlow().first()
+
+    suspend fun setMultiViewTab(shown: Boolean) {
+        write("MULTI_VIEW_TAB") { it[K.MULTI_VIEW_TAB] = shown }
     }
 
     /**

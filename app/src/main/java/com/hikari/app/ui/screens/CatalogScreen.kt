@@ -36,6 +36,7 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Grid4x4
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Public
@@ -43,6 +44,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -66,6 +68,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -76,6 +79,8 @@ import coil.compose.AsyncImage
 import com.hikari.app.HikariApp
 import com.hikari.app.data.CatalogRef
 import com.hikari.app.data.MediaItem
+import com.hikari.app.data.MultiViewSession
+import com.hikari.app.ui.screens.MultiWindowStore
 import com.hikari.app.data.MetaCache
 import com.hikari.app.data.TrackerLibraryRepository
 import com.hikari.app.data.MediaType
@@ -623,6 +628,10 @@ fun CatalogScreen(
         }
     }
 
+    // Auto-Next state (IPTV channel browsing): the toggle in the header
+    // flips this preference; the player observes it via AppStore.autoNext().
+    val autoNextFlow = remember { hikari.store.autoNextFlow() }
+
     // Grid position held across visits (see ScrollKeeper): tabs and searches
     // get their own slot, so each catalog/query/tab combination reopens where
     // it was left. Keys re-find the exact item when row order shifts, and the
@@ -701,6 +710,65 @@ fun CatalogScreen(
                         provider = settingsProvider,
                         onDismiss = { showProviderSettings = false },
                     )
+                }
+                // An IPTV channel shelf is a grid of live streams — offer a
+                // multi-view button that takes the channels the user has on
+                // screen and opens them side by side (see MultiViewScreen).
+                if (iptvCinema) {
+                    IconButton(onClick = {
+                        val sessions = items.filter { it.rawType == "channel" }
+                            .take(9)
+                            .map { MultiViewSession(name = it.title, url = it.id) }
+                        if (sessions.isNotEmpty()) {
+                            Routes.safeNavigate(nav, Routes.multiView(sessions))
+                        }
+                    }) {
+                        Icon(
+                            Icons.Filled.Grid4x4,
+                            contentDescription = tr("Multi-view"),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    // Auto-Next pill for live channel browsing: a channel that
+                    // plays to its end advances to the next one in the
+                    // playlist (same group first). Surfaced at the catalog so
+                    // the user can flip it before opening the player.
+                    val autoNextState = remember { autoNextFlow }
+                    val autoNextOn by autoNextState.collectAsState(initial = true)
+                    Surface(
+                        onClick = {
+                            scope.launch {
+                                hikari.store.setAutoNext(!autoNextOn)
+                            }
+                        },
+                        shape = RoundedCornerShape(50),
+                        color = if (autoNextOn) MaterialTheme.colorScheme.primary.copy(alpha = 0.20f)
+                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                        tonalElevation = 0.dp,
+                        modifier = Modifier
+                            .height(36.dp)
+                            .padding(end = 4.dp),
+                    ) {
+                        Row(
+                            Modifier.padding(horizontal = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Text(
+                                if (autoNextOn) "⏭" else "⏯",
+                                fontSize = 14.sp,
+                                color = if (autoNextOn) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                tr("Auto-Next"),
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = if (autoNextOn) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
                 }
             }
             // The Cloudflare-verification WebView. A manga site behind a bot wall
@@ -912,6 +980,23 @@ fun CatalogScreen(
                                 }
                             )
                         },
+                        onMultiView = if (rawType == "channel") {
+                            {
+                                val session = MultiViewSession(
+                                    name = item.title,
+                                    url = item.id,
+                                )
+                                MultiWindowStore.addToSlot(
+                                    session.name, session.url,
+                                    slotIndex = MultiWindowStore.nextAvailableSlot() ?: 0,
+                                )
+                                android.widget.Toast.makeText(
+                                    context,
+                                    I18n.t("Added to multi-view"),
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        } else null,
                     )
                     }
                 }
@@ -996,6 +1081,9 @@ private fun CatalogCard(
     onClick: () -> Unit,
     /** Hold-menu play action (detail autoplay for video); plain open when null. */
     onQuickPlay: ((MediaItem) -> Unit)? = null,
+    /** Slot 2 re-pick for IPTV channel cards: adds to multi-view instead of
+     *  the library sheet. Null for non-channel items (keeps the library sheet). */
+    onMultiView: (() -> Unit)? = null,
 ) {
     // The score badge, when Settings → App Layout has it on: warm the ratings
     // cache for this title and print whatever is known (see
@@ -1009,6 +1097,7 @@ private fun CatalogCard(
     val quickMenu = rememberQuickMenuState()
     val latestClick by rememberUpdatedState(onClick)
     val latestPlay by rememberUpdatedState(onQuickPlay)
+    val latestMultiView by rememberUpdatedState(onMultiView)
     val latestItem by rememberUpdatedState(item)
     // Hold-menu Library pick: the title the sheet files (null = no sheet).
     var quickLibraryItem by remember { mutableStateOf<MediaItem?>(null) }
@@ -1035,7 +1124,10 @@ private fun CatalogCard(
                         // Slot 2 opens the "which categories?" sheet (the same
                         // one the detail screen's heart opens); slot 3 (Close)
                         // dismisses with no action.
-                        2 -> quickLibraryItem = latestItem
+                        2 -> {
+                            val mv = latestMultiView
+                            if (mv != null) mv() else quickLibraryItem = latestItem
+                        }
                         else -> {}
                     }
                 },

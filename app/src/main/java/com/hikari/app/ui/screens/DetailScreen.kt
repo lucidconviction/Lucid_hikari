@@ -2376,6 +2376,25 @@ fun DetailScreen(
                 putExtra("histResumePosition", resumeHint?.first ?: 0L)
                 putExtra("histResumeDuration", resumeHint?.second ?: 0L)
                 putExtra("histAskResume", true)
+                // F1 — Channel-surf siblings: when this is a live IPTV channel
+                // launched from its playlist, hand the sibling channels along so
+                // the player can build a ChannelSurfController (D-pad up/down
+                // advance, Auto-Next on end). Built from iptvSiblings (same
+                // group, same playlist) — omitted otherwise so non-IPTV plays
+                // pay nothing.
+                if (isIptvPage && iptvSiblings.isNotEmpty()) {
+                    val arr = org.json.JSONArray()
+                    iptvSiblings.forEach { sib ->
+                        arr.put(
+                            org.json.JSONObject()
+                                .put("name", sib.title)
+                                .put("url", sib.id)
+                                .put("logo", sib.posterUrl ?: "")
+                                .put("group", sib.overview ?: "")
+                        )
+                    }
+                    putExtra("channelSurfChannels", arr.toString())
+                }
         }
         // Never leave the guard stuck ON if the launch itself fails (e.g. the
         // player activity can't be resolved): report failure so the caller can

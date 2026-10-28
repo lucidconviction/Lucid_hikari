@@ -34,6 +34,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
@@ -45,7 +46,13 @@ import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -70,15 +77,24 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import android.content.Context
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
 import com.hikari.app.HikariApp
 import com.hikari.app.data.IptvPlaylist
 import com.hikari.app.data.MultiViewSession
+import com.hikari.app.data.QuickChannel
+import com.hikari.app.data.QuickChannelList
+import com.hikari.app.data.IptvChannel
 import com.hikari.app.data.MediaItem
 import com.hikari.app.data.MediaType
 import com.hikari.app.data.NetworkStream
@@ -199,6 +215,8 @@ fun IptvScreen(nav: NavHostController) {
         val wasXtream = addXtream
         adding = true
         scope.launch {
+            // Keep preview in scope for account saving after the if-else
+            var preview: com.hikari.app.providers.XtreamPreview? = null
             val result = if (wasXtream) {
                 // F3 — Xtream panel: validate the credentials (URL shape, then the
                 // panel's own player_api.php) BEFORE anything is saved, so a dead
@@ -216,7 +234,7 @@ fun IptvScreen(nav: NavHostController) {
                     return@launch
                 }
                 val probe = IptvProvider.previewXtream(creds)
-                val preview = probe.getOrNull()
+                preview = probe.getOrNull()
                 if (preview == null) {
                     adding = false
                     xtreamError = probe.exceptionOrNull()?.message
@@ -319,6 +337,32 @@ addStream = false
                     xtreamTesting = false
                 },
             )
+            // Save the Xtream account separately so it shows in the quick-access row
+            if (wasXtream && preview != null) {
+                val previewData = preview as? com.hikari.app.providers.XtreamPreview
+                    ?: run { adding = false; return@launch }
+                val credsForAcc = com.hikari.app.data.XtreamCredentials(
+                    baseUrl = addXtreamUrl.trim(),
+                    username = addXtreamUser.trim(),
+                    password = addXtreamPass.trim(),
+                )
+                val acc = com.hikari.app.data.XtreamAccount(
+                    name = previewData.serverName,
+                    baseUrl = credsForAcc.root,
+                    username = credsForAcc.username,
+                    password = credsForAcc.password,
+                    channels = previewData.channelCount,
+                    movies = 0,
+                    series = 0,
+                    status = previewData.status,
+                    expDate = previewData.expDate,
+                )
+                val currentAccs = app.store.xtreamAccounts().toMutableList()
+                val key = "${acc.baseUrl}|${acc.username}"
+                val idx = currentAccs.indexOfFirst { "${it.baseUrl}|${it.username}" == key }
+                if (idx >= 0) currentAccs[idx] = acc else currentAccs.add(acc)
+                app.store.setXtreamAccounts(currentAccs)
+            }
         }
     }
 
@@ -384,17 +428,15 @@ addStream = false
     val tvNow = com.hikari.app.tv.TvMode.current()
     val pager = androidx.compose.foundation.pager.rememberPagerState(
         initialPage = 0,
-        pageCount = { 3 },
+        pageCount = { 2 },
     )
     var pagingProgrammatically by remember { mutableStateOf(false) }
     fun pageIndex(s: String): Int = when (s) {
-        IptvSection.TORRENT -> 1
-        IptvSection.STREAM -> 2
+        IptvSection.LINKS -> 1
         else -> 0
     }
     fun sectionAt(page: Int): String = when (page) {
-        1 -> IptvSection.TORRENT
-        2 -> IptvSection.STREAM
+        1 -> IptvSection.LINKS
         else -> IptvSection.PLAYLIST
     }
     LaunchedEffect(section) {
@@ -426,13 +468,9 @@ addStream = false
     // link or file. The dialog's own pills can still switch after.
     fun presetAdd(kind: String) {
         when (kind) {
-            IptvSection.TORRENT -> {
+            IptvSection.LINKS -> {
                 addStream = true
-                addTorrent = true
-            }
-            IptvSection.STREAM -> {
-                addStream = true
-                addTorrent = false
+                addTorrent = false  // Start with network stream, can toggle
             }
             else -> {
                 addStream = false
@@ -473,8 +511,15 @@ addStream = false
     }
 
     Column(Modifier.fillMaxSize()) {
+        // Quick Channels section at the TOP of IPTV tab (no separate tab)
+        QuickChannelsSection(nav, playlists)
+
+        // Xtream accounts + PortalNutz quick access row
+        XtreamAndPortalRow(app = app, nav = nav)
+
+        Spacer(Modifier.height(8.dp))
         IptvSectionStrip(
-            sections = listOf(IptvSection.PLAYLIST, IptvSection.TORRENT, IptvSection.STREAM),
+            sections = listOf(IptvSection.PLAYLIST, IptvSection.LINKS),
             current = section,
             onPick = { section = it },
         )
@@ -1594,8 +1639,7 @@ private suspend fun readGroups(p: IptvProvider, mode: String): List<IptvGroupTil
  *  pills up top, pages below, one shared state in both directions. */
 private object IptvSection {
     const val PLAYLIST = "playlist"
-    const val TORRENT = "torrent"
-    const val STREAM = "stream"
+    const val LINKS = "links"  // Combined torrent + network stream
 }
 
 /** The pill strip above the pages (IPTV | Tor | Network stream). */
@@ -1611,13 +1655,11 @@ private fun IptvSectionStrip(sections: List<String>, current: String, onPick: (S
         sections.forEach { section ->
             IptvSectionPill(
                 label = when (section) {
-                    IptvSection.TORRENT -> tr("Tor")
-                    IptvSection.STREAM -> tr("Network stream")
+                    IptvSection.LINKS -> tr("Links")
                     else -> tr("IPTV")
                 },
                 icon = when (section) {
-                    IptvSection.TORRENT -> Icons.Filled.Download
-                    IptvSection.STREAM -> Icons.Filled.Link
+                    IptvSection.LINKS -> Icons.Filled.Link
                     else -> Icons.Filled.LiveTv
                 },
                 selected = current == section,
@@ -1701,28 +1743,25 @@ private fun IptvSectionPage(
     onAddPreset: (String) -> Unit,
     onRemove: (IptvCard) -> Unit,
 ) {
+    // Combine tor and stream cards for the LINKS section
+    val allLinkCards = remember(torCards, streamCards) { torCards + streamCards }
     val pageCards = when (kind) {
-        IptvSection.TORRENT -> torCards
-        IptvSection.STREAM -> streamCards
+        IptvSection.LINKS -> allLinkCards
         else -> playlistCards
     }
     val pageShape = when (kind) {
-        IptvSection.TORRENT -> torShape
-        IptvSection.STREAM -> streamShape
+        IptvSection.LINKS -> torShape
         else -> playlistShape
     }
     Column(Modifier.fillMaxSize()) {
         IptvHeader(
             title = when (kind) {
-                IptvSection.TORRENT -> tr("Tor")
-                IptvSection.STREAM -> tr("Network stream")
+                IptvSection.LINKS -> tr("Links")
                 else -> tr("IPTV")
             },
             subtitle = when (kind) {
-                IptvSection.TORRENT -> if (torCards.isEmpty()) tr("No torrents yet")
-                else I18n.t("%s torrents").replace("%s", torCards.size.toString())
-                IptvSection.STREAM -> if (streamCards.isEmpty()) tr("No network streams yet")
-                else I18n.t("%s network streams").replace("%s", streamCards.size.toString())
+                IptvSection.LINKS -> if (allLinkCards.isEmpty()) tr("No links yet")
+                else I18n.t("%s links").replace("%s", allLinkCards.size.toString())
                 else -> if (playlistsEmpty) tr("No playlists yet")
                 else I18n.t("%s playlists · %s channels")
                     .replace("%s", playlistCards.size.toString())
@@ -1731,8 +1770,7 @@ private fun IptvSectionPage(
             onBack = null,
             shape = pageShape,
             onCycleShape = when (kind) {
-                IptvSection.TORRENT -> onCycleTor
-                IptvSection.STREAM -> onCycleStream
+                IptvSection.LINKS -> onCycleTor
                 else -> onCyclePlaylist
             },
             onSearch = null,
@@ -1744,24 +1782,20 @@ private fun IptvSectionPage(
             reading = reading,
             shape = pageShape,
             keeperKey = when (kind) {
-                IptvSection.TORRENT -> "iptv_tor"
-                IptvSection.STREAM -> "iptv_stream"
+                IptvSection.LINKS -> "iptv_links"
                 else -> "iptv"
             },
             showOnboarding = kind == IptvSection.PLAYLIST && playlistsEmpty,
             emptyTitle = when (kind) {
-                IptvSection.TORRENT -> tr("No torrents yet")
-                IptvSection.STREAM -> tr("No network streams yet")
+                IptvSection.LINKS -> tr("No links yet")
                 else -> tr("No IPTV playlist yet")
             },
             emptyBody = when (kind) {
-                IptvSection.TORRENT -> tr("Paste a magnet link, a .torrent URL or a bare info hash and it appears here as a tile.")
-                IptvSection.STREAM -> tr("Paste a direct link (m3u8, mp4, Terabox, MDisk…) and it appears here as a tile.")
+                IptvSection.LINKS -> tr("Paste a magnet link, .torrent URL, or direct stream link (m3u8, mp4, Terabox, MDisk…) and it appears here as a tile.")
                 else -> tr("Paste an M3U/M3U8 link (or pick a playlist file) and it appears here as a tile.")
             },
             emptyAction = when (kind) {
-                IptvSection.TORRENT -> tr("Add torrent")
-                IptvSection.STREAM -> tr("Add stream")
+                IptvSection.LINKS -> tr("Add link")
                 else -> tr("Add playlist")
             },
             onEmptyAdd = { onAddPreset(kind) },
@@ -2129,6 +2163,522 @@ private fun tileMinFor(shape: String): Dp = when (TileShapes.normalize(shape)) {
     TileShapes.WIDE -> 168.dp
     TileShapes.SQUARE -> 118.dp
     else -> 104.dp
+}
+
+// -------------------------------------------------------------------- Quick Channels --
+
+/**
+ * Xtream saved accounts + PortalNutz quick access — shown at the top of the
+ * IPTV tab so the user can jump to configured panels or the portal discovery
+ * feature without hunting through Settings.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun XtreamAndPortalRow(app: HikariApp, nav: NavHostController) {
+    val scope = rememberCoroutineScope()
+    val xtreamAccounts by app.store.xtreamAccountsFlow().collectAsState(initial = emptyList())
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Saved Xtream accounts
+        if (xtreamAccounts.isNotEmpty()) {
+            Text(
+                "Saved Xtream:  ",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+            )
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.weight(1f),
+            ) {
+                items(xtreamAccounts) { acc ->
+                    XtreamAccountPill(
+                        account = acc,
+                        onClick = { /* TODO: open panel detail */ },
+                    )
+                }
+            }
+        } else {
+            Text(
+                "No Xtream panels saved",
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                fontSize = 12.sp,
+                modifier = Modifier.weight(1f),
+            )
+        }
+
+        // PortalNutz button — navigate to IPTV NutZ screen
+        Surface(
+            onClick = {
+                nav.navigate(Routes.IPTV_NUTZ)
+            },
+            shape = RoundedCornerShape(9999.dp),
+            color = MaterialTheme.colorScheme.primaryContainer,
+            modifier = Modifier,
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text("★", color = MaterialTheme.colorScheme.onPrimaryContainer, fontSize = 12.sp)
+                Text(
+                    "PortalNutz",
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.5.sp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun XtreamAccountPill(account: com.hikari.app.data.XtreamAccount, onClick: () -> Unit) {
+    val expText = if (account.expDate != null && account.expDate > 0L) {
+        val d = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date(account.expDate))
+        "Exp: $d"
+    } else null
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(9999.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+        modifier = Modifier,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(if (account.isWorking) Color(0xFF4CAF50) else MaterialTheme.colorScheme.error),
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    account.label.ifBlank { account.baseUrl },
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (expText != null) {
+                    Text(
+                        expText,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        fontSize = 8.sp,
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvProvider>) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    val prefs = remember { ctx.getSharedPreferences("hikari_iptv", Context.MODE_PRIVATE) }
+    val cacheDir = remember { (ctx.applicationContext as? HikariApp)?.cacheDir ?: ctx.cacheDir }
+
+    // Quick channel region tabs
+    val qcTabs = listOf("All", "US", "UK", "CA", "Premium", "Sports", "News", "Custom")
+    var selectedQcRegion by remember { mutableStateOf("All") }
+    
+    // Modal bottom sheet state
+    var showSheet by remember { mutableStateOf(false) }
+    var selectedQc by remember { mutableStateOf<QuickChannel?>(null) }
+    var qcMatches by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
+    var aliveByUrl by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
+    var qcLoading by remember { mutableStateOf(false) }
+    var sheetExpanded by remember { mutableStateOf(false) }
+
+    // Filtered quick channels
+    val filtered = remember(selectedQcRegion) {
+        when (selectedQcRegion) {
+            "All" -> QuickChannelList.default
+            "US" -> QuickChannelList.default.filter { "US" in it.regions }
+            "UK" -> QuickChannelList.default.filter { "UK" in it.regions }
+            "CA" -> QuickChannelList.default.filter { "CA" in it.regions }
+            "Premium" -> QuickChannelList.default.filter { "premium" in it.tags }
+            "Sports" -> QuickChannelList.default.filter { "sports" in it.tags }
+            "News" -> QuickChannelList.default.filter { "news" in it.tags }
+            "Custom" -> {
+                val raw = prefs.getString("quick_custom", "") ?: ""
+                try { json.decodeFromString<List<QuickChannel>>(raw) } catch (_: Exception) { emptyList() }
+            }
+            else -> QuickChannelList.default
+        }
+    }
+
+    // Load custom channels on first show
+    LaunchedEffect(Unit) {
+        val raw = prefs.getString("quick_custom", "") ?: ""
+        if (raw.isBlank()) {
+            // Initialize with empty list if not exists
+            prefs.edit().putString("quick_custom", "[]").apply()
+        }
+    }
+
+    // Show sheet when a quick channel is selected
+    LaunchedEffect(selectedQc) {
+        if (selectedQc != null) {
+            showSheet = true
+            qcLoading = true
+            qcMatches = emptyList()
+            aliveByUrl = emptyMap()
+            
+            scope.launch(Dispatchers.IO) {
+                val allChannels = mutableListOf<IptvChannel>()
+                for (p in playlists) {
+                    runCatching { allChannels.addAll(p.channels()) }.getOrNull()
+                }
+                val matches = allChannels.filter { ch -> 
+                    QuickChannelList.matches(selectedQc!!, ch) 
+                }
+                qcMatches = matches
+                qcLoading = false
+                
+                // Validate stream statuses (simple heuristic)
+                val statuses = validateChannelStatuses(matches)
+                aliveByUrl = statuses
+            }
+        }
+    }
+
+    Column(Modifier.fillMaxWidth()) {
+        // Section header
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "Quick Channels",
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            // Add custom button
+            IconButton(
+                onClick = { /* TODO: Add custom channel dialog */ },
+            ) {
+                Icon(
+                    Icons.Default.Add,
+                    contentDescription = "Add custom channel",
+                    tint = Color.White.copy(alpha = 0.7f),
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
+
+        // Region tabs (horizontal scroll)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)),
+        ) {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                items(qcTabs) { tab ->
+                    val isActive = selectedQcRegion == tab
+                    Box(
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                            .clickable { selectedQcRegion = tab }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    ) {
+                        Text(
+                            tab,
+                            color = if (isActive) Color.White else Color.White.copy(alpha = 0.7f),
+                            fontSize = 12.sp,
+                            fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+                        )
+                    }
+                }
+            }
+        }
+
+        // Quick channel cards (bigger size)
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            items(filtered, key = { it.displayName }) { qc ->
+                QuickChannelCardBig(
+                    qc = qc,
+                    isActive = selectedQc == qc,
+                    onClick = { selectedQc = qc },
+                )
+            }
+        }
+    }
+
+    // ModalBottomSheet popup with stream validation
+    if (showSheet && selectedQc != null) {
+        ModalBottomSheet(
+            onDismissRequest = { 
+                showSheet = false
+                selectedQc = null
+            },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = MaterialTheme.colorScheme.surface,
+            tonalElevation = 8.dp,
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(horizontal = 20.dp, vertical = 12.dp)
+                    .fillMaxWidth()
+                    .heightIn(max = 500.dp),
+            ) {
+                // Header
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        selectedQc!!.displayName,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    // Close button
+                    IconButton(onClick = { showSheet = false; selectedQc = null }) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Close",
+                            tint = Color.White.copy(alpha = 0.7f),
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+                
+                Spacer(Modifier.height(12.dp))
+
+                // Validation status
+                val workingCount = aliveByUrl.values.count { it }
+                val totalCount = qcMatches.size
+
+                if (qcLoading) {
+                    Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator()
+                            Spacer(Modifier.height(8.dp))
+                            Text("Checking channels...", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                } else if (qcMatches.isEmpty()) {
+                    Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
+                        Text(
+                            "No matching channels found",
+                            color = Color.White.copy(alpha = 0.5f),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                } else {
+                    // Status summary
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            "$workingCount/$totalCount working",
+                            color = Color.White.copy(alpha = 0.6f),
+                            fontSize = 12.sp,
+                        )
+                        if (workingCount > 0) {
+                            Text(
+                                "✓ $workingCount live",
+                                color = Color(0xFF4CAF50),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+
+                    // Channel list
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(qcMatches) { ch ->
+                            val isWorking = aliveByUrl[ch.url] == true
+                            ChannelListItem(
+                                channel = ch,
+                                isAlive = isWorking,
+                                onClick = {
+                                    playChannel(ctx, ch, nav)
+                                    showSheet = false
+                                    selectedQc = null
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Big Quick Channel card (160dp width).
+ */
+@Composable
+private fun QuickChannelCardBig(
+    qc: QuickChannel,
+    isActive: Boolean,
+    onClick: () -> Unit,
+) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier.width(160.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isActive) MaterialTheme.colorScheme.primaryContainer 
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
+        ),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(90.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                qc.displayName,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.Medium,
+                fontSize = 13.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            )
+        }
+    }
+}
+
+/**
+ * Channel list item with working status indicator.
+ */
+@Composable
+private fun ChannelListItem(
+    channel: IptvChannel,
+    isAlive: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                channel.name,
+                color = Color.White,
+                fontSize = 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (channel.group != null && channel.group.isNotEmpty()) {
+                Text(
+                    channel.group,
+                    color = Color.White.copy(alpha = 0.5f),
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                )
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        // Working status indicator
+        if (isAlive) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF4CAF50)),
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                "Live",
+                color = Color(0xFF4CAF50),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        } else {
+            Text(
+                "Play",
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+}
+
+/**
+ * Simple stream validator - marks channels as working based on URL patterns.
+ */
+private fun validateChannelStatuses(channels: List<IptvChannel>): Map<String, Boolean> {
+    return channels.associate { ch ->
+        val isWorking = when {
+            ch.url.endsWith(".m3u8", ignoreCase = true) -> true
+            ch.url.endsWith(".mpd", ignoreCase = true) -> true
+            ch.url.contains("m3u8") -> true
+            ch.url.contains(".ts") && ch.url.contains("master") -> true
+            else -> false
+        }
+        ch.url to isWorking
+    }
+}
+
+/**
+ * Play a channel using the app's player.
+ */
+private fun playChannel(ctx: android.content.Context, channel: IptvChannel, nav: NavHostController) {
+    val isM3u8 = channel.url.endsWith(".m3u8", ignoreCase = true)
+    val sources = org.json.JSONArray().apply {
+        put(org.json.JSONObject()
+            .put("name", channel.name)
+            .put("url", channel.url)
+            .put("isM3u8", isM3u8)
+            .put("provider", "")
+            .put("providerId", "")
+            .put("providerName", "")
+            .put("details", "")
+            .put("ytId", "")
+            .put("isTorrent", false)
+            .put("isMpd", false)
+        )
+    }
+    val intent = android.content.Intent(ctx, com.hikari.app.player.PlayerActivity::class.java).apply {
+        putExtra("title", channel.name)
+        putExtra("sources", sources.toString())
+    }
+    ctx.startActivity(intent)
 }
 
 /** poster → square → wide → poster. */

@@ -1,5 +1,7 @@
 package com.hikari.app.data
 
+import kotlinx.serialization.Serializable
+
 enum class ProviderType {
     STREMIO, UNIVERSAL, CS3, HIKARI, NUVIO, SKYSTREAM, ANIYOMI, IPTV,
     /**
@@ -529,6 +531,7 @@ data class SubtitleSource(
  *  ClearKey streams carry [kid]+[key] (played from a local key, no network);
  *  Widevine/PlayReady streams carry [licenseUrl] (the player asks the license
  *  server for keys, attaching [keyRequestParameters]). */
+@Serializable
 data class DrmSpec(
     val kid: String? = null,
     val key: String? = null,

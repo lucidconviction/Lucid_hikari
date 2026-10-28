@@ -23,6 +23,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoStories
@@ -35,6 +37,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.Settings
@@ -106,6 +109,8 @@ import com.hikari.app.ui.screens.IptvPlaylistScreen
 import com.hikari.app.ui.screens.IptvScreen
 import com.hikari.app.ui.screens.MultiViewLayout
 import com.hikari.app.ui.screens.MultiViewScreen
+import com.hikari.app.ui.screens.MultiWindowStore
+import com.hikari.app.ui.screens.SlotPickerBottomSheet
 import com.hikari.app.ui.screens.LibraryScreen
 import com.hikari.app.ui.screens.MangaDetailScreen
 import com.hikari.app.ui.screens.MangaReaderScreen
@@ -119,6 +124,8 @@ import com.hikari.app.ui.screens.SettingsScreen
 import com.hikari.app.ui.screens.StatsScreen
 import com.hikari.app.ui.screens.TelegramScreen
 import com.hikari.app.ui.screens.TmdbGridScreen
+import com.hikari.app.ui.screens.IptvNutZScreen
+import com.hikari.app.ui.screens.IptvNutZScreen
 import com.hikari.app.ui.theme.HikariThemeMode
 import com.hikari.app.ui.theme.rememberGlassTokens
 import com.hikari.app.tv.TvMode
@@ -196,14 +203,19 @@ object Routes {
      */
     const val STATS = "stats"
 
-    /**
-     * The Telegram tab: the videos on the public Telegram channels the user
+    /** The Telegram tab: the videos on the public Telegram channels the user
      * added, played in Hikari's own player (see
      * [com.hikari.app.ui.screens.TelegramScreen]). OFF by default and switched
      * on in Settings → Taskbar buttons, like [IPTV] and [STATS] — an install
      * with no channels should not carry a spare button.
      */
     const val TELEGRAM = "telegram"
+
+    /**
+     * IPTV NutZ tab: portal discovery from Reddit catalogs. Shown alongside
+     * the main IPTV tab, toggled by the same setting.
+     */
+    const val IPTV_NUTZ = "iptv-nutz"
 
     /** Opens one manga. [url] is the source's own url for the title (its id). */
     fun mangaDetail(
@@ -1008,6 +1020,9 @@ val BottomTabs = listOf(
     // merged My Stuff slot even though the two were designed together.
     BottomTab(Routes.MANGA, "Manga", Icons.Filled.AutoStories),
     BottomTab(Routes.IPTV, "IPTV", Icons.Filled.LiveTv),
+    // MultiView: watch several streams side by side. ON by default like
+    // Manga/Telegram (Settings → Taskbar buttons switches it off).
+    BottomTab(Routes.MULTI_VIEW, "MultiView", Icons.Filled.GridView),
     // Stats is the other off-by-default tab (Settings → Taskbar buttons): a
     // page about what you have already watched, not something to browse to.
     BottomTab(Routes.STATS, "Stats", Icons.Filled.BarChart),
@@ -1068,12 +1083,17 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
     // user who wants the tab gone turns it off in Settings → Taskbar buttons.
     val telegramTabFlow = remember { app.store.telegramTabFlow() }
     val telegramTabOn by telegramTabFlow.collectAsState(initial = true)
+    // MultiView is ON by default (AppStore.multiViewTabFlow), like Manga and
+    // Telegram: a grid of streams the user can watch side by side.
+    val multiViewTabFlow = remember { app.store.multiViewTabFlow() }
+    val multiViewTabOn by multiViewTabFlow.collectAsState(initial = true)
     val visibleTabs: Set<String> = buildSet {
         addAll(hiddenTabs)
         if (!iptvTabOn) add(Routes.IPTV)
         if (!mangaTabOn) add(Routes.MANGA)
         if (!statsTabOn) add(Routes.STATS)
         if (!telegramTabOn) add(Routes.TELEGRAM)
+        if (!multiViewTabOn) add(Routes.MULTI_VIEW)
     }
     // How the bar itself is drawn (Settings → App Layout → Taskbar & navigation).
     val navStyleFlow = remember { app.store.navStyleFlow() }
@@ -1154,6 +1174,54 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
         if (!repoLinkRequest.isNullOrBlank() && tabRoute != Routes.EXTENSIONS) {
             Routes.navigateTab(nav, Routes.EXTENSIONS)
         }
+    }
+    // A multi-view request from PlayerActivity (or any other Activity):
+    // navigate to the multi-view screen with the encoded sessions and layout.
+    var multiViewHandled by remember { mutableStateOf(false) }
+    val multiViewRequest by app.multiViewRequest.collectAsState()
+    LaunchedEffect(multiViewRequest) {
+        if (multiViewRequest != null && !multiViewHandled) {
+            multiViewHandled = true
+            val (sessionsEncoded, layout) = multiViewRequest!!
+            app.multiViewRequest.value = null
+            val sessions = com.hikari.app.data.MultiViewSession.parse(sessionsEncoded)
+            if (sessions.isNotEmpty()) {
+                Routes.safeNavigate(nav, Routes.multiView(sessions, layout))
+            }
+        }
+    }
+
+    // Slot-picker request from PlayerActivity: keep the current screen visible
+    // and open a bottom-sheet asking the user which slot to place the stream in.
+    // Ported from Nuvio's MultiWindowPositionPicker workflow.
+    var showSlotPicker by remember { mutableStateOf(false) }
+    var slotPickerName by remember { mutableStateOf("") }
+    var slotPickerUrl by remember { mutableStateOf("") }
+    var slotPickerLayout by remember { mutableStateOf("") }
+    val slotPickerRequest by app.slotPickerRequest.collectAsState()
+    LaunchedEffect(slotPickerRequest) {
+        if (slotPickerRequest != null) {
+            val req = slotPickerRequest!!
+            val name = req.first.first
+            val url = req.first.second
+            val layout = req.second
+            slotPickerName = name
+            slotPickerUrl = url
+            slotPickerLayout = layout
+            showSlotPicker = true
+            app.slotPickerRequest.value = null
+        }
+    }
+    if (showSlotPicker) {
+        SlotPickerBottomSheet(
+            name = slotPickerName,
+            url = slotPickerUrl,
+            onDismiss = { showSlotPicker = false },
+            onSlotSelected = { slotIndex ->
+                MultiWindowStore.addToSlot(slotPickerName, slotPickerUrl, slotIndex = slotIndex)
+                showSlotPicker = false
+            },
+        )
     }
 
     // Remote-mouse drive at the ROOT: the cursor overlay is a sibling of the
@@ -1371,6 +1439,13 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
             composable(Routes.HISTORY) { MyStuffScreen(nav, MyStuff.HISTORY) }
             composable(Routes.DOWNLOADS) { MyStuffScreen(nav, MyStuff.DOWNLOADS) }
             composable(Routes.IPTV) { IptvScreen(nav) }
+            composable(Routes.IPTV_NUTZ) {
+                IptvNutZScreen(
+                    nav = nav,
+                    onBack = { nav.popBackStack() },
+                    onAddPortal = { /* TODO: wire to Xtream/portal add */ },
+                )
+            }
             composable(
                 route = Routes.IPTV_PLAYLIST,
                 arguments = listOf(
@@ -1616,5 +1691,36 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
         // over every screen, so a Cloudflare checkbox and any other
         // hard-to-focus target stays reachable from the sofa.
         TvMouseCursorOverlay()
+
+        // Global MultiView quick-nav FAB — ported from Nuvio's MW pill.
+        // Visible on every screen EXCEPT the MultiView tab itself, as long as
+        // at least one stream is queued in the multi-window store. Tapping it
+        // navigates to the MultiView tab. The count badge shows how many slots
+        // are occupied so the user knows what they have open at a glance.
+        val mwStreams = MultiWindowStore.allStreams
+        val isOnMultiView = tabRoute == Routes.MULTI_VIEW
+        if (mwStreams.isNotEmpty() && !isOnMultiView && showBar && !isTv) {
+            val mwCount = mwStreams.size
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = if (showBar) 80.dp else 16.dp)
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFFE53935))
+                    .border(
+                        width = 1.dp,
+                        color = Color.White.copy(alpha = 0.5f),
+                        shape = CircleShape,
+                    )
+                    .clickable { Routes.navigateTab(nav, Routes.MULTI_VIEW) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("MW", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    Text("$mwCount", color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
     }
 }

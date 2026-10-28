@@ -8,11 +8,13 @@ import com.hikari.app.data.JsonPlaylist
 import com.hikari.app.data.MediaItem
 import com.hikari.app.data.MediaType
 import com.hikari.app.data.ProviderConfig
+
 import com.hikari.app.data.ProviderType
 import com.hikari.app.data.XtreamCredentials
 import com.hikari.app.data.StreamSource
 import com.hikari.app.net.Http
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -20,6 +22,20 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+
+/** F3 — a validated Xtream panel, counted before it is saved. */
+data class XtreamPreview(
+    val channelCount: Int,
+    val serverName: String,
+    val m3uUrl: String,
+    /** Panel-reported account status ("Active" / "Expired" / …). */
+    val status: String = "Unknown",
+    /** Panel-reported expiration in epoch-ms, null when unknown. */
+    val expDate: Long? = null,
+    val isTrial: Boolean? = null,
+    val maxConnections: Int? = null,
+    val activeConnections: Int? = null,
+)
 
 /**
  * An IPTV playlist as a Hikari provider.
@@ -212,11 +228,7 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
         }
 
         /** F3 — a validated Xtream panel, counted before it is saved. */
-        data class XtreamPreview(
-            val channelCount: Int,
-            val serverName: String,
-            val m3uUrl: String,
-        )
+        // NOTE: XtreamPreview is now a top-level class in this file.
 
         /**
          * Validates an Xtream panel and counts its channels BEFORE the playlist
@@ -239,8 +251,13 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
          */
         suspend fun previewXtream(creds: XtreamCredentials): Result<XtreamPreview> =
             withContext(Dispatchers.IO) {
-                val info = fetchWithStatus(creds.apiInfoUrl())
-                val infoText = info.getOrNull()
+                // Run the auth check and the M3U download in parallel — the
+                // two requests are independent and the M3U is the slow one,
+                // so waiting for both serially doubled the "adding…" wait.
+                val infoDeferred = async { fetchWithStatus(creds.apiInfoUrl()) }
+                val listDeferred = async { fetchWithStatus(creds.m3uUrl()) }
+                val info = infoDeferred.await()
+                val infoText: String? = info.getOrNull()
                 if (infoText == null) {
                     return@withContext Result.failure(
                         Exception(
@@ -251,7 +268,7 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
                         ),
                     )
                 }
-                val listReq = fetchWithStatus(creds.m3uUrl())
+                val listReq = listDeferred.await()
                 val text = listReq.getOrNull()
                 if (text == null) {
                     return@withContext Result.failure(
@@ -272,11 +289,26 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
                 // Populate the preview cache so the add flow's own [preview] call
                 // later hits the cache and skips the redundant get.php download.
                 previewCache[creds.m3uUrl()] = list.size
+                // Parse account info from the panel response for richer preview
+                val accountInfo: org.json.JSONObject? = runCatching {
+                    org.json.JSONObject(infoText)
+                }.getOrNull()
+                val userInfo = accountInfo?.optJSONObject("user_info")
+                val isAct = userInfo?.optInt("is_active", 0) == 1
+                val expSec = userInfo?.optLong("exp_date", 0L)
+                val expDateMs = if (expSec != null && expSec > 0L) expSec * 1000L else null
+                val maxConn = userInfo?.optInt("max_connections", 0).takeIf { it != null && it > 0 }
+                val activeConn = userInfo?.optInt("active_connections", 0).takeIf { it != null && it > 0 }
                 Result.success(
                     XtreamPreview(
                         channelCount = list.size,
                         serverName = xtreamServerName(infoText, creds),
                         m3uUrl = creds.m3uUrl(),
+                        status = if (isAct) "Active" else "Unknown",
+                        expDate = expDateMs,
+                        isTrial = userInfo?.optInt("is_trial", 0) == 1,
+                        maxConnections = maxConn,
+                        activeConnections = activeConn,
                     ),
                 )
             }

@@ -1,5 +1,7 @@
 package com.hikari.app.data
 
+import kotlinx.serialization.Serializable
+
 /**
  * One channel of an M3U/M3U8 playlist.
  *
@@ -7,6 +9,7 @@ package com.hikari.app.data
  * "Sports", "Movies", "News"…), and [url] is the stream the channel plays —
  * a direct HLS link, an MPEG-TS link, or whatever the provider serves.
  */
+@Serializable
 data class IptvChannel(
     val name: String,
     val url: String,

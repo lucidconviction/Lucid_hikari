@@ -15,6 +15,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.Serializable
 import okhttp3.OkHttpClient
 import okhttp3.Response
 import org.json.JSONObject
@@ -59,6 +60,7 @@ object StreamProbe {
      * milliseconds, or null when the probe timed out or errored out. A channel
      * tile uses this to draw a 🔴 / 🟡 / 🟢 dot. Null means "not probed yet".
      */
+    @Serializable
     data class ProbeResult(val code: Int, val latencyMs: Long) {
         /** True when the URL answered with a success-ish status (2xx / 3xx). */
         val isAlive: Boolean get() = code in 200..399
