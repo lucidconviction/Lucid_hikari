@@ -2834,15 +2834,21 @@ class PlayerActivity : ComponentActivity() {
                             // same playlist. `sources` holds the CURRENT channel's
                             // stream rows — a sibling's URL is not in it — so
                             // looking it up by url used to find nothing and the
-                            // tap did nothing. Fetch the picked channel's streams
-                            // (same IptvProvider.getStreams path the first play
-                            // used), swap them in, and start at index 0.
+                            // tap did nothing. Fetch the picked channel's
+                            // streams in the BACKGROUND (same IptvProvider
+                            // .getStreams path the first play used) and only
+                            // swap them in once they're ready, so the picture
+                            // never cuts to a dead stream mid-frame.
+                            coverPlaybackLine = I18n.t("Switching to %s…").replace("%s", channel.name)
                             lifecycleScope.launch {
                                 val fresh = fetchChannelStreams(channel)
+                                coverPlaybackLine = null
                                 if (fresh.isNotEmpty()) {
                                     sources = fresh
                                     notifySourcesChanged()
                                     preferredStartIndex().let { playSource(it) }
+                                } else {
+                                    showError(I18n.t("That channel has no stream."), false)
                                 }
                             }
                         },

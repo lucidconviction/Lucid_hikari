@@ -33,6 +33,19 @@ data class QuickCategory(
 )
 
 /**
+ * A user-defined region tab in the Quick Channels strip.
+ *
+ * @property name  Human label shown in the tab row ("My Sports", "French").
+ * @property tag   Token matched against a QuickChannel's [regions] list —
+ *                 custom channels tagged with it appear in this tab.
+ */
+@Serializable
+data class CustomRegion(
+    val name: String,
+    val tag: String,
+)
+
+/**
  * In-memory + file-persisted quick channel list.
  * Default ~130 curated channels are always present. User can pin favorites
  * and add custom channels — pinned names persisted to AppStore, custom
@@ -129,6 +142,29 @@ object QuickChannelList {
     fun removeCustomChannel(cacheDir: File, displayName: String) {
         val custom = getCustomChannels(cacheDir, emptyList()).filterNot { it.displayName.equals(displayName, ignoreCase = true) }
         runCatching { File(cacheDir, CUSTOM_FILE).writeText(json.encodeToString(custom)) }
+    }
+
+    const val REGIONS_FILE = "quick_regions.json"
+
+    /** Custom regions persisted as a JSON array in the cache dir. */
+    fun getCustomRegions(cacheDir: File): List<CustomRegion> {
+        val f = File(cacheDir, REGIONS_FILE)
+        if (!f.exists()) return emptyList()
+        val raw = try { f.readText() } catch (_: Exception) { "" }
+        if (raw.isBlank()) return emptyList()
+        return try { json.decodeFromString<List<CustomRegion>>(raw) } catch (_: Exception) { emptyList() }
+    }
+
+    fun addCustomRegion(cacheDir: File, region: CustomRegion) {
+        val regions = getCustomRegions(cacheDir).toMutableList()
+        regions.removeAll { it.tag.equals(region.tag, ignoreCase = true) }
+        regions.add(region)
+        runCatching { File(cacheDir, REGIONS_FILE).writeText(json.encodeToString(regions)) }
+    }
+
+    fun removeCustomRegion(cacheDir: File, tag: String) {
+        val regions = getCustomRegions(cacheDir).filterNot { it.tag.equals(tag, ignoreCase = true) }
+        runCatching { File(cacheDir, REGIONS_FILE).writeText(json.encodeToString(regions)) }
     }
 
     /** Match a QuickChannel's aliases against an IptvChannel's name and group. */
