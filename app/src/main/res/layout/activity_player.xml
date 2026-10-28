@@ -531,4 +531,36 @@
             android:paddingBottom="10dp"
             android:layout_marginTop="16dp" />
     </LinearLayout>
+
+    <!-- Channel-surf overlay buttons: oval glass pills on the far left/right
+         edges, vertically centred. Shown only while a ChannelSurfController is
+         active (i.e. an IPTV playlist stream is playing). Tapping them calls
+         prev()/next() on the controller to jump to the neighbouring channel. -->
+    <ImageButton
+        android:id="@+id/ch_prev_btn"
+        android:layout_width="44dp"
+        android:layout_height="44dp"
+        android:layout_gravity="start|center_vertical"
+        android:layout_marginStart="6dp"
+        android:src="@drawable/ic_chevron_left"
+        android:tint="#FFFFFF"
+        android:contentDescription="Previous channel"
+        android:background="@drawable/circle_glass_ripple"
+        android:scaleType="centerInside"
+        android:padding="10dp"
+        android:visibility="gone" />
+
+    <ImageButton
+        android:id="@+id/ch_next_btn"
+        android:layout_width="44dp"
+        android:layout_height="44dp"
+        android:layout_gravity="end|center_vertical"
+        android:layout_marginEnd="6dp"
+        android:src="@drawable/ic_chevron_right"
+        android:tint="#FFFFFF"
+        android:contentDescription="Next channel"
+        android:background="@drawable/circle_glass_ripple"
+        android:scaleType="centerInside"
+        android:padding="10dp"
+        android:visibility="gone" />
 </FrameLayout>

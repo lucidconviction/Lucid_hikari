@@ -1191,6 +1191,8 @@ class PlayerActivity : ComponentActivity() {
     private var episodesBtn: TextView? = null
     private var prevEpBtn: TextView? = null
     private var nextEpBtn: TextView? = null
+    private var chPrevBtn: ImageButton? = null
+    private var chNextBtn: ImageButton? = null
     private var autoplayBtn: TextView? = null
     private var autoNextBtn: TextView? = null
     private var subsBtn: TextView? = null
@@ -1910,6 +1912,10 @@ class PlayerActivity : ComponentActivity() {
         episodesBtn = findViewById(R.id.episodes_btn)
         prevEpBtn = findViewById(R.id.prev_ep_btn)
         nextEpBtn = findViewById(R.id.next_ep_btn)
+        chPrevBtn = findViewById(R.id.ch_prev_btn)
+        chNextBtn = findViewById(R.id.ch_next_btn)
+        chPrevBtn?.setOnClickListener { lifecycleScope.launch { channelSurfController?.prev() } }
+        chNextBtn?.setOnClickListener { lifecycleScope.launch { channelSurfController?.next() } }
         autoplayBtn = findViewById(R.id.autoplay_btn)
         autoNextBtn = findViewById(R.id.auto_next_btn)
         subsBtn = findViewById(R.id.subs_btn)
@@ -2043,6 +2049,8 @@ class PlayerActivity : ComponentActivity() {
         autoplayBtn?.setOnClickListener { toggleAutoplay() }
         autoNextBtn?.visibility = View.GONE
         autoNextBtn?.setOnClickListener { toggleAutoNext() }
+        chPrevBtn?.visibility = View.GONE
+        chNextBtn?.visibility = View.GONE
         subsBtn?.setOnClickListener { showSubsDialog() }
         audioBtn?.setOnClickListener { showAudioDialog() }
         findViewById<TextView>(R.id.download_btn)?.setOnClickListener { showDownloadDialog() }
@@ -2675,6 +2683,8 @@ class PlayerActivity : ComponentActivity() {
         nextEpBtn?.visibility = if (seriesKnown) View.VISIBLE else View.GONE
         autoplayBtn?.visibility = if (seriesKnown) View.VISIBLE else View.GONE
         autoNextBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
+        chPrevBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
+        chNextBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
         multiWindowBtn?.visibility = View.VISIBLE
 
         sources = runCatching {
@@ -2816,6 +2826,8 @@ class PlayerActivity : ComponentActivity() {
             }
         }
         autoNextBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
+        chPrevBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
+        chNextBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
 
         // Cover the very first frames with the title card: the detail screen
         // showed the same card while it searched, so this keeps the "finding
