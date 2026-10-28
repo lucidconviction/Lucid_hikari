@@ -337,6 +337,13 @@
               android:text="@string/player_source" />
 
           <TextView
+              android:id="@+id/channels_btn"
+              style="@style/HikariPill"
+              android:drawableStart="@drawable/ic_server"
+              android:maxWidth="160dp"
+              android:text="@string/player_channels" />
+
+          <TextView
               android:id="@+id/quality_btn"
               style="@style/HikariPill"
               android:drawableStart="@drawable/ic_quality"

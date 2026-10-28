@@ -124,8 +124,6 @@ import com.hikari.app.ui.screens.SettingsScreen
 import com.hikari.app.ui.screens.StatsScreen
 import com.hikari.app.ui.screens.TelegramScreen
 import com.hikari.app.ui.screens.TmdbGridScreen
-import com.hikari.app.ui.screens.IptvNutZScreen
-import com.hikari.app.ui.screens.IptvNutZScreen
 import com.hikari.app.ui.theme.HikariThemeMode
 import com.hikari.app.ui.theme.rememberGlassTokens
 import com.hikari.app.tv.TvMode
@@ -210,12 +208,6 @@ object Routes {
      * with no channels should not carry a spare button.
      */
     const val TELEGRAM = "telegram"
-
-    /**
-     * IPTV NutZ tab: portal discovery from Reddit catalogs. Shown alongside
-     * the main IPTV tab, toggled by the same setting.
-     */
-    const val IPTV_NUTZ = "iptv-nutz"
 
     /** Opens one manga. [url] is the source's own url for the title (its id). */
     fun mangaDetail(
@@ -1439,13 +1431,6 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
             composable(Routes.HISTORY) { MyStuffScreen(nav, MyStuff.HISTORY) }
             composable(Routes.DOWNLOADS) { MyStuffScreen(nav, MyStuff.DOWNLOADS) }
             composable(Routes.IPTV) { IptvScreen(nav) }
-            composable(Routes.IPTV_NUTZ) {
-                IptvNutZScreen(
-                    nav = nav,
-                    onBack = { nav.popBackStack() },
-                    onAddPortal = { /* TODO: wire to Xtream/portal add */ },
-                )
-            }
             composable(
                 route = Routes.IPTV_PLAYLIST,
                 arguments = listOf(

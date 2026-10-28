@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -85,7 +86,6 @@ import com.hikari.app.data.StreamValidationStore
 import com.hikari.app.player.PlayerPool
 import com.hikari.app.providers.IptvProvider
 import com.hikari.app.ui.navigation.Routes
-import com.hikari.app.ui.screens.IptvNutZScreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -402,26 +402,6 @@ private fun MultiViewContent(
                         }
                     }
                     Spacer(Modifier.width(8.dp))
-                    // PortalNutz button — open the portal discovery feature
-                    Box(
-                        Modifier
-                            .clip(RoundedCornerShape(9999.dp))
-                            .background(SurfaceContainer)
-                            .border(0.5.dp, OutlineVariant.copy(alpha = 0.3f), RoundedCornerShape(9999.dp))
-                            .clickable {
-                nav?.navigate(Routes.IPTV_NUTZ) ?: run {
-                    val intent = android.content.Intent(context, android.content.Intent::class.java).apply {
-                        action = "com.hikari.app.iptv.nutz"
-                        putExtra("action", "open_nutz")
-                    }
-                    context.startActivity(intent)
-                }
-            }
-                            .padding(horizontal = 10.dp, vertical = 5.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text("★ PortalNutz", color = OnSurfaceVariant, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
-                    }
                 }
             }
 
@@ -1064,6 +1044,7 @@ fun QuickChannelOverlay(
     var loadState by remember { mutableStateOf<QcLoadState>(QcLoadState.Idle) }
     var aliveByUrl by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
     var qcMatches by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
+    var isRefreshing by remember { mutableStateOf(false) }
 
     val filtered = remember(qcFilter) {
         when (qcFilter) {
@@ -1089,6 +1070,7 @@ fun QuickChannelOverlay(
             return@LaunchedEffect
         }
         loadState = QcLoadState.Loading
+        isRefreshing = true
         loadState = try {
             val matches = withContext(Dispatchers.IO) {
                 val allChannels = mutableListOf<IptvChannel>()
@@ -1130,6 +1112,8 @@ fun QuickChannelOverlay(
             }
         } catch (e: Exception) {
             QcLoadState.Error(e.message ?: "Failed to load sources")
+        } finally {
+            isRefreshing = false
         }
     }
 
@@ -1192,6 +1176,28 @@ fun QuickChannelOverlay(
                     Spacer(Modifier.width(12.dp))
                     Text("Quick Channels", color = OnSurface, fontWeight = FontWeight.Bold, fontSize = 17.sp)
                     Spacer(Modifier.weight(1f))
+                    // Refresh button
+                    if (selectedQc != null) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(SurfaceCard)
+                                .clickable(enabled = !isRefreshing) {
+                                    scope.launch {
+                                        isRefreshing = true
+                                        selectedQc?.let { qc -> QuickChannelMatchCache.matches.remove(qc.displayName) }
+                                        val current = selectedQc
+                                        selectedQc = null
+                                        selectedQc = current
+                                    }
+                                }
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(Icons.Filled.Refresh, contentDescription = "Refresh", tint = Primary, modifier = Modifier.size(16.dp))
+                        }
+                        Spacer(Modifier.width(8.dp))
+                    }
                     // Plus sign to add a custom quick channel
                     Box(
                         modifier = Modifier
