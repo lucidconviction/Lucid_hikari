@@ -1193,6 +1193,7 @@ class PlayerActivity : ComponentActivity() {
     private var nextEpBtn: TextView? = null
     private var chPrevBtn: ImageButton? = null
     private var chNextBtn: ImageButton? = null
+    private var channelsBtn: TextView? = null
     private var autoplayBtn: TextView? = null
     private var autoNextBtn: TextView? = null
     private var subsBtn: TextView? = null
@@ -1917,8 +1918,10 @@ class PlayerActivity : ComponentActivity() {
         nextEpBtn = findViewById(R.id.next_ep_btn)
         chPrevBtn = findViewById(R.id.ch_prev_btn)
         chNextBtn = findViewById(R.id.ch_next_btn)
+        channelsBtn = findViewById(R.id.channels_btn)
         chPrevBtn?.setOnClickListener { lifecycleScope.launch { channelSurfController?.prev() } }
         chNextBtn?.setOnClickListener { lifecycleScope.launch { channelSurfController?.next() } }
+        channelsBtn?.setOnClickListener { showChannelsDialog() }
         autoplayBtn = findViewById(R.id.autoplay_btn)
         autoNextBtn = findViewById(R.id.auto_next_btn)
         subsBtn = findViewById(R.id.subs_btn)
@@ -2054,6 +2057,7 @@ class PlayerActivity : ComponentActivity() {
         autoNextBtn?.setOnClickListener { toggleAutoNext() }
         chPrevBtn?.visibility = View.GONE
         chNextBtn?.visibility = View.GONE
+        channelsBtn?.visibility = View.GONE
         subsBtn?.setOnClickListener { showSubsDialog() }
         audioBtn?.setOnClickListener { showAudioDialog() }
         findViewById<TextView>(R.id.download_btn)?.setOnClickListener { showDownloadDialog() }
@@ -2328,10 +2332,22 @@ class PlayerActivity : ComponentActivity() {
             updateAutoplayPill()
         }
         lifecycleScope.launch {
+            (applicationContext as HikariApp).store.autoplayNextFlow().collect { on ->
+                autoplayNextOn = on
+                updateAutoplayPill()
+            }
+        }
+        lifecycleScope.launch {
             autoNextOn = runCatching {
                 (applicationContext as HikariApp).store.autoNext()
             }.getOrDefault(true)
             updateAutoNextPill()
+        }
+        lifecycleScope.launch {
+            (applicationContext as HikariApp).store.autoNextFlow().collect { on ->
+                autoNextOn = on
+                updateAutoNextPill()
+            }
         }
         lifecycleScope.launch {
             iconOnlyControls = runCatching {
@@ -2688,6 +2704,7 @@ class PlayerActivity : ComponentActivity() {
         autoNextBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
         chPrevBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
         chNextBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
+        channelsBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
         multiWindowBtn?.visibility = View.VISIBLE
 
         sources = runCatching {
@@ -2831,6 +2848,7 @@ class PlayerActivity : ComponentActivity() {
         autoNextBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
         chPrevBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
         chNextBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
+        channelsBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
 
         // Cover the very first frames with the title card: the detail screen
         // showed the same card while it searched, so this keeps the "finding
@@ -7654,6 +7672,96 @@ class PlayerActivity : ComponentActivity() {
             addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
         }
         return dialog
+    }
+
+    /** F1 — Channels pill: lists all channels in the current IPTV playlist so
+     *  the user can jump directly to any one without pressing CH+/CH− repeatedly. */
+    private fun showChannelsDialog() {
+        val controller = channelSurfController ?: return
+        val dialog = Dialog(this, android.R.style.Theme_Translucent_NoTitleBar)
+        val density = resources.displayMetrics.density
+        dialog.setContentView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding((14 * density).toInt(), (8 * density).toInt(),
+                (14 * density).toInt(), (6 * density).toInt())
+        })
+        val list = ScrollView(this).apply {
+            val inner = LinearLayout(this@PlayerActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding((12 * density).toInt(), 0, (12 * density).toInt(), (12 * density).toInt())
+            }
+            val idx = controller.currentIndex
+            val total = controller.total
+            controller.channels.forEachIndexed { i, ch ->
+                val row = LinearLayout(this@PlayerActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    setPadding(0, (8 * density).toInt(), 0, (8 * density).toInt())
+                    weightSum = 1f
+                }
+                val dot = View(this@PlayerActivity).apply {
+                    val color = if (i == idx) 0xFF4CAF50.toInt() else 0xFF3A3F4A.toInt()
+                    setBackgroundColor(color)
+                    layoutParams = LinearLayout.LayoutParams((10 * density).toInt(), (10 * density).toInt()).apply {
+                        marginEnd = (10 * density).toInt()
+                    }
+                }
+                row.addView(dot)
+                val name = TextView(this@PlayerActivity).apply {
+                    text = "${i + 1}. ${ch.name}"
+                    setTextColor(0xFFFFFFFF.toInt())
+                    textSize = 15f
+                    if (i == idx) setTypeface(typeface, android.graphics.Typeface.BOLD)
+                    setPadding((12 * density).toInt(), (10 * density).toInt(), 0, (10 * density).toInt())
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                }
+                row.addView(name, android.widget.LinearLayout.LayoutParams(0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                row.setOnClickListener {
+                    lifecycleScope.launch { controller.switch(i) }
+                    dialog.dismiss()
+                }
+                row.background = GradientDrawable().apply {
+                    setColor(if (i == idx) 0xFF2A3040.toInt() else 0x00000000.toInt())
+                    cornerRadius = (8 * density).toFloat()
+                }
+                inner.addView(row)
+            }
+            addView(inner, android.view.ViewGroup.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+        }
+        val footer = TextView(this).apply {
+            text = "Channel ${controller.currentIndex + 1}/${controller.total}"
+            setTextColor(0xFF8A94A6.toInt())
+            textSize = 12f
+            setPadding((12 * density).toInt(), (6 * density).toInt(), 0, 0)
+        }
+        dialog.setCancelable(true)
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.window?.let { w ->
+            w.setBackgroundDrawable(ColorDrawable(0x99000000.toInt()))
+            w.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
+        }
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding((16 * density).toInt(), 0, (16 * density).toInt(), (16 * density).toInt())
+            addView(list, LinearLayout.LayoutParams(
+                (resources.displayMetrics.widthPixels * 0.88f).toInt(),
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+            addView(footer, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+        }
+        dialog.setContentView(col, LinearLayout.LayoutParams(
+            (resources.displayMetrics.widthPixels * 0.88f).toInt(),
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.CENTER
+        })
+        dialog.show()
     }
 
     /** The Episodes pill: lists the title's episodes (fetched from the provider
