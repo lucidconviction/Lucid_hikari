@@ -187,7 +187,6 @@ import com.hikari.app.ui.components.GlassShape
 import com.hikari.app.ui.theme.rememberGlassTokens
 import com.hikari.app.ui.components.HeroArtwork
 import com.hikari.app.ui.navigation.Routes
-import com.hikari.app.ui.screens.MultiWindowStore
 import com.hikari.app.tv.tvPress
 import com.hikari.app.tv.Cs3
 import com.hikari.app.tv.Cs3ActorCard
@@ -5502,19 +5501,6 @@ fun DetailScreen(
                                     fontSize = 13.sp * (10f / actionLabel.length.toFloat()).coerceIn(0.55f, 1f)
                                 ),
                             )
-                        }
-                        // Send to MultiView button — opens the multi-view grid
-                        // so the user can browse IPTV channels and add them.
-                        FilledTonalButton(
-                            onClick = { Routes.navigateTab(nav, Routes.MULTI_VIEW) },
-                            modifier = Modifier.tvPress(
-                                previewPass = true,
-                                onClick = { Routes.navigateTab(nav, Routes.MULTI_VIEW) }
-                            )
-                        ) {
-                            Icon(Icons.Filled.GridView, contentDescription = tr("MultiView"))
-                            Spacer(Modifier.width(6.dp))
-                            Text(tr("MultiView"))
                         }
                         // The MARK state is deliberately NOT a button in this row
                         // any more. It was one (a check beside Play, mirroring the
