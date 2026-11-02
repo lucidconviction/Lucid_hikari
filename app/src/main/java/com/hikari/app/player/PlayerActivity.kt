@@ -1874,6 +1874,16 @@ class PlayerActivity : ComponentActivity() {
         playerView?.setControllerVisibilityListener(object : PlayerView.ControllerVisibilityListener {
             override fun onVisibilityChanged(visibility: Int) {
                 controllerVisible = visibility == View.VISIBLE
+                // The channel row (CH− / CH+ / channels) sits in the same
+                // bottom bar as the media3 controls and used to stay visible
+                // after they auto-hid — a 3s timeout on the controls with the
+                // channel buttons pinned on underneath them. They now mirror the
+                // controller exactly: visible with it, gone with it, and a tap
+                // on the screen brings both back.
+                val chVis = if (channelSurfController != null) visibility else View.GONE
+                chPrevBtn?.visibility = chVis
+                chNextBtn?.visibility = chVis
+                channelsBtn?.visibility = chVis
                 // The pill row is a HorizontalScrollView. A focused pill (the
                 // media3 control view asks for focus, and a scroll view reveals
                 // a focused descendant) could pull the row to one end and leave
@@ -5049,11 +5059,14 @@ class PlayerActivity : ComponentActivity() {
         val store = (applicationContext as com.hikari.app.HikariApp).store
         if (!store.autoRotatePlayer()) return
         if (userRotated || autoRotated) return
-        // Skip auto-rotate on first play — let the stream start in current orientation
-        if (!_hasStartedPlaying) {
-            _hasStartedPlaying = true
-            return
-        }
+        // First start: the stream has not started yet, so don't rotate here.
+        // onKnownVideoSize captures the video dimensions and
+        // onPlayerStateChanged applies the rotation the moment playback is
+        // confirmed — that is what puts the screen in landscape when a stream
+        // starts, instead of leaving it in the orientation the user held the
+        // phone in. (The flag stays false so the capture path below still
+        // fires; only a confirmed start flips it.)
+        if (!_hasStartedPlaying) return
         // Read the phone's current physical orientation from the window
         // configuration: a device that is already landscape stays landscape,
         // one in portrait stays portrait. The [onConfigurationChanged] hook

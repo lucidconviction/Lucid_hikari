@@ -5541,7 +5541,24 @@ fun DetailScreen(
                         // label ("MultiView") made the pill wider than its
                         // siblings and pushed Play off the start of the row on
                         // narrow screens. The icon alone is enough affordance.
-                        FilledTonalButton(onClick = { Routes.navigateTab(nav, Routes.MULTI_VIEW) }) {
+                        //
+                        // It opens the SLOT PICKER (which slot to drop the
+                        // current stream into) instead of navigating to the
+                        // MultiView tab: the description page's own stream is
+                        // the one the user is looking at, so it is the one to
+                        // offer. The picker is a bottom-sheet over the current
+                        // screen — the video keeps playing underneath it, no
+                        // redirect, no second screen.
+                        FilledTonalButton(onClick = {
+                            val stream = vm.liveStreams.value.firstOrNull()
+                            if (stream != null) {
+                                val app = context.applicationContext as HikariApp
+                                app.slotPickerRequest.value = Pair(
+                                    Pair(stream.name, stream.url),
+                                    "GRID_2x3",
+                                )
+                            }
+                        }) {
                             Icon(Icons.Filled.GridView, contentDescription = tr("MultiView"), modifier = Modifier.size(18.dp))
                         }
                         // Library toggle, mirroring the player's heart: the same

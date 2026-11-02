@@ -167,10 +167,19 @@ object QuickChannelList {
         runCatching { File(cacheDir, REGIONS_FILE).writeText(json.encodeToString(regions)) }
     }
 
-    /** Match a QuickChannel's aliases against an IptvChannel's name and group. */
+    /** Match a QuickChannel's aliases against an IptvChannel's NAME.
+     *
+     * The search is name-only on purpose: a quick channel is a *search
+     * pattern*, and the pattern is what the user typed as the channel's name
+     * (e.g. "CNN", "ESPN"). Matching the group too let a channel whose group
+     * happened to contain a tag slip in — a "News" channel sitting in a
+     * "Sports" group matched the News quick channel and surfaced in its
+     * results. The name is what the user is looking for; the group is
+     * metadata about where it lives in a playlist and says nothing about what
+     * the channel is.
+     */
     fun matches(quickChannel: QuickChannel, channel: IptvChannel): Boolean {
         val nameLower = channel.name.lowercase()
-        val groupLower = channel.group.lowercase()
 
         // Region-bundle channels only match when the channel name or group
         // contains tokens from the expected region.
@@ -184,38 +193,23 @@ object QuickChannelList {
             return regionTokens.any { token ->
                 val pattern = if (token.length <= 3) Regex("\\b$token\\b", RegexOption.IGNORE_CASE)
                     else Regex(token, RegexOption.IGNORE_CASE)
-                pattern.containsMatchIn(nameLower) || pattern.containsMatchIn(groupLower)
+                pattern.containsMatchIn(nameLower)
             }
         }
 
         // For named channels (e.g. "ESPN", "CNN"), require at least one
-        // alias keyword to appear in the channel name. Group is secondary.
+        // alias keyword to appear in the channel name. Word-boundary matching
+        // so "CNN" does not match "CNBC" and "Fox" does not match "Fox Sports".
         val aliases = quickChannel.aliases.map { it.lowercase() }
         val displayNameTokens = quickChannel.displayName.lowercase()
             .split("\\s+".toRegex()).filter { it.isNotBlank() }
         val allKeywords = (aliases + displayNameTokens).toSet()
 
-        // Must match at least one meaningful keyword in the channel name.
-        val nameMatches = allKeywords.any { kw ->
+        return allKeywords.any { kw ->
             if (kw.length <= 2) nameLower.contains(kw)
             else Regex("\\b${kw.replace("*", "")}\\b", RegexOption.IGNORE_CASE)
                 .containsMatchIn(nameLower)
         }
-        if (!nameMatches) return false
-
-        // If the channel has an explicit group, also require a group match
-        // for non-broadcast tags to reduce false positives.
-        val nonRegionTags = quickChannel.tags.filter { it !in listOf("region", "broadcast") }
-        if (nonRegionTags.isNotEmpty() && channel.group.isNotEmpty()) {
-            val groupOk = nonRegionTags.any { tag ->
-                tag.lowercase() in groupLower || groupLower.contains(tag.lowercase())
-            }
-            if (!groupOk) {
-                // Fall back to name-only match for broader results
-                return nameMatches
-            }
-        }
-        return true
     }
 
     val default: List<QuickChannel> = listOf(

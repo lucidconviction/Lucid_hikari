@@ -6,9 +6,11 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -51,6 +53,10 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -77,6 +83,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import android.content.Context
 import androidx.compose.ui.text.font.FontWeight
@@ -150,6 +157,7 @@ import com.hikari.app.tv.tvTextFieldKeys
  * The tab's button is OFF by default — see Settings → Taskbar buttons, where it
  * can be switched on like any other tab (see [com.hikari.app.data.AppStore.iptvTabFlow]).
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun IptvScreen(nav: NavHostController) {
     val app = LocalContext.current.applicationContext as HikariApp
@@ -188,6 +196,43 @@ fun IptvScreen(nav: NavHostController) {
     var xtreamTestResult by remember { mutableStateOf("") }
     var xtreamTesting by remember { mutableStateOf(false) }
     var addTorrent by remember { mutableStateOf(false) }
+    // F3 — the add dialog's mode selector is a DROPDOWN on a phone: four pills
+    // (Playlist / Network stream / Torrent / Xtream panel) in a row pushed the
+    // link field and the help text off the bottom of a narrow screen, and the
+    // chosen mode's own label was the only thing visible. A dropdown collapses
+    // the four options into one field that shows the current mode, so the rest
+    // of the form (link, name, Add) stays on screen. The selected mode is still
+    // the same four-state machine below — only the affordance changes.
+    var addModeExpanded by remember { mutableStateOf(false) }
+    val addModeLabel = when {
+        addTorrent -> tr("Torrent")
+        addStream -> tr("Network stream")
+        addXtream -> tr("Xtream panel")
+        else -> tr("Playlist")
+    }
+    val addModeIndex = when {
+        addTorrent -> 2
+        addStream -> 1
+        addXtream -> 3
+        else -> 0
+    }
+    fun selectAddMode(index: Int) {
+        when (index) {
+            0 -> { addStream = false; addTorrent = false; addXtream = false }
+            1 -> { addStream = true; addTorrent = false; addXtream = false }
+            2 -> { addStream = true; addTorrent = true; addXtream = false }
+            3 -> {
+                addXtream = true
+                addStream = false
+                addTorrent = false
+                // The panel fields are the input here; the plain link field
+                // below is for the other modes and only clutters Xtream.
+                addLink = ""
+                xtreamError = ""
+                xtreamTestResult = ""
+            }
+        }
+    }
     var addFileLabel by remember { mutableStateOf("") }
     var addFilePath by remember { mutableStateOf("") }
     var adding by remember { mutableStateOf(false) }
@@ -554,43 +599,92 @@ addStream = false
                     // Playlist or single link. Kept in front of the fields
                     // because it changes what they mean: a playlist link is
                     // read and its channels listed, a stream link is kept as it
-                    // is and worked out when it is played.
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        AddModePill(
-                            label = tr("Playlist"),
-                            selected = !addStream,
-                            onClick = { addStream = false; addTorrent = false },
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        AddModePill(
-                            label = tr("Network stream"),
-                            selected = addStream && !addTorrent,
-                            onClick = { addStream = true; addTorrent = false },
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        AddModePill(
-                            label = tr("Torrent"),
-                            selected = addTorrent,
-                            onClick = { addStream = true; addTorrent = true },
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        AddModePill(
-                            label = tr("Xtream panel"),
-                            selected = addXtream,
-                            onClick = {
-                                addXtream = !addXtream
-                                if (addXtream) {
-                                    addStream = false
-                                    addTorrent = false
-                                    // The panel fields are the input here; the
-                                    // plain link field below is for the other
-                                    // modes and only clutters the Xtream entry.
-                                    addLink = ""
-                                    xtreamError = ""
-                                    xtreamTestResult = ""
-                                }
-                            },
-                        )
+                    // is and worked out when it is played. On a phone the four
+                    // modes are a DROPDOWN: four pills in a row pushed the link
+                    // field and the help text off the bottom of a narrow
+                    // screen, and the chosen mode's own label was the only
+                    // thing visible. On a television (or tablet in landscape)
+                    // the pills stay — a row of four reads fine where a
+                    // dropdown would only save vertical space the form already
+                    // has.
+                    val addModeIsPortrait = LocalConfiguration.current.orientation ==
+                        android.content.res.Configuration.ORIENTATION_PORTRAIT
+                    if (addModeIsPortrait) {
+                        ExposedDropdownMenuBox(
+                            expanded = addModeExpanded,
+                            onExpandedChange = { addModeExpanded = it },
+                        ) {
+                            OutlinedTextField(
+                                value = addModeLabel,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text(tr("Mode")) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .menuAnchor(),
+                                trailingIcon = {
+                                    ExposedDropdownMenuDefaults.TrailingIcon(
+                                        expanded = addModeExpanded,
+                                    )
+                                },
+                            )
+                            ExposedDropdownMenu(
+                                expanded = addModeExpanded,
+                                onDismissRequest = { addModeExpanded = false },
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text(tr("Playlist")) },
+                                    onClick = { selectAddMode(0); addModeExpanded = false },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(tr("Network stream")) },
+                                    onClick = { selectAddMode(1); addModeExpanded = false },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(tr("Torrent")) },
+                                    onClick = { selectAddMode(2); addModeExpanded = false },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(tr("Xtream panel")) },
+                                    onClick = { selectAddMode(3); addModeExpanded = false },
+                                )
+                            }
+                        }
+                    } else {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            AddModePill(
+                                label = tr("Playlist"),
+                                selected = !addStream,
+                                onClick = { addStream = false; addTorrent = false },
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            AddModePill(
+                                label = tr("Network stream"),
+                                selected = addStream && !addTorrent,
+                                onClick = { addStream = true; addTorrent = false },
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            AddModePill(
+                                label = tr("Torrent"),
+                                selected = addTorrent,
+                                onClick = { addStream = true; addTorrent = true },
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            AddModePill(
+                                label = tr("Xtream panel"),
+                                selected = addXtream,
+                                onClick = {
+                                    addXtream = !addXtream
+                                    if (addXtream) {
+                                        addStream = false
+                                        addTorrent = false
+                                        addLink = ""
+                                        xtreamError = ""
+                                        xtreamTestResult = ""
+                                    }
+                                },
+                            )
+                        }
                     }
                     Spacer(Modifier.height(10.dp))
                     if (!LocalHideHelp.current) {
@@ -2254,7 +2348,7 @@ private fun XtreamAccountPill(account: com.hikari.app.data.XtreamAccount, onClic
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvProvider>) {
     val ctx = LocalContext.current
@@ -2273,6 +2367,10 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
     }
     var showAddRegion by remember { mutableStateOf(false) }
     var showAddChannel by remember { mutableStateOf(false) }
+    var editingRegion by remember { mutableStateOf<CustomRegion?>(null) }
+    var showDeleteRegion by remember { mutableStateOf<CustomRegion?>(null) }
+    var editingChannel by remember { mutableStateOf<QuickChannel?>(null) }
+    var showDeleteChannel by remember { mutableStateOf<QuickChannel?>(null) }
 
     // Modal bottom sheet state
     var showSheet by remember { mutableStateOf(false) }
@@ -2395,20 +2493,55 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
             ) {
                 val allTabs = qcTabs + customRegions.map { it.name }
                 items(allTabs) { tab ->
+                    val isCustomRegion = customRegions.any { it.name == tab }
                     val isActive = selectedQcRegion == tab
+                    val regionForTab = customRegions.firstOrNull { it.name == tab }
                     Box(
                         modifier = Modifier
                             .clip(CircleShape)
                             .background(if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
-                            .clickable { selectedQcRegion = tab }
+                            .then(
+                                if (isCustomRegion) {
+                                    Modifier.combinedClickable(
+                                        onClick = { selectedQcRegion = tab },
+                                        onLongClick = {
+                                            // Open the region dialog in edit mode — the tag is
+                                            // preserved so existing channels keep finding
+                                            // this tab.
+                                            regionForTab?.let {
+                                                editingRegion = it
+                                                showAddRegion = true
+                                            }
+                                        },
+                                    )
+                                } else {
+                                    Modifier.clickable { selectedQcRegion = tab }
+                                },
+                            )
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                     ) {
-                        Text(
-                            tab,
-                            color = if (isActive) Color.White else Color.White.copy(alpha = 0.7f),
-                            fontSize = 12.sp,
-                            fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                tab,
+                                color = if (isActive) Color.White else Color.White.copy(alpha = 0.7f),
+                                fontSize = 12.sp,
+                                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+                            )
+                            if (isCustomRegion) {
+                                Spacer(Modifier.width(4.dp))
+                                IconButton(
+                                    onClick = { regionForTab?.let { showDeleteRegion = it } },
+                                    modifier = Modifier.size(18.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Delete region",
+                                        tint = Color.White.copy(alpha = 0.8f),
+                                        modifier = Modifier.size(12.dp),
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2424,6 +2557,13 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                     qc = qc,
                     isActive = selectedQc == qc,
                     onClick = { selectedQc = qc },
+                    onLongClick = {
+                        // Long-press opens the channel dialog in edit mode so
+                        // the alias list can be tweaked; delete is offered from
+                        // inside the dialog.
+                        editingChannel = qc
+                        showAddChannel = true
+                    },
                 )
             }
         }
@@ -2538,28 +2678,30 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
         }
     }
     
-    // Add Region dialog
-    if (showAddRegion) {
-        var regionName by remember { mutableStateOf("") }
-        var regionTag by remember { mutableStateOf("") }
+    // Region dialog — ADD or EDIT, depending on whether [editingRegion] is set.
+    if (showAddRegion || editingRegion != null) {
+        val isEdit = editingRegion != null
+        val seed = editingRegion ?: CustomRegion("", "")
+        var regionName by remember { mutableStateOf(seed.name) }
+        var regionTag by remember { mutableStateOf(seed.tag) }
         AlertDialog(
-            onDismissRequest = { showAddRegion = false },
-            title = { Text("Add Region Tab") },
+            onDismissRequest = { showAddRegion = false; editingRegion = null },
+            title = { Text(if (isEdit) tr("Edit region") else tr("Add region")) },
             text = {
                 Column {
                     OutlinedTextField(
                         value = regionName,
                         onValueChange = { regionName = it },
-                        label = { Text("Region Name") },
-                        placeholder = { Text("e.g. French, Sports Extra") },
+                        label = { Text(tr("Region name")) },
+                        placeholder = { Text(tr("e.g. French, Sports Extra")) },
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
                         value = regionTag,
                         onValueChange = { regionTag = it },
-                        label = { Text("Tag") },
-                        placeholder = { Text("e.g. french, sports2") },
+                        label = { Text(tr("Tag")) },
+                        placeholder = { Text(tr("e.g. french, sports2")) },
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -2568,53 +2710,91 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                 TextButton(
                     enabled = regionName.isNotBlank() && regionTag.isNotBlank(),
                     onClick = {
-                        QuickChannelList.addCustomRegion(cacheDir, CustomRegion(regionName, regionTag))
+                        // An edit keeps the same tag so existing channels keep
+                        // finding this tab; only the human label changes.
+                        val keepTag = if (isEdit) editingRegion!!.tag else regionTag
+                        QuickChannelList.addCustomRegion(cacheDir, CustomRegion(regionName, keepTag))
                         customRegions = QuickChannelList.getCustomRegions(cacheDir)
                         showAddRegion = false
+                        editingRegion = null
                     },
                 ) {
-                    Text("Add")
+                    Text(if (isEdit) tr("Save") else tr("Add"))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showAddRegion = false }) {
-                    Text("Cancel")
+                Row {
+                    if (isEdit) {
+                        TextButton(onClick = { showDeleteRegion = editingRegion }) {
+                            Text(tr("Delete"), color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = { showAddRegion = false; editingRegion = null }) {
+                        Text(tr("Cancel"))
+                    }
+                }
+            },
+        )
+    }
+
+    // Delete a custom region tab — takes the whole tab with it, including any
+    // custom channels tagged for it (they still show up under "Custom").
+    if (showDeleteRegion != null) {
+        val region = showDeleteRegion!!
+        AlertDialog(
+            onDismissRequest = { showDeleteRegion = null },
+            title = { Text(tr("Delete region")) },
+            text = { Text(tr("Remove the \"${region.name}\" tab from the quick channel strip?")) },
+            confirmButton = {
+                TextButton(onClick = {
+                    QuickChannelList.removeCustomRegion(cacheDir, region.tag)
+                    customRegions = QuickChannelList.getCustomRegions(cacheDir)
+                    if (selectedQcRegion == region.name) selectedQcRegion = "All"
+                    showDeleteRegion = null
+                }) {
+                    Text(tr("Delete"), color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteRegion = null }) {
+                    Text(tr("Cancel"))
                 }
             },
         )
     }
     
-    // Add Channel dialog
-    if (showAddChannel) {
-        var channelName by remember { mutableStateOf("") }
-        var channelAlias by remember { mutableStateOf("") }
-        var channelTags by remember { mutableStateOf("") }
+    // Channel dialog — ADD or EDIT, depending on whether [editingChannel] is set.
+    // The Tags field is gone: tags are what the search uses to classify a
+    // channel, and they were leaking into the results — a channel tagged
+    // "sports" matched the News quick channel and surfaced in its list. The
+    // search now reads only the channel NAME, so the field that fed it is
+    // removed too.
+    if (showAddChannel || editingChannel != null) {
+        val isEdit = editingChannel != null
+        val seed = editingChannel ?: QuickChannel("", emptyList(), emptyList(), emptyList())
+        var channelName by remember { mutableStateOf(seed.displayName) }
+        var channelAlias by remember { mutableStateOf(seed.aliases.joinToString(", ")) }
         AlertDialog(
-            onDismissRequest = { showAddChannel = false },
-            title = { Text("Add Quick Channel") },
+            onDismissRequest = { showAddChannel = false; editingChannel = null },
+            title = { Text(if (isEdit) tr("Edit channel") else tr("Add channel")) },
             text = {
                 Column {
                     OutlinedTextField(
                         value = channelName,
                         onValueChange = { channelName = it },
-                        label = { Text("Display Name") },
-                        placeholder = { Text("e.g. My Channel") },
+                        label = { Text(tr("Display name")) },
+                        placeholder = { Text(tr("e.g. My Channel")) },
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
                         value = channelAlias,
                         onValueChange = { channelAlias = it },
-                        label = { Text("Search Alias") },
-                        placeholder = { Text("e.g. CNN, ESPN") },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = channelTags,
-                        onValueChange = { channelTags = it },
-                        label = { Text("Tags (comma-separated)") },
-                        placeholder = { Text("e.g. news, sports, us") },
+                        label = { Text(tr("Search aliases")) },
+                        placeholder = { Text(tr("e.g. CNN, ESPN")) },
+                        singleLine = false,
+                        maxLines = 3,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -2623,22 +2803,55 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                 TextButton(
                     enabled = channelName.isNotBlank() && channelAlias.isNotBlank(),
                     onClick = {
+                        val aliasList = channelAlias.split(",").map { it.trim() }.filter { it.isNotEmpty() }
                         val qc = QuickChannel(
-                            displayName = channelName,
-                            aliases = listOf(channelAlias),
-                            regions = channelTags.split(",").map { it.trim() }.filter { it.isNotBlank() },
-                            tags = channelTags.split(",").map { it.trim() }.filter { it.isNotBlank() },
+                            displayName = channelName.trim(),
+                            aliases = aliasList,
+                            regions = seed.regions,
+                            tags = seed.tags,
                         )
                         QuickChannelList.addCustomChannel(cacheDir, qc)
                         showAddChannel = false
+                        editingChannel = null
                     },
                 ) {
-                    Text("Add")
+                    Text(if (isEdit) tr("Save") else tr("Add"))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showAddChannel = false }) {
-                    Text("Cancel")
+                Row {
+                    if (isEdit) {
+                        TextButton(onClick = { showDeleteChannel = editingChannel }) {
+                            Text(tr("Delete"), color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = { showAddChannel = false; editingChannel = null }) {
+                        Text(tr("Cancel"))
+                    }
+                }
+            },
+        )
+    }
+
+    // Delete a custom quick channel.
+    if (showDeleteChannel != null) {
+        val qc = showDeleteChannel!!
+        AlertDialog(
+            onDismissRequest = { showDeleteChannel = null },
+            title = { Text(tr("Delete channel")) },
+            text = { Text(tr("Remove \"${qc.displayName}\" from your quick channels?")) },
+            confirmButton = {
+                TextButton(onClick = {
+                    QuickChannelList.removeCustomChannel(cacheDir, qc.displayName)
+                    showDeleteChannel = null
+                }) {
+                    Text(tr("Delete"), color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteChannel = null }) {
+                    Text(tr("Cancel"))
                 }
             },
         )
@@ -2648,18 +2861,22 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
 /**
  * Big Quick Channel card (160dp width).
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun QuickChannelCardBig(
     qc: QuickChannel,
     isActive: Boolean,
     onClick: () -> Unit,
+    onLongClick: () -> Unit = {},
 ) {
     Card(
         onClick = onClick,
-        modifier = Modifier.width(160.dp),
+        modifier = Modifier
+            .width(160.dp)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (isActive) MaterialTheme.colorScheme.primaryContainer 
+            containerColor = if (isActive) MaterialTheme.colorScheme.primaryContainer
                 else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
         ),
     ) {
