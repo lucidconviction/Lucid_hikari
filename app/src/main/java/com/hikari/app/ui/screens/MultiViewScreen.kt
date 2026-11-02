@@ -35,15 +35,19 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -112,9 +116,12 @@ fun MultiViewScreen(
     val app = context.applicationContext as HikariApp
     val pool = remember(context) { PlayerPool(context) }
 
-    // Init stream validation store from cache dir
+    // Init stream validation store + saved layouts from cache dir
     val cacheDir = app.cacheDir
-    LaunchedEffect(Unit) { StreamValidationStore.ensureLoaded(cacheDir) }
+    LaunchedEffect(Unit) {
+        StreamValidationStore.ensureLoaded(cacheDir)
+        MultiWindowStore.initLayouts(cacheDir)
+    }
 
     LaunchedEffect(sessions) {
         if (MultiWindowStore.allStreams.isEmpty() && sessions.isNotEmpty()) {
@@ -132,6 +139,7 @@ fun MultiViewScreen(
         onDispose {
             pool.releaseAll(); MultiWindowStore.clear()
             StreamValidationStore.save(cacheDir)
+            MultiWindowStore.saveLayouts(cacheDir, "Last session")
         }
     }
 
@@ -268,6 +276,9 @@ private fun MultiViewContent(
 
     // State for quick channel sheet (from Browse IPTV empty state)
     var quickChannelSheetOpen by remember { mutableStateOf(false) }
+    // State for saved-layouts picker sheet
+    var savedLayoutsSheetOpen by remember { mutableStateOf(false) }
+    var showSaveLayoutDialog by remember { mutableStateOf(false) }
 
     if (streams.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -389,11 +400,10 @@ private fun MultiViewContent(
                     Icon(Icons.Filled.ArrowBack, contentDescription = "Back", tint = MaterialTheme.colorScheme.onSurface)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("MultiNutz", color = Primary, fontWeight = FontWeight.Bold, fontSize = 20.sp, letterSpacing = -0.3.sp)
-                    Spacer(Modifier.width(8.dp))
                     Box(
                         Modifier.clip(RoundedCornerShape(9999.dp)).background(ErrorContainerAlpha)
                             .border(0.5.dp, ErrorBorderAlpha, RoundedCornerShape(9999.dp))
+                            .clickable { savedLayoutsSheetOpen = true }
                             .padding(horizontal = 8.dp, vertical = 4.dp),
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -476,6 +486,15 @@ private fun MultiViewContent(
                         .padding(horizontal = 10.dp, vertical = 5.dp),
                 ) {
                     Text("Close All", color = ErrorColor, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
+                }
+                // Save Layouts — persists the current multi-window configuration
+                Box(
+                    Modifier.clip(RoundedCornerShape(9999.dp)).background(PrimaryContainer)
+                        .border(0.5.dp, Primary.copy(alpha = 0.4f), RoundedCornerShape(9999.dp))
+                        .clickable { savedLayoutsSheetOpen = true }
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                ) {
+                    Text("Save Layouts", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
                 }
             }
 
@@ -569,6 +588,28 @@ private fun MultiViewContent(
             onDismiss = { quickChannelSheetOpen = false },
         )
     }
+
+    // Saved layouts picker + new-layout name dialog
+    if (savedLayoutsSheetOpen) {
+        SavedLayoutsSheet(
+            cacheDir = cacheDir,
+            layouts = MultiWindowStore.savedLayouts,
+            onApply = { name -> MultiWindowStore.applyLayout(cacheDir, name) },
+            onRename = { name -> showSaveLayoutDialog = true },
+            onDelete = { name -> MultiWindowStore.deleteLayout(cacheDir, name) },
+            onDismiss = { savedLayoutsSheetOpen = false },
+        )
+    }
+    if (showSaveLayoutDialog) {
+        SaveLayoutNameDialog(
+            onDismiss = { showSaveLayoutDialog = false },
+            onConfirm = { name ->
+                MultiWindowStore.saveLayouts(cacheDir, name)
+                showSaveLayoutDialog = false
+                savedLayoutsSheetOpen = true
+            },
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -626,6 +667,28 @@ private fun VideoCell(
             kotlinx.coroutines.delay(1000)
             elapsedSeconds++
             seekProgress = (elapsedSeconds % 3600).toFloat() / 3600f
+        }
+    }
+
+    // Auto-refresh a frozen/paused cell. A paused stream that never
+    // re-establishes its session just sits on a dead socket; after a short
+    // grace period we re-seek so it comes back rather than staying grey.
+    LaunchedEffect(isPlaying, elapsedSeconds) {
+        if (isPlaying) return@LaunchedEffect
+        // Wait ~25s of accumulated freeze before the first refresh, then
+        // every ~60s after that so a truly dead stream keeps trying.
+        val firstRefreshAt = 25
+        val subsequentEvery = 60
+        while (!isPlaying) {
+            val wait = if (elapsedSeconds < firstRefreshAt) 1000L else subsequentEvery * 1000L
+            kotlinx.coroutines.delay(wait)
+            if (isPlaying) break
+            player.setMediaItem(MediaItem.fromUri(stream.url))
+            player.volume = MultiWindowStore.getVolume(stream.id)
+            player.playWhenReady = true
+            player.prepare()
+            MultiWindowStore.setPaused(stream.id, false)
+            isPlaying = true
         }
     }
 
@@ -1649,4 +1712,158 @@ fun SlotPickerBottomSheet(
             Spacer(Modifier.height(24.dp))
         }
     }
+}
+
+// ── Saved layouts sheet + name dialog ────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SavedLayoutsSheet(
+    cacheDir: java.io.File,
+    layouts: List<MultiWindowStore.SavedLayout>,
+    onApply: (String) -> Unit,
+    onRename: (String) -> Unit,
+    onDelete: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
+    var renameTarget by remember { mutableStateOf<String?>(null) }
+    var renameValue by remember { mutableStateOf("") }
+
+    if (renameTarget != null) {
+        val target = renameTarget!!
+        AlertDialog(
+            onDismissRequest = { renameTarget = null },
+            title = { Text("Rename layout", color = OnSurface) },
+            text = {
+                OutlinedTextField(
+                    value = renameValue,
+                    onValueChange = { renameValue = it },
+                    singleLine = true,
+                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val nv = renameValue.trim()
+                    if (nv.isNotBlank()) {
+                        val idx = layouts.indexOfFirst { it.name == target }
+                        if (idx >= 0) {
+                            val updated = layouts[idx].copy(name = nv)
+                            val list = layouts.toMutableList().apply { set(idx, updated) }
+                            MultiWindowStore.replaceLayouts(cacheDir, list)
+                        }
+                    }
+                    renameTarget = null
+                }) { Text("Save", color = Primary) }
+            },
+            dismissButton = { TextButton(onClick = { renameTarget = null }) { Text("Cancel", color = OnSurfaceVariant) } },
+        )
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = SurfaceContainer.copy(alpha = 0.97f),
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp).fillMaxWidth()) {
+            Text("Saved Layouts", color = OnSurface, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Spacer(Modifier.height(4.dp))
+            Text("${layouts.size} saved", color = OnSurfaceVariant, fontSize = 12.sp)
+            Spacer(Modifier.height(16.dp))
+
+            if (layouts.isEmpty()) {
+                Text("No saved layouts yet. Tap + to save the current window arrangement.", color = OnSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(vertical = 12.dp))
+            } else {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(layouts, key = { it.name }) { layout ->
+                        val slotCount = layout.slots.size
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            color = SurfaceCard,
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(layout.name, color = OnSurface, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                        Text("${layout.layoutKey} · $slotCount slot${if (slotCount != 1) "s" else ""}", color = OnSurfaceVariant, fontSize = 11.sp)
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Box(
+                                            Modifier.clip(RoundedCornerShape(8.dp)).background(PrimaryContainer).clickable { onApply(layout.name) }.padding(horizontal = 10.dp, vertical = 5.dp),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Text("Apply", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                        Box(
+                                            Modifier.clip(RoundedCornerShape(8.dp)).background(SurfaceLow).clickable {
+                                                renameValue = layout.name
+                                                renameTarget = layout.name
+                                            }.padding(horizontal = 10.dp, vertical = 5.dp),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Text("Rename", color = OnSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                        Box(
+                                            Modifier.clip(RoundedCornerShape(8.dp)).background(SurfaceLow)
+                                                .clickable { onDelete(layout.name) }.padding(horizontal = 10.dp, vertical = 5.dp),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Text("✕", color = ErrorColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            Box(
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(PrimaryContainer).clickable { onRename("new") }.padding(vertical = 12.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("+ Save current layout", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(8.dp))
+            TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth(), contentPadding = PaddingValues(vertical = 8.dp)) {
+                Text("Close", color = OnSurfaceVariant, fontSize = 13.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SaveLayoutNameDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Save layout", color = OnSurface) },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("Layout name", color = OnSurfaceVariant) },
+                placeholder = { Text("e.g. Sports 6-pack") },
+                singleLine = true,
+                colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = {
+            TextButton(enabled = name.isNotBlank(), onClick = { onConfirm(name) }) {
+                Text("Save", color = Primary)
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = OnSurfaceVariant) } },
+    )
 }

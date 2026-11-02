@@ -311,6 +311,7 @@ fun IptvScreen(nav: NavHostController) {
             adding = false
             result.fold(
                 onSuccess = { n ->
+                    app.providers.refresh()
                     val msg = when {
                         wantTorrent -> I18n.t("Added torrent stream")
                         wasStream -> I18n.t("Added network stream")
@@ -1583,6 +1584,141 @@ fun IptvPlaylistScreen(nav: NavHostController, providerId: String) {
     }
 }
 
+/** One tile in the merged "View All Playlists" grid: a group from one playlist. */
+private data class AllPlaylistTile(
+    val provider: IptvProvider,
+    val name: String,
+    val catalogId: String,
+    val count: Int,
+    val key: String,
+)
+
+/**
+ * F4 — "View All Playlists": one grouped grid that merges EVERY IPTV
+ * playlist's contents. Each tile is a (playlist, group) pair; group tiles
+ * route to that playlist's own catalog, so the paged channel grid and its
+ * search/validation stay exactly the same code path Home uses.
+ */
+@Composable
+fun IptvAllPlaylistsScreen(nav: NavHostController) {
+    val app = LocalContext.current.applicationContext as HikariApp
+    val all by app.providers.providers.collectAsState()
+    val playlists = remember(all) { all.filterIsInstance<IptvProvider>() }
+    val shapeFlow = remember { app.store.iptvShapeFlow() }
+    val shape by shapeFlow.collectAsState(initial = TileShapes.POSTER)
+    val groupModeFlow = remember { app.store.iptvGroupModeFlow() }
+    val groupMode by groupModeFlow.collectAsState(initial = "groups")
+    val scope = rememberCoroutineScope()
+
+    var tiles by remember { mutableStateOf<List<AllPlaylistTile>?>(null) }
+    LaunchedEffect(playlists, groupMode) {
+        val m = IptvPlaylist.normalizeGroupMode(groupMode)
+        tiles = withContext(Dispatchers.IO) {
+            val out = ArrayList<AllPlaylistTile>()
+            playlists.forEach { p ->
+                val pid = p.config.id
+                val channels = runCatching {
+                    withTimeoutOrNull(60_000L) { p.channels() }
+                }.getOrNull().orEmpty()
+                if (channels.isEmpty()) return@forEach
+                out += AllPlaylistTile(
+                    provider = p,
+                    name = I18n.t("All channels"),
+                    catalogId = IptvProvider.CATALOG_ALL,
+                    count = channels.size,
+                    key = "$pid|all",
+                )
+                channels.groupBy { IptvPlaylist.groupKey(it, m) }
+                    .entries
+                    .sortedWith(
+                        compareByDescending<Map.Entry<String, List<com.hikari.app.data.IptvChannel>>> { it.value.size }
+                            .thenBy { it.key.lowercase() },
+                    )
+                    .forEach { (group, chs) ->
+                        out += AllPlaylistTile(
+                            provider = p,
+                            name = group,
+                            catalogId = IptvProvider.catalogIdForGroup(group),
+                            count = chs.size,
+                            key = "$pid|$group",
+                        )
+                    }
+            }
+            out
+        }
+    }
+
+    val totalChannels = remember(tiles) { tiles.orEmpty().sumOf { it.count } }
+    Column(Modifier.fillMaxSize()) {
+        IptvHeader(
+            title = tr("View All Playlists"),
+            subtitle = when {
+                tiles == null -> tr("Reading the playlist…")
+                playlists.isEmpty() -> tr("No playlists yet")
+                else -> I18n.t("%s playlists · %s channels")
+                    .replace("%s", playlists.size.toString())
+                    .replace("%s", totalChannels.toString())
+            },
+            onBack = { nav.popBackStack() },
+            shape = shape,
+            onCycleShape = { scope.launch { app.store.setIptvShape(nextShape(shape)) } },
+            onSearch = null,
+            onAdd = null,
+        )
+        if (playlists.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    tr("Add an IPTV playlist and its channels appear here, grouped with every other playlist's."),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 28.dp),
+                )
+            }
+            return@Column
+        }
+        val list = tiles ?: return@Column
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(minSize = tileMinFor(shape)),
+            state = com.hikari.app.ui.components.keptGridState(
+                "iptvAllPlaylists:$groupMode",
+                itemKeys = remember(list) { list.map { it.key } },
+            ),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                start = 12.dp,
+                end = 12.dp,
+                top = 4.dp,
+                bottom = LocalTaskbarInset.current + 24.dp,
+            ),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            items(list, key = { it.key }) { tile ->
+                IptvTile(
+                    cover = null,
+                    name = tile.name,
+                    subtitle = I18n.t("%s · %s channels")
+                        .replace("%s", tile.provider.displayName)
+                        .replace("%s", tile.count.toString()),
+                    shape = shape,
+                ) {
+                    Routes.safeNavigate(
+                        nav,
+                        Routes.catalog(
+                            providerId = tile.provider.config.id,
+                            catalogId = tile.catalogId,
+                            title = tile.name,
+                            providerName = tile.provider.displayName,
+                            type = MediaType.MOVIE,
+                            rawType = "channel",
+                        ),
+                    )
+                }
+            }
+        }
+    }
+}
+
 // ------------------------------------------------------------------ building --
 
 /**
@@ -1974,7 +2110,10 @@ private fun IptvKindGrid(
             // ScrollKeeper).
             state = com.hikari.app.ui.components.keptGridState(
                 keeperKey,
-                itemKeys = remember(cards) { cards.map { it.id } },
+                itemKeys = remember(cards) {
+                    val allKey = if (kind == IptvSection.PLAYLIST && cards.size > 1) listOf("iptv-all-playlists") else emptyList()
+                    allKey + cards.map { it.id }
+                },
             ),
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
@@ -1986,6 +2125,28 @@ private fun IptvKindGrid(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            // "View All Playlists" — a grouped tile that opens every IPTV
+            // playlist's contents at once. Only when there is more than one
+            // playlist to group; a single playlist's tile is already that.
+            if (kind == IptvSection.PLAYLIST && cards.size > 1) {
+                item(key = "iptv-all-playlists") {
+                    val totalChannels = remember(cards) { cards.sumOf { it.channels } }
+                    val totalGroups = remember(cards) { cards.sumOf { it.groups } }
+                    IptvTile(
+                        cover = null,
+                        name = tr("View All Playlists"),
+                        subtitle = I18n.t("%s playlists · %s channels · %s groups")
+                            .replace("%s", cards.size.toString())
+                            .replace("%s", totalChannels.toString())
+                            .replace("%s", totalGroups.toString()),
+                        shape = shape,
+                        badge = null,
+                        onRemove = null,
+                    ) {
+                        Routes.safeNavigate(nav, Routes.iptvAllPlaylists())
+                    }
+                }
+            }
             items(cards, key = { it.id }) { card ->
                 IptvTile(
                     cover = card.cover,
@@ -2437,27 +2598,26 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
 
     // Show sheet when a quick channel is selected
     LaunchedEffect(selectedQc) {
-        if (selectedQc != null) {
-            showSheet = true
-            qcLoading = true
-            qcMatches = emptyList()
-            aliveByUrl = emptyMap()
-            
-            scope.launch(Dispatchers.IO) {
-                val allChannels = mutableListOf<IptvChannel>()
-                for (p in playlists) {
-                    runCatching { allChannels.addAll(p.channels()) }.getOrNull()
-                }
-                val matches = allChannels.filter { ch -> 
-                    QuickChannelList.matches(selectedQc!!, ch) 
-                }
-                qcMatches = matches
-                qcLoading = false
-                
-                // Real network stream probe — progressive live updates
-                validateChannelStatuses(matches) { url, isAlive ->
-                    aliveByUrl = aliveByUrl + (url to isAlive)
-                }
+        val qc = selectedQc ?: return@LaunchedEffect
+        showSheet = true
+        qcLoading = true
+        qcMatches = emptyList()
+        aliveByUrl = emptyMap()
+
+        scope.launch(Dispatchers.IO) {
+            val allChannels = mutableListOf<IptvChannel>()
+            for (p in playlists) {
+                runCatching { allChannels.addAll(p.channels()) }.getOrNull()
+            }
+            val matches = allChannels.filter { ch ->
+                QuickChannelList.matches(qc, ch)
+            }
+            qcMatches = matches
+            qcLoading = false
+
+            // Real network stream probe — progressive live updates
+            validateChannelStatuses(matches) { url, isAlive ->
+                aliveByUrl = aliveByUrl + (url to isAlive)
             }
         }
     }
@@ -2716,7 +2876,11 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                             "$workingCount/$totalCount working" + if (probedCount < totalCount) " (probing $probedCount/$totalCount…)" else "",
                             color = Color.White.copy(alpha = 0.6f),
                             fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
                         )
+                        Spacer(Modifier.width(8.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             if (workingCount > 0) {
                                 Text(
@@ -2724,21 +2888,25 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                                     color = Color(0xFF4CAF50),
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
                                 Spacer(Modifier.width(8.dp))
                             }
-                            // Toggle to hide dead channels
+                            // Toggle to hide dead channels. Sized to content (no
+                            // fixed height) with generous vertical padding so the
+                            // pill is never clipped, and the left summary shrinks
+                            // via weight(1f) instead of pushing the toggle off-screen.
                             Surface(
                                 onClick = { hideDead = !hideDead },
                                 shape = RoundedCornerShape(12.dp),
                                 color = if (hideDead) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-                                modifier = Modifier.height(24.dp),
                             ) {
                                 Text(
                                     text = if (hideDead) "Offline hidden" else "Show offline",
                                     fontSize = 10.sp,
                                     color = Color.White,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                                 )
                             }
                         }

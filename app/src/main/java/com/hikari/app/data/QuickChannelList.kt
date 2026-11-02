@@ -190,25 +190,37 @@ object QuickChannelList {
         )
         val regionTokens = regionTokensByDisplayName[quickChannel.displayName]
         if (regionTokens != null) {
-            return regionTokens.any { token ->
-                val pattern = if (token.length <= 3) Regex("\\b$token\\b", RegexOption.IGNORE_CASE)
-                    else Regex(token, RegexOption.IGNORE_CASE)
-                pattern.containsMatchIn(nameLower)
-            }
+            return regionTokens.any { token -> wordMatch(nameLower, token) }
         }
 
         // For named channels (e.g. "ESPN", "CNN"), require at least one
-        // alias keyword to appear in the channel name. Word-boundary matching
-        // so "CNN" does not match "CNBC" and "Fox" does not match "Fox Sports".
+        // alias keyword to appear in the channel name as a whole word.
         val aliases = quickChannel.aliases.map { it.lowercase() }
         val displayNameTokens = quickChannel.displayName.lowercase()
             .split("\\s+".toRegex()).filter { it.isNotBlank() }
         val allKeywords = (aliases + displayNameTokens).toSet()
 
-        return allKeywords.any { kw ->
-            if (kw.length <= 2) nameLower.contains(kw)
-            else Regex("\\b${kw.replace("*", "")}\\b", RegexOption.IGNORE_CASE)
-                .containsMatchIn(nameLower)
+        return allKeywords.any { kw -> wordMatch(nameLower, kw) }
+    }
+
+    /**
+     * Match [keyword] as a whole word inside [text]. Falls back to a literal
+     * contains only when the keyword has characters that break \b semantics
+     * (e.g. "E!" — the ! is not a word char, so \be!\b can never match).
+     */
+    private fun wordMatch(text: String, keyword: String): Boolean {
+        val k = keyword.replace("*", "").trim()
+        if (k.isEmpty()) return false
+        val escaped = Regex.escape(k)
+        // \b works cleanly when the keyword is purely alphanumeric.
+        val isPureWord = k.all { it.isLetterOrDigit() }
+        return if (isPureWord) {
+            Regex("\\b$escaped\\b", RegexOption.IGNORE_CASE).containsMatchIn(text)
+        } else {
+            // Non-word keyword (e.g. "E!", "4Music") — match the literal
+            // surrounded by non-alphanumeric boundaries so "4Music" doesn't
+            // match "4MusicHD".
+            Regex("(?<![\\w])$escaped(?![\\w])", RegexOption.IGNORE_CASE).containsMatchIn(text)
         }
     }
 

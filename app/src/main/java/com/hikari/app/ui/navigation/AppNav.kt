@@ -105,6 +105,7 @@ import com.hikari.app.ui.screens.DownloadsScreen
 import com.hikari.app.ui.screens.ExtensionsScreen
 import com.hikari.app.ui.screens.HistoryScreen
 import com.hikari.app.ui.screens.HomeScreen
+import com.hikari.app.ui.screens.IptvAllPlaylistsScreen
 import com.hikari.app.ui.screens.IptvPlaylistScreen
 import com.hikari.app.ui.screens.IptvScreen
 import com.hikari.app.ui.screens.MultiViewLayout
@@ -151,6 +152,9 @@ object Routes {
     const val IPTV = "iptv"
     /** One playlist's own page: its groups, each opening a paged channel grid. */
     const val IPTV_PLAYLIST = "iptv-playlist?pid={pid}"
+    /** F4 — grouped view merging EVERY IPTV playlist's channels (the "View All
+     *  Playlists" tile). */
+    const val IPTV_ALL_PLAYLISTS = "iptv-all-playlists"
     /** F4 — multi-view screen with a grid of ExoPlayer windows. */
     const val MULTI_VIEW = "multi-view?{sessions}&layout={layout}"
 
@@ -321,6 +325,9 @@ object Routes {
     /** Opens one IPTV playlist's group list. */
     fun iptvPlaylist(providerId: String): String =
         "iptv-playlist?pid=${Uri.encode(providerId)}"
+    /** F4 — opens a grouped view that merges EVERY IPTV playlist's channels
+     *  into one channel list (the "View All Playlists" tile). */
+    fun iptvAllPlaylists(): String = "iptv-all-playlists"
     /** F4 — opens the multi-view screen with the given sessions and layout. */
     fun multiView(sessions: List<com.hikari.app.data.MultiViewSession>, layout: String = ""): String {
         val encoded = Uri.encode(com.hikari.app.data.MultiViewSession.encode(sessions))
@@ -1439,6 +1446,9 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
             ) { entry ->
                 val pid = Uri.decode(entry.arguments?.getString("pid").orEmpty())
                 IptvPlaylistScreen(nav, pid)
+            }
+            composable(Routes.IPTV_ALL_PLAYLISTS) {
+                IptvAllPlaylistsScreen(nav)
             }
             composable(
                 route = Routes.MULTI_VIEW,

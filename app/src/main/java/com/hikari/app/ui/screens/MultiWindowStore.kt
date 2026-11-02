@@ -3,6 +3,9 @@ package com.hikari.app.ui.screens
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import java.io.File
 
 /**
  * F4 — Multi-window state store, ported from Nuvio's MultiWindowStore.
@@ -40,6 +43,102 @@ object MultiWindowStore {
     private val slotPlaylists = mutableMapOf<Int, List<WindowStream>>()
     private val slotPlaylistIdx = mutableMapOf<Int, Int>()
     private val _fullscreenStreamId = mutableStateOf<String?>(null)
+
+    // ── Layout persistence ────────────────────────────────────────────────
+    /**
+     * One saved multi-window configuration: a name, the layout key, and the
+     * streams each slot holds (name + url + logo). Tapping a saved layout in
+     * the multi-window page restores every slot at once — no re-pasting links.
+     */
+    @Serializable
+    data class SavedLayout(
+        val name: String,
+        val layoutKey: String,
+        val slots: List<SavedSlot> = emptyList(),
+    )
+
+    @Serializable
+    data class SavedSlot(
+        val slotIndex: Int,
+        val name: String,
+        val url: String,
+        val logo: String? = null,
+    )
+
+    private const val LAYOUTS_FILE = "multiview_layouts.json"
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private val _savedLayouts = mutableStateListOf<SavedLayout>()
+
+    val savedLayouts: List<SavedLayout> get() = _savedLayouts
+
+    fun initLayouts(cacheDir: File) {
+        _savedLayouts.clear()
+        val f = File(cacheDir, LAYOUTS_FILE)
+        if (!f.exists()) return
+        val raw = try { f.readText() } catch (_: Exception) { "" }
+        if (raw.isBlank()) return
+        try { _savedLayouts.addAll(json.decodeFromString<List<SavedLayout>>(raw)) } catch (_: Exception) {}
+    }
+
+    private fun persistLayouts(cacheDir: File) {
+        runCatching { File(cacheDir, LAYOUTS_FILE).writeText(json.encodeToString(_savedLayouts.toList())) }
+    }
+
+    /**
+     * Saves the CURRENT multi-window configuration under [name]. Overwrites a
+     * layout already saved under that name (so "Save Layouts" is idempotent —
+     * re-saving a layout you just tweaked updates it in place).
+     */
+    fun saveLayouts(cacheDir: File, name: String) {
+        val key = name.trim().ifBlank { "Layout ${_savedLayouts.size + 1}" }
+        val snapshot = streams.map { s ->
+            SavedSlot(slotIndex = s.slotIndex, name = s.name, url = s.url, logo = s.logo)
+        }.sortedBy { it.slotIndex }
+        val layoutKey = _currentLayout.value?.name ?: "GRID_2x3"
+        val saved = SavedLayout(name = key, layoutKey = layoutKey, slots = snapshot)
+        val idx = _savedLayouts.indexOfFirst { it.name.equals(key, ignoreCase = true) }
+        if (idx >= 0) _savedLayouts[idx] = saved else _savedLayouts.add(saved)
+        persistLayouts(cacheDir)
+    }
+
+    /** Remove a saved layout by name. */
+    fun deleteLayout(cacheDir: File, name: String) {
+        if (_savedLayouts.removeAll { it.name.equals(name, ignoreCase = true) }) {
+            persistLayouts(cacheDir)
+        }
+    }
+
+    /**
+     * Replace the saved-layouts list in place (used by the rename path so the
+     * sheet's snapshot is the source of truth). Persists to disk.
+     */
+    fun replaceLayouts(cacheDir: File, list: List<SavedLayout>) {
+        _savedLayouts.clear()
+        _savedLayouts.addAll(list)
+        persistLayouts(cacheDir)
+    }
+
+    /** Overload without a cache dir — in-memory only (rename preview). */
+    fun replaceLayouts(list: List<SavedLayout>) {
+        _savedLayouts.clear()
+        _savedLayouts.addAll(list)
+    }
+
+    /**
+     * Apply a saved layout: clear the current grid, then re-add every slot's
+     * stream in slot order. The layout lock follows the saved layout key so the
+     * pill strip shows the same shape the user saved.
+     */
+    fun applyLayout(cacheDir: File, name: String): Boolean {
+        val saved = _savedLayouts.firstOrNull { it.name.equals(name, ignoreCase = true) } ?: return false
+        clear()
+        val layout = runCatching { MultiViewLayout.fromKey(saved.layoutKey) }.getOrNull()
+        if (layout != null) setLayout(layout) else setAutoLayout()
+        saved.slots.forEach { s ->
+            addToSlot(s.name, s.url, s.logo, s.slotIndex)
+        }
+        return true
+    }
 
     fun setSlotPlaylist(slotIndex: Int, channels: List<WindowStream>) {
         slotPlaylists[slotIndex] = channels
