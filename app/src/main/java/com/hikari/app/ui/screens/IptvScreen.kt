@@ -2009,7 +2009,13 @@ private fun IptvSectionPage(
                 IptvSection.LINKS -> onCycleTor
                 else -> onCyclePlaylist
             },
-            onSearch = null,
+            // A magnifier in the IPTV header jumps to the global Search tab,
+            // scoped to IPTV — the same affordance Home's "Search this
+            // extension" uses. Without it the only search on this page was
+            // buried inside one playlist's own group list.
+            onSearch = if (kind == IptvSection.PLAYLIST) {
+                { Routes.navigateTab(nav, Routes.SEARCH) }
+            } else null,
             onAdd = { onAddPreset(kind) },
         )
         IptvKindGrid(
