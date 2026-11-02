@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
@@ -65,6 +66,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -2359,11 +2363,17 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
     val qcTabs = listOf("All", "US", "UK", "CA", "Premium", "Sports", "News", "Custom")
     var selectedQcRegion by remember { mutableStateOf("All") }
 
-    // Custom regions (user-added tabs): JSON array in the cache dir, rendered
-    // as extra tabs between "News" and "Custom".
+    // Custom regions and channels state
     var customRegions by remember { mutableStateOf(emptyList<CustomRegion>()) }
-    LaunchedEffect(cacheDir) {
+    var customChannels by remember { mutableStateOf(emptyList<QuickChannel>()) }
+
+    fun reloadCustomData() {
         customRegions = QuickChannelList.getCustomRegions(cacheDir)
+        customChannels = QuickChannelList.getCustomChannels(cacheDir, emptyList())
+    }
+
+    LaunchedEffect(cacheDir) {
+        reloadCustomData()
     }
     var showAddRegion by remember { mutableStateOf(false) }
     var showAddChannel by remember { mutableStateOf(false) }
@@ -2378,33 +2388,51 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
     var qcMatches by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
     var aliveByUrl by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
     var qcLoading by remember { mutableStateOf(false) }
+    var qcValidating by remember { mutableStateOf(false) }
+    var hideDead by remember { mutableStateOf(true) }
     var sheetExpanded by remember { mutableStateOf(false) }
 
-    // Filtered quick channels — the "Custom" tab reads from the cacheDir
-    // file (QuickChannelList.CUSTOM_FILE), never from prefs directly.
-    val filtered = remember(selectedQcRegion, customRegions) {
+    fun runQcValidation() {
+        if (selectedQc == null || qcValidating) return
+        scope.launch(Dispatchers.IO) {
+            qcValidating = true
+            val currentMatches = qcMatches.ifEmpty {
+                val allChannels = mutableListOf<IptvChannel>()
+                for (p in playlists) {
+                    runCatching { allChannels.addAll(p.channels()) }.getOrNull()
+                }
+                allChannels.filter { ch -> QuickChannelList.matches(selectedQc!!, ch) }
+            }
+            qcMatches = currentMatches
+            validateChannelStatuses(currentMatches) { url, isAlive ->
+                aliveByUrl = aliveByUrl + (url to isAlive)
+            }
+            qcValidating = false
+        }
+    }
+
+    // Filtered quick channels — reactive to selected region, custom regions, and custom channels
+    val filtered = remember(selectedQcRegion, customRegions, customChannels) {
         when (selectedQcRegion) {
-            "All" -> QuickChannelList.default
-            "US" -> QuickChannelList.default.filter { "US" in it.regions }
-            "UK" -> QuickChannelList.default.filter { "UK" in it.regions }
-            "CA" -> QuickChannelList.default.filter { "CA" in it.regions }
-            "Premium" -> QuickChannelList.default.filter { "premium" in it.tags }
-            "Sports" -> QuickChannelList.default.filter { "sports" in it.tags }
-            "News" -> QuickChannelList.default.filter { "news" in it.tags }
-            "Custom" -> QuickChannelList.getCustomChannels(cacheDir, emptyList())
+            "All" -> (QuickChannelList.default + customChannels).distinctBy { it.displayName }
+            "US" -> QuickChannelList.default.filter { "US" in it.regions } + customChannels.filter { c -> c.regions.any { it.equals("us", ignoreCase = true) } }
+            "UK" -> QuickChannelList.default.filter { "UK" in it.regions } + customChannels.filter { c -> c.regions.any { it.equals("uk", ignoreCase = true) } }
+            "CA" -> QuickChannelList.default.filter { "CA" in it.regions } + customChannels.filter { c -> c.regions.any { it.equals("ca", ignoreCase = true) } }
+            "Premium" -> QuickChannelList.default.filter { "premium" in it.tags } + customChannels.filter { c -> c.tags.any { it.equals("premium", ignoreCase = true) } }
+            "Sports" -> QuickChannelList.default.filter { "sports" in it.tags } + customChannels.filter { c -> c.tags.any { it.equals("sports", ignoreCase = true) } }
+            "News" -> QuickChannelList.default.filter { "news" in it.tags } + customChannels.filter { c -> c.tags.any { it.equals("news", ignoreCase = true) } }
+            "Custom" -> customChannels
             else -> {
-                // A user-added custom region tab: channels tagged with that tag.
-                val tag = selectedQcRegion
-                QuickChannelList.getCustomChannels(cacheDir, emptyList())
-                    .filter { tag in it.regions } +
-                    QuickChannelList.default.filter { tag in it.regions }
+                val reg = customRegions.firstOrNull { it.name == selectedQcRegion }
+                val targetTag = reg?.tag ?: selectedQcRegion
+                val customMatches = customChannels.filter { c -> c.regions.any { it.equals(targetTag, ignoreCase = true) || it.equals(selectedQcRegion, ignoreCase = true) } }
+                val defaultMatches = QuickChannelList.default.filter { c -> c.regions.any { it.equals(targetTag, ignoreCase = true) || it.equals(selectedQcRegion, ignoreCase = true) } }
+                (customMatches + defaultMatches).distinctBy { it.displayName }
             }
         }
     }
-    // Re-read custom channels whenever the selection or region list changes
-    // (a new custom channel was added/removed while the sheet was open).
     LaunchedEffect(selectedQcRegion, customRegions) {
-        customRegions = QuickChannelList.getCustomRegions(cacheDir)
+        reloadCustomData()
     }
 
     // Show sheet when a quick channel is selected
@@ -2426,9 +2454,10 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                 qcMatches = matches
                 qcLoading = false
                 
-                // Validate stream statuses (simple heuristic)
-                val statuses = validateChannelStatuses(matches)
-                aliveByUrl = statuses
+                // Real network stream probe — progressive live updates
+                validateChannelStatuses(matches) { url, isAlive ->
+                    aliveByUrl = aliveByUrl + (url to isAlive)
+                }
             }
         }
     }
@@ -2478,6 +2507,32 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                     Spacer(Modifier.width(4.dp))
                     Text("CH", fontSize = 12.sp)
                 }
+                // Validate button — only shown when a quick channel is selected
+                if (selectedQc != null) {
+                    OutlinedButton(
+                        onClick = { runQcValidation() },
+                        enabled = !qcValidating,
+                        shape = RoundedCornerShape(20.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = Color.White.copy(alpha = 0.85f),
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                        modifier = Modifier.height(32.dp),
+                    ) {
+                        if (qcValidating) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = Color.White,
+                            )
+                        } else {
+                            Icon(Icons.Default.VerifiedUser, contentDescription = null, modifier = Modifier.size(16.dp))
+                        }
+                        Spacer(Modifier.width(4.dp))
+                        Text("Validate", fontSize = 12.sp)
+                    }
+                }
             }
         }
 
@@ -2498,7 +2553,8 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                     val isCustomRegion = customRegions.any { it.name == tab }
                     val isActive = selectedQcRegion == tab
                     val regionForTab = customRegions.firstOrNull { it.name == tab }
-                    Box(
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
                             .clip(CircleShape)
                             .background(if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
@@ -2507,9 +2563,6 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                                     Modifier.combinedClickable(
                                         onClick = { selectedQcRegion = tab },
                                         onLongClick = {
-                                            // Open the region dialog in edit mode — the tag is
-                                            // preserved so existing channels keep finding
-                                            // this tab.
                                             regionForTab?.let {
                                                 editingRegion = it
                                                 showAddRegion = true
@@ -2520,28 +2573,30 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                                     Modifier.clickable { selectedQcRegion = tab }
                                 },
                             )
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                            .padding(start = 12.dp, end = if (isCustomRegion) 8.dp else 12.dp, top = 6.dp, bottom = 6.dp),
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                tab,
-                                color = if (isActive) Color.White else Color.White.copy(alpha = 0.7f),
-                                fontSize = 12.sp,
-                                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
-                            )
-                            if (isCustomRegion) {
-                                Spacer(Modifier.width(4.dp))
-                                IconButton(
-                                    onClick = { regionForTab?.let { showDeleteRegion = it } },
-                                    modifier = Modifier.size(18.dp),
-                                ) {
-                                    Icon(
-                                        Icons.Default.Close,
-                                        contentDescription = "Delete region",
-                                        tint = Color.White.copy(alpha = 0.8f),
-                                        modifier = Modifier.size(12.dp),
-                                    )
-                                }
+                        Text(
+                            tab,
+                            color = if (isActive) Color.White else Color.White.copy(alpha = 0.7f),
+                            fontSize = 12.sp,
+                            fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+                        )
+                        if (isCustomRegion) {
+                            Spacer(Modifier.width(6.dp))
+                            Box(
+                                modifier = Modifier
+                                    .size(16.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.White.copy(alpha = 0.2f))
+                                    .clickable { regionForTab?.let { showDeleteRegion = it } },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Delete region",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(10.dp),
+                                )
                             }
                         }
                     }
@@ -2554,15 +2609,12 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            items(filtered, key = { it.displayName }) { qc ->
+            items(filtered, key = { "${it.displayName}_${it.aliases.joinToString()}" }) { qc ->
                 QuickChannelCardBig(
                     qc = qc,
                     isActive = selectedQc == qc,
                     onClick = { selectedQc = qc },
                     onLongClick = {
-                        // Long-press opens the channel dialog in edit mode so
-                        // the alias list can be tweaked; delete is offered from
-                        // inside the dialog.
                         editingChannel = qc
                         showAddChannel = true
                     },
@@ -2601,6 +2653,24 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                         modifier = Modifier.weight(1f),
                     )
                     Spacer(Modifier.width(8.dp))
+                    IconButton(
+                        onClick = { runQcValidation() },
+                        enabled = !qcValidating,
+                    ) {
+                        if (qcValidating) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                            )
+                        } else {
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = "Validate",
+                                tint = Color.White.copy(alpha = 0.8f),
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                    }
                     // Close button
                     IconButton(onClick = { showSheet = false; selectedQc = null }) {
                         Icon(
@@ -2616,6 +2686,7 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
 
                 // Validation status
                 val workingCount = aliveByUrl.values.count { it }
+                val probedCount = aliveByUrl.size
                 val totalCount = qcMatches.size
 
                 if (qcLoading) {
@@ -2635,35 +2706,58 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                         )
                     }
                 } else {
-                    // Status summary
+                    // Status summary & hide offline toggle
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            "$workingCount/$totalCount working",
+                            "$workingCount/$totalCount working" + if (probedCount < totalCount) " (probing $probedCount/$totalCount…)" else "",
                             color = Color.White.copy(alpha = 0.6f),
                             fontSize = 12.sp,
                         )
-                        if (workingCount > 0) {
-                            Text(
-                                "✓ $workingCount live",
-                                color = Color(0xFF4CAF50),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                            )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (workingCount > 0) {
+                                Text(
+                                    "✓ $workingCount live",
+                                    color = Color(0xFF4CAF50),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                            }
+                            // Toggle to hide dead channels
+                            Surface(
+                                onClick = { hideDead = !hideDead },
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (hideDead) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                                modifier = Modifier.height(24.dp),
+                            ) {
+                                Text(
+                                    text = if (hideDead) "Offline hidden" else "Show offline",
+                                    fontSize = 10.sp,
+                                    color = Color.White,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                )
+                            }
                         }
                     }
                     Spacer(Modifier.height(8.dp))
 
-                    // Channel list — live-validated channels float to the top so the
-                    // working ones are always the first taps.
-                    val sortedMatches = remember(qcMatches, aliveByUrl) {
-                        qcMatches.sortedByDescending { aliveByUrl[it.url] == true }
+                    // Channel list — working/live channels float to the top as they validate.
+                    val sortedMatches = remember(qcMatches, aliveByUrl, hideDead) {
+                        qcMatches
+                            .filter { ch ->
+                                if (!hideDead) true
+                                else aliveByUrl[ch.url] != false
+                            }
+                            .sortedWith(compareByDescending<IptvChannel> { aliveByUrl[it.url] == true }
+                                .thenByDescending { aliveByUrl[it.url] == null })
                     }
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         items(sortedMatches) { ch ->
-                            val isWorking = aliveByUrl[ch.url] == true
+                            val isWorking = aliveByUrl[ch.url]
                             ChannelListItem(
                                 channel = ch,
                                 isAlive = isWorking,
@@ -2684,8 +2778,8 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
     if (showAddRegion || editingRegion != null) {
         val isEdit = editingRegion != null
         val seed = editingRegion ?: CustomRegion("", "")
-        var regionName by remember { mutableStateOf(seed.name) }
-        var regionTag by remember { mutableStateOf(seed.tag) }
+        var regionName by remember(editingRegion, showAddRegion) { mutableStateOf(seed.name) }
+        var regionTag by remember(editingRegion, showAddRegion) { mutableStateOf(seed.tag) }
         AlertDialog(
             onDismissRequest = { showAddRegion = false; editingRegion = null },
             title = { Text(if (isEdit) tr("Edit region") else tr("Add region")) },
@@ -2704,19 +2798,18 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                         onValueChange = { regionTag = it },
                         label = { Text(tr("Tag")) },
                         placeholder = { Text(tr("e.g. french, sports2")) },
+                        enabled = !isEdit,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
             },
             confirmButton = {
                 TextButton(
-                    enabled = regionName.isNotBlank() && regionTag.isNotBlank(),
+                    enabled = regionName.isNotBlank() && (isEdit || regionTag.isNotBlank()),
                     onClick = {
-                        // An edit keeps the same tag so existing channels keep
-                        // finding this tab; only the human label changes.
-                        val keepTag = if (isEdit) editingRegion!!.tag else regionTag
-                        QuickChannelList.addCustomRegion(cacheDir, CustomRegion(regionName, keepTag))
-                        customRegions = QuickChannelList.getCustomRegions(cacheDir)
+                        val finalTag = if (isEdit) seed.tag else regionTag.trim().lowercase()
+                        QuickChannelList.addCustomRegion(cacheDir, CustomRegion(regionName.trim(), finalTag))
+                        reloadCustomData()
                         showAddRegion = false
                         editingRegion = null
                     },
@@ -2727,7 +2820,12 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
             dismissButton = {
                 Row {
                     if (isEdit) {
-                        TextButton(onClick = { showDeleteRegion = editingRegion }) {
+                        TextButton(onClick = {
+                            val toDelete = editingRegion
+                            editingRegion = null
+                            showAddRegion = false
+                            showDeleteRegion = toDelete
+                        }) {
                             Text(tr("Delete"), color = MaterialTheme.colorScheme.error)
                         }
                     }
@@ -2751,7 +2849,7 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
             confirmButton = {
                 TextButton(onClick = {
                     QuickChannelList.removeCustomRegion(cacheDir, region.tag)
-                    customRegions = QuickChannelList.getCustomRegions(cacheDir)
+                    reloadCustomData()
                     if (selectedQcRegion == region.name) selectedQcRegion = "All"
                     showDeleteRegion = null
                 }) {
@@ -2767,16 +2865,11 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
     }
     
     // Channel dialog — ADD or EDIT, depending on whether [editingChannel] is set.
-    // The Tags field is gone: tags are what the search uses to classify a
-    // channel, and they were leaking into the results — a channel tagged
-    // "sports" matched the News quick channel and surfaced in its list. The
-    // search now reads only the channel NAME, so the field that fed it is
-    // removed too.
     if (showAddChannel || editingChannel != null) {
         val isEdit = editingChannel != null
         val seed = editingChannel ?: QuickChannel("", emptyList(), emptyList(), emptyList())
-        var channelName by remember { mutableStateOf(seed.displayName) }
-        var channelAlias by remember { mutableStateOf(seed.aliases.joinToString(", ")) }
+        var channelName by remember(editingChannel, showAddChannel) { mutableStateOf(seed.displayName) }
+        var channelAlias by remember(editingChannel, showAddChannel) { mutableStateOf(seed.aliases.joinToString(", ")) }
         AlertDialog(
             onDismissRequest = { showAddChannel = false; editingChannel = null },
             title = { Text(if (isEdit) tr("Edit channel") else tr("Add channel")) },
@@ -2803,16 +2896,29 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
             },
             confirmButton = {
                 TextButton(
-                    enabled = channelName.isNotBlank() && channelAlias.isNotBlank(),
+                    enabled = channelName.isNotBlank(),
                     onClick = {
-                        val aliasList = channelAlias.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                        val parsedAliases = channelAlias.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                        val aliasList = if (parsedAliases.isEmpty()) listOf(channelName.trim()) else parsedAliases
+                        val targetRegions = if (isEdit) {
+                            seed.regions
+                        } else {
+                            when (selectedQcRegion) {
+                                "All", "Custom" -> listOf("custom")
+                                else -> {
+                                    val reg = customRegions.firstOrNull { it.name == selectedQcRegion }
+                                    listOf(reg?.tag ?: selectedQcRegion.lowercase())
+                                }
+                            }
+                        }
                         val qc = QuickChannel(
                             displayName = channelName.trim(),
                             aliases = aliasList,
-                            regions = seed.regions,
+                            regions = targetRegions,
                             tags = seed.tags,
                         )
                         QuickChannelList.addCustomChannel(cacheDir, qc)
+                        reloadCustomData()
                         showAddChannel = false
                         editingChannel = null
                     },
@@ -2823,7 +2929,12 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
             dismissButton = {
                 Row {
                     if (isEdit) {
-                        TextButton(onClick = { showDeleteChannel = editingChannel }) {
+                        TextButton(onClick = {
+                            val toDelete = editingChannel
+                            editingChannel = null
+                            showAddChannel = false
+                            showDeleteChannel = toDelete
+                        }) {
                             Text(tr("Delete"), color = MaterialTheme.colorScheme.error)
                         }
                     }
@@ -2846,6 +2957,7 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
             confirmButton = {
                 TextButton(onClick = {
                     QuickChannelList.removeCustomChannel(cacheDir, qc.displayName)
+                    reloadCustomData()
                     showDeleteChannel = null
                 }) {
                     Text(tr("Delete"), color = MaterialTheme.colorScheme.error)
@@ -2872,13 +2984,12 @@ private fun QuickChannelCardBig(
     onLongClick: () -> Unit = {},
 ) {
     Card(
-        onClick = onClick,
         modifier = Modifier
             .width(160.dp)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (isActive) MaterialTheme.colorScheme.primaryContainer
+            containerColor = if (isActive) MaterialTheme.colorScheme.primaryContainer 
                 else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
         ),
     ) {
@@ -2907,7 +3018,7 @@ private fun QuickChannelCardBig(
 @Composable
 private fun ChannelListItem(
     channel: IptvChannel,
-    isAlive: Boolean,
+    isAlive: Boolean?,
     onClick: () -> Unit,
 ) {
     Row(
@@ -2938,45 +3049,68 @@ private fun ChannelListItem(
         }
         Spacer(Modifier.width(8.dp))
         // Working status indicator
-        if (isAlive) {
-            Box(
-                modifier = Modifier
-                    .size(8.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFF4CAF50)),
-            )
-            Spacer(Modifier.width(4.dp))
-            Text(
-                "Live",
-                color = Color(0xFF4CAF50),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-            )
-        } else {
-            Text(
-                "Play",
-                color = MaterialTheme.colorScheme.primary,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-            )
+        when (isAlive) {
+            true -> {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF4CAF50)),
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    "Live",
+                    color = Color(0xFF4CAF50),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            false -> {
+                Text(
+                    "Offline",
+                    color = MaterialTheme.colorScheme.error,
+                    fontSize = 11.sp,
+                )
+            }
+            null -> {
+                Text(
+                    "Play",
+                    color = MaterialTheme.colorScheme.primary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
         }
     }
 }
 
 /**
- * Simple stream validator - marks channels as working based on URL patterns.
+ * Probes streams in parallel (5 concurrent) and returns a map of URL -> alive flag.
+ * Uses the app's own StreamProbe so the same connection pool and DNS cache are shared.
+ * Calls [onProgress] as each URL finishes so the UI can update live.
  */
-private fun validateChannelStatuses(channels: List<IptvChannel>): Map<String, Boolean> {
-    return channels.associate { ch ->
-        val isWorking = when {
-            ch.url.endsWith(".m3u8", ignoreCase = true) -> true
-            ch.url.endsWith(".mpd", ignoreCase = true) -> true
-            ch.url.contains("m3u8") -> true
-            ch.url.contains(".ts") && ch.url.contains("master") -> true
-            else -> false
-        }
-        ch.url to isWorking
+private suspend fun validateChannelStatuses(
+    channels: List<IptvChannel>,
+    concurrent: Int = 5,
+    onProgress: (String, Boolean) -> Unit = { _, _ -> },
+): Map<String, Boolean> {
+    if (channels.isEmpty()) return emptyMap()
+    val out = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+    val semaphore = Semaphore(concurrent)
+    coroutineScope {
+        channels.map { ch ->
+            async(Dispatchers.IO) {
+                semaphore.withPermit {
+                    val result = com.hikari.app.net.StreamProbe.probe(ch.url)
+                    val isAlive = result?.isAlive ?: false
+                    out[ch.url] = isAlive
+                    com.hikari.app.ui.screens.IptvProbeCache.put(ch.url, result)
+                    onProgress(ch.url, isAlive)
+                }
+            }
+        }.awaitAll()
     }
+    return out
 }
 
 /**
@@ -3016,4 +3150,479 @@ private fun shapeLabel(shape: String): String = when (TileShapes.normalize(shape
     TileShapes.WIDE -> I18n.t("Wide")
     TileShapes.SQUARE -> I18n.t("Square")
     else -> I18n.t("Poster")
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PlayerChannelListDialog(
+    playerActivity: android.content.Context,
+    controller: com.hikari.app.player.ChannelSurfController?,
+    onDismiss: () -> Unit,
+    onSwitch: (IptvChannel) -> Unit,
+) {
+    val app = LocalContext.current.applicationContext as HikariApp
+    val allProviders by app.providers.providers.collectAsState()
+    val playlists = remember(allProviders) { allProviders.filterIsInstance<IptvProvider>() }
+
+    var selectedTab by remember { mutableStateOf(0) }
+    var searchQuery by remember { mutableStateOf("") }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.7f))
+            .clickable(onClick = onDismiss),
+        contentAlignment = Alignment.Center,
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .heightIn(max = 600.dp)
+                .clickable(enabled = false, onClick = {}),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+            ) {
+                // Header & Tabs
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "IPTV Channels",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+
+                TabRow(selectedTabIndex = selectedTab) {
+                    Tab(
+                        selected = selectedTab == 0,
+                        onClick = { selectedTab = 0 },
+                        text = { Text("Current List") }
+                    )
+                    Tab(
+                        selected = selectedTab == 1,
+                        onClick = { selectedTab = 1 },
+                        text = { Text("All Playlists") }
+                    )
+                    Tab(
+                        selected = selectedTab == 2,
+                        onClick = { selectedTab = 2 },
+                        text = { Text("Quick Channels") }
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+
+                when (selectedTab) {
+                    0 -> {
+                        // Current Playlist Channels
+                        val channels = controller?.channels.orEmpty()
+                        val currentIndex = controller?.currentIndex ?: -1
+                        if (channels.isEmpty()) {
+                            Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
+                                Text("No active channel list", color = Color.White.copy(alpha = 0.5f))
+                            }
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier.fillMaxWidth().weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                itemsIndexed(channels) { i, ch ->
+                                    val isCurrent = i == currentIndex
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(if (isCurrent) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                            .clickable {
+                                                if (controller != null) {
+                                                    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
+                                                        controller.switch(i)
+                                                    }
+                                                }
+                                                onSwitch(ch)
+                                                onDismiss()
+                                            }
+                                            .padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .clip(CircleShape)
+                                                .background(if (isCurrent) Color(0xFF4CAF50) else Color.Gray)
+                                        )
+                                        Spacer(Modifier.width(10.dp))
+                                        Text(
+                                            "${i + 1}. ${ch.name}",
+                                            color = Color.White,
+                                            fontSize = 14.sp,
+                                            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    1 -> {
+                        // All Playlists
+                        var allChannels by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
+                        var loading by remember { mutableStateOf(true) }
+                        LaunchedEffect(playlists) {
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                val list = mutableListOf<IptvChannel>()
+                                for (p in playlists) {
+                                    runCatching { list.addAll(p.channels()) }.getOrNull()
+                                }
+                                allChannels = list
+                                loading = false
+                            }
+                        }
+                        
+                        androidx.compose.material3.OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text("Search all channels…") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                        )
+                        Spacer(Modifier.height(8.dp))
+
+                        val filtered = remember(allChannels, searchQuery) {
+                            if (searchQuery.isBlank()) allChannels
+                            else allChannels.filter { it.name.contains(searchQuery, ignoreCase = true) || (it.group != null && it.group.contains(searchQuery, ignoreCase = true)) }
+                        }
+
+                        if (loading) {
+                            Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator()
+                            }
+                        } else if (filtered.isEmpty()) {
+                            Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
+                                Text("No channels found", color = Color.White.copy(alpha = 0.5f))
+                            }
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier.fillMaxWidth().weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                items(filtered.take(200)) { ch ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                            .clickable {
+                                                onSwitch(ch)
+                                                onDismiss()
+                                            }
+                                            .padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                ch.name,
+                                                color = Color.White,
+                                                fontSize = 14.sp,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            if (!ch.group.isNullOrBlank()) {
+                                                Text(
+                                                    ch.group,
+                                                    color = Color.White.copy(alpha = 0.5f),
+                                                    fontSize = 11.sp,
+                                                    maxLines = 1,
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    2 -> {
+                        // Quick Channels embedded view
+                        Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                            QuickChannelsSectionEmbedded(playlists = playlists, onChannelSelected = { ch ->
+                                onSwitch(ch)
+                                onDismiss()
+                            })
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun QuickChannelsSectionEmbedded(playlists: List<IptvProvider>, onChannelSelected: (IptvChannel) -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val cacheDir = remember { (ctx.applicationContext as? HikariApp)?.cacheDir ?: ctx.cacheDir }
+
+    val qcTabs = listOf("All", "US", "UK", "CA", "Premium", "Sports", "News", "Custom")
+    var selectedQcRegion by remember { mutableStateOf("All") }
+
+    var customRegions by remember { mutableStateOf(emptyList<CustomRegion>()) }
+    var customChannels by remember { mutableStateOf(emptyList<QuickChannel>()) }
+
+    fun reloadCustomData() {
+        customRegions = QuickChannelList.getCustomRegions(cacheDir)
+        customChannels = QuickChannelList.getCustomChannels(cacheDir, emptyList())
+    }
+
+    LaunchedEffect(cacheDir) {
+        reloadCustomData()
+    }
+
+    var showSheet by remember { mutableStateOf(false) }
+    var selectedQc by remember { mutableStateOf<QuickChannel?>(null) }
+    var qcMatches by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
+    var aliveByUrl by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
+    var qcLoading by remember { mutableStateOf(false) }
+    var qcValidating by remember { mutableStateOf(false) }
+    var hideDead by remember { mutableStateOf(true) }
+
+    fun runQcValidation() {
+        if (selectedQc == null || qcValidating) return
+        scope.launch(Dispatchers.IO) {
+            qcValidating = true
+            val currentMatches = qcMatches.ifEmpty {
+                val allChannels = mutableListOf<IptvChannel>()
+                for (p in playlists) {
+                    runCatching { allChannels.addAll(p.channels()) }.getOrNull()
+                }
+                allChannels.filter { ch -> QuickChannelList.matches(selectedQc!!, ch) }
+            }
+            qcMatches = currentMatches
+            validateChannelStatusesEmbedded(currentMatches) { url, isAlive ->
+                aliveByUrl = aliveByUrl + (url to isAlive)
+            }
+            qcValidating = false
+        }
+    }
+
+    val filtered = remember(selectedQcRegion, customRegions, customChannels) {
+        when (selectedQcRegion) {
+            "All" -> (QuickChannelList.default + customChannels).distinctBy { it.displayName }
+            "US" -> QuickChannelList.default.filter { "US" in it.regions } + customChannels.filter { c -> c.regions.any { it.equals("us", ignoreCase = true) } }
+            "UK" -> QuickChannelList.default.filter { "UK" in it.regions } + customChannels.filter { c -> c.regions.any { it.equals("uk", ignoreCase = true) } }
+            "CA" -> QuickChannelList.default.filter { "CA" in it.regions } + customChannels.filter { c -> c.regions.any { it.equals("ca", ignoreCase = true) } }
+            "Premium" -> QuickChannelList.default.filter { "premium" in it.tags } + customChannels.filter { c -> c.tags.any { it.equals("premium", ignoreCase = true) } }
+            "Sports" -> QuickChannelList.default.filter { "sports" in it.tags } + customChannels.filter { c -> c.tags.any { it.equals("sports", ignoreCase = true) } }
+            "News" -> QuickChannelList.default.filter { "news" in it.tags } + customChannels.filter { c -> c.tags.any { it.equals("news", ignoreCase = true) } }
+            "Custom" -> customChannels
+            else -> {
+                val reg = customRegions.firstOrNull { it.name == selectedQcRegion }
+                val targetTag = reg?.tag ?: selectedQcRegion
+                val customMatches = customChannels.filter { c -> c.regions.any { it.equals(targetTag, ignoreCase = true) || it.equals(selectedQcRegion, ignoreCase = true) } }
+                val defaultMatches = QuickChannelList.default.filter { c -> c.regions.any { it.equals(targetTag, ignoreCase = true) || it.equals(selectedQcRegion, ignoreCase = true) } }
+                (customMatches + defaultMatches).distinctBy { it.displayName }
+            }
+        }
+    }
+
+    LaunchedEffect(selectedQc) {
+        if (selectedQc != null) {
+            showSheet = true
+            qcLoading = true
+            qcMatches = emptyList()
+            aliveByUrl = emptyMap()
+            
+            scope.launch(Dispatchers.IO) {
+                val allChannels = mutableListOf<IptvChannel>()
+                for (p in playlists) {
+                    runCatching { allChannels.addAll(p.channels()) }.getOrNull()
+                }
+                val matches = allChannels.filter { ch -> QuickChannelList.matches(selectedQc!!, ch) }
+                qcMatches = matches
+                qcLoading = false
+                validateChannelStatusesEmbedded(matches) { url, isAlive ->
+                    aliveByUrl = aliveByUrl + (url to isAlive)
+                }
+            }
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        val allTabs = qcTabs + customRegions.map { it.name }
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            items(allTabs) { tab ->
+                val active = selectedQcRegion == tab
+                Surface(
+                    onClick = { selectedQcRegion = tab },
+                    shape = RoundedCornerShape(16.dp),
+                    color = if (active) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                ) {
+                    Text(
+                        text = tab,
+                        color = if (active) MaterialTheme.colorScheme.onPrimaryContainer else Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+
+        if (filtered.isEmpty()) {
+            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Text("No quick channels in this tab", color = Color.White.copy(alpha = 0.5f))
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                items(filtered) { qc ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                            .clickable { selectedQc = qc }
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            qc.displayName,
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    if (showSheet && selectedQc != null) {
+        androidx.compose.material3.ModalBottomSheet(
+            onDismissRequest = {
+                showSheet = false
+                selectedQc = null
+            },
+            containerColor = MaterialTheme.colorScheme.surface,
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(horizontal = 20.dp, vertical = 12.dp)
+                    .fillMaxWidth()
+                    .heightIn(max = 450.dp),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        selectedQc!!.displayName,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = { runQcValidation() }, enabled = !qcValidating) {
+                        if (qcValidating) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Default.Refresh, contentDescription = "Validate", tint = Color.White)
+                        }
+                    }
+                    IconButton(onClick = { showSheet = false; selectedQc = null }) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+
+                val workingCount = aliveByUrl.values.count { it }
+                val totalCount = qcMatches.size
+
+                if (qcLoading) {
+                    Box(Modifier.fillMaxWidth().height(150.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                } else if (qcMatches.isEmpty()) {
+                    Box(Modifier.fillMaxWidth().height(150.dp), contentAlignment = Alignment.Center) {
+                        Text("No matching channels found", color = Color.White.copy(alpha = 0.5f))
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("$workingCount/$totalCount working", color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp)
+                        Surface(
+                            onClick = { hideDead = !hideDead },
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (hideDead) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                        ) {
+                            Text(if (hideDead) "Offline hidden" else "Show offline", fontSize = 10.sp, color = Color.White, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+
+                    val sortedMatches = remember(qcMatches, aliveByUrl, hideDead) {
+                        qcMatches
+                            .filter { ch -> if (!hideDead) true else aliveByUrl[ch.url] != false }
+                            .sortedWith(compareByDescending<IptvChannel> { aliveByUrl[it.url] == true }.thenByDescending { aliveByUrl[it.url] == null })
+                    }
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(sortedMatches) { ch ->
+                            val isWorking = aliveByUrl[ch.url]
+                            ChannelListItem(channel = ch, isAlive = isWorking, onClick = {
+                                onChannelSelected(ch)
+                                showSheet = false
+                                selectedQc = null
+                            })
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private suspend fun validateChannelStatusesEmbedded(
+    channels: List<IptvChannel>,
+    concurrent: Int = 5,
+    onProgress: (String, Boolean) -> Unit = { _, _ -> },
+): Map<String, Boolean> {
+    if (channels.isEmpty()) return emptyMap()
+    val out = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+    val semaphore = Semaphore(concurrent)
+    coroutineScope {
+        channels.map { ch ->
+            async(Dispatchers.IO) {
+                semaphore.withPermit {
+                    val result = com.hikari.app.net.StreamProbe.probe(ch.url)
+                    val isAlive = result?.isAlive ?: false
+                    out[ch.url] = isAlive
+                    onProgress(ch.url, isAlive)
+                }
+            }
+        }.awaitAll()
+    }
+    return out
 }

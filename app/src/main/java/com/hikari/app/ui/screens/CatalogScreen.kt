@@ -108,6 +108,9 @@ import com.hikari.app.ui.components.VerificationNudge
 import com.hikari.app.ui.navigation.Routes
 import com.hikari.app.ui.rememberVisibleItems
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -115,7 +118,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import java.util.concurrent.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.sync.Semaphore
 
 /** A wall's own words (see verifyWanted): only these offer the WebView. */
 private val WALL_HINT = Regex(
@@ -792,24 +796,23 @@ fun CatalogScreen(
                     }
                     Surface(
                         onClick = {
-                            scope.launch {
+                            scope.launch(Dispatchers.IO) {
                                 channelsValidating = true
                                 val allUrls = items.filter { it.rawType == "channel" }.map { it.id }
-                                val semaphore = Semaphore(10)
-                                allUrls.forEach { url ->
-                                    scope.launch {
-                                        semaphore.acquire()
-                                        try {
-                                            val result = withTimeoutOrNull(6_000) {
-                                                com.hikari.app.net.StreamProbe.probe(url)
+                                val semaphore = Semaphore(8)
+                                coroutineScope {
+                                    allUrls.map { url ->
+                                        async {
+                                            semaphore.withPermit {
+                                                val result = withTimeoutOrNull(6_000) {
+                                                    com.hikari.app.net.StreamProbe.probe(url)
+                                                }
+                                                com.hikari.app.ui.screens.IptvProbeCache.put(url, result)
+                                                channelsValidateVersion++
                                             }
-                                            com.hikari.app.ui.screens.IptvProbeCache.put(url, result)
-                                        } finally {
-                                            semaphore.release()
                                         }
-                                    }
+                                    }.awaitAll()
                                 }
-                                channelsValidateVersion++
                                 channelsValidating = false
                             }
                         },

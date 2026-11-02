@@ -58,6 +58,44 @@ import androidx.activity.ComponentActivity
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.ComposeView
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -1880,7 +1918,7 @@ class PlayerActivity : ComponentActivity() {
                 // channel buttons pinned on underneath them. They now mirror the
                 // controller exactly: visible with it, gone with it, and a tap
                 // on the screen brings both back.
-                val chVis = if (channelSurfController != null) visibility else View.GONE
+                val chVis = if (isIptvStream()) visibility else View.GONE
                 chPrevBtn?.visibility = chVis
                 chNextBtn?.visibility = chVis
                 channelsBtn?.visibility = chVis
@@ -2712,9 +2750,9 @@ class PlayerActivity : ComponentActivity() {
         nextEpBtn?.visibility = if (seriesKnown) View.VISIBLE else View.GONE
         autoplayBtn?.visibility = if (seriesKnown) View.VISIBLE else View.GONE
         autoNextBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
-        chPrevBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
-        chNextBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
-        channelsBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
+        chPrevBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
+        chNextBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
+        channelsBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
         multiWindowBtn?.visibility = View.VISIBLE
 
         sources = runCatching {
@@ -2870,9 +2908,9 @@ class PlayerActivity : ComponentActivity() {
             }
         }
         autoNextBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
-        chPrevBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
-        chNextBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
-        channelsBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
+        chPrevBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
+        chNextBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
+        channelsBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
 
         // Cover the very first frames with the title card: the detail screen
         // showed the same card while it searched, so this keeps the "finding
@@ -7703,95 +7741,58 @@ class PlayerActivity : ComponentActivity() {
 
     /** F1 — Channels pill: lists all channels in the current IPTV playlist so
      *  the user can jump directly to any one without pressing CH+/CH− repeatedly. */
+    /**
+     * True when the stream currently playing is an IPTV channel — either a
+     * playlist channel (channelSurfController is set) or a saved network
+     * stream whose provider id carries the IPTV mark. This is what keeps the
+     * channel buttons and the channels pill available: a user watching a
+     * single saved IPTV URL still wants CH−/CH+ and the channel list, even
+     * though no playlist controller was built for it.
+     */
+    private fun isIptvStream(): Boolean {
+        if (channelSurfController != null) return true
+        if (com.hikari.app.data.IptvMark.isIptvProvider(originProviderId)) return true
+        val item = favouriteItem ?: return false
+        return com.hikari.app.data.IptvMark.of(item)
+    }
+
     private fun showChannelsDialog() {
-        val controller = channelSurfController ?: return
         val dialog = Dialog(this, android.R.style.Theme_Translucent_NoTitleBar)
-        val density = resources.displayMetrics.density
-        dialog.setContentView(LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding((14 * density).toInt(), (8 * density).toInt(),
-                (14 * density).toInt(), (6 * density).toInt())
-        })
-        val list = ScrollView(this).apply {
-            val inner = LinearLayout(this@PlayerActivity).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding((12 * density).toInt(), 0, (12 * density).toInt(), (12 * density).toInt())
-            }
-            val idx = controller.currentIndex
-            val total = controller.total
-            controller.channels.forEachIndexed { i, ch ->
-                val row = LinearLayout(this@PlayerActivity).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    setPadding(0, (8 * density).toInt(), 0, (8 * density).toInt())
-                    weightSum = 1f
-                }
-                val dot = View(this@PlayerActivity).apply {
-                    val color = if (i == idx) 0xFF4CAF50.toInt() else 0xFF3A3F4A.toInt()
-                    setBackgroundColor(color)
-                    layoutParams = LinearLayout.LayoutParams((10 * density).toInt(), (10 * density).toInt()).apply {
-                        marginEnd = (10 * density).toInt()
-                    }
-                }
-                row.addView(dot)
-                val name = TextView(this@PlayerActivity).apply {
-                    text = "${i + 1}. ${ch.name}"
-                    setTextColor(0xFFFFFFFF.toInt())
-                    textSize = 15f
-                    if (i == idx) setTypeface(typeface, android.graphics.Typeface.BOLD)
-                    setPadding((12 * density).toInt(), (10 * density).toInt(), 0, (10 * density).toInt())
-                    maxLines = 1
-                    ellipsize = android.text.TextUtils.TruncateAt.END
-                }
-                row.addView(name, android.widget.LinearLayout.LayoutParams(0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                row.setOnClickListener {
-                    lifecycleScope.launch { controller.switch(i) }
-                    dialog.dismiss()
-                }
-                row.background = GradientDrawable().apply {
-                    setColor(if (i == idx) 0xFF2A3040.toInt() else 0x00000000.toInt())
-                    cornerRadius = (8 * density).toFloat()
-                }
-                inner.addView(row)
-            }
-            addView(inner, android.view.ViewGroup.LayoutParams(
-                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                android.view.ViewGroup.LayoutParams.WRAP_CONTENT
-            ))
-        }
-        val footer = TextView(this).apply {
-            text = "Channel ${controller.currentIndex + 1}/${controller.total}"
-            setTextColor(0xFF8A94A6.toInt())
-            textSize = 12f
-            setPadding((12 * density).toInt(), (6 * density).toInt(), 0, 0)
-        }
         dialog.setCancelable(true)
         dialog.setCanceledOnTouchOutside(true)
+        val composeView = androidx.compose.ui.platform.ComposeView(this).apply {
+            setContent {
+                androidx.compose.material3.MaterialTheme {
+                    com.hikari.app.ui.screens.PlayerChannelListDialog(
+                        playerActivity = this@PlayerActivity,
+                        controller = channelSurfController,
+                        onDismiss = { dialog.dismiss() },
+                        onSwitch = { channel ->
+                            lifecycleScope.launch {
+                                val fresh = fetchChannelStreams(channel)
+                                if (fresh.isNotEmpty()) {
+                                    sources = fresh
+                                    notifySourcesChanged()
+                                    preferredStartIndex().let { playSource(it) }
+                                }
+                            }
+                        },
+                    )
+                }
+            }
+        }
+        dialog.setContentView(composeView, ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        ))
         dialog.window?.let { w ->
             w.setBackgroundDrawable(ColorDrawable(0x99000000.toInt()))
             w.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
         }
-        val col = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding((16 * density).toInt(), 0, (16 * density).toInt(), (16 * density).toInt())
-            addView(list, LinearLayout.LayoutParams(
-                (resources.displayMetrics.widthPixels * 0.88f).toInt(),
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ))
-            addView(footer, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ))
-        }
-        dialog.setContentView(col, LinearLayout.LayoutParams(
-            (resources.displayMetrics.widthPixels * 0.88f).toInt(),
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply {
-            gravity = Gravity.CENTER
-        })
         dialog.show()
     }
 
-    /** The Episodes pill: lists the title's episodes (fetched from the provider
+    /** The Episodes pill: lists the title's episodes (fetched from the provideres (fetched from the provider
      *  stack on demand) and switches playback to the one the user picks, without
      *  leaving the player. */
     private fun showEpisodesDialog() {
@@ -8178,15 +8179,35 @@ class PlayerActivity : ComponentActivity() {
         val currentSource = sources.getOrNull(currentIndex) ?: return
         val name = currentSource.name
         val url = currentSource.url
-        // Send a request that AppRoot will consume and turn into the slot-picker.
-        // The old `multiViewRequest` navigated AWAY from the player; this one
-        // keeps the player visible and asks the Compose layer for a slot.
-        val intent = android.content.Intent(this, com.hikari.app.MainActivity::class.java).apply {
-            addFlags(android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            putExtra("multiViewSlotsOnly", "$name|||$url")
-            putExtra("multiViewLayout", "GRID_2x3")
+        val dialog = Dialog(this, android.R.style.Theme_Translucent_NoTitleBar)
+        dialog.setCancelable(true)
+        dialog.setCanceledOnTouchOutside(true)
+        val composeView = androidx.compose.ui.platform.ComposeView(this).apply {
+            setContent {
+                androidx.compose.material3.MaterialTheme {
+                    com.hikari.app.ui.screens.SlotPickerBottomSheet(
+                        name = name,
+                        url = url,
+                        logo = null,
+                        onDismiss = { dialog.dismiss() },
+                        onSlotSelected = { slotIndex ->
+                            com.hikari.app.ui.screens.MultiWindowStore.addToSlot(name, url, null, slotIndex = slotIndex)
+                            dialog.dismiss()
+                            Toast.makeText(this@PlayerActivity, "Added to MultiView slot ${slotIndex + 1}", Toast.LENGTH_SHORT).show()
+                        },
+                    )
+                }
+            }
         }
-        startActivity(intent)
+        dialog.setContentView(composeView, ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        ))
+        dialog.window?.let { w ->
+            w.setBackgroundDrawable(ColorDrawable(0x99000000.toInt()))
+            w.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
+        }
+        dialog.show()
     }
 
     /** A video that played to its real end advances itself when autoplay is on.
