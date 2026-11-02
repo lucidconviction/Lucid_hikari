@@ -7765,39 +7765,42 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun showChannelsDialog() {
-        val dialog = Dialog(this, android.R.style.Theme_Translucent_NoTitleBar)
-        dialog.setCancelable(true)
-        dialog.setCanceledOnTouchOutside(true)
-        val composeView = androidx.compose.ui.platform.ComposeView(this).apply {
-            setContent {
-                androidx.compose.material3.MaterialTheme {
-                    com.hikari.app.ui.screens.PlayerChannelListDialog(
-                        playerActivity = this@PlayerActivity,
-                        controller = channelSurfController,
-                        onDismiss = { dialog.dismiss() },
-                        onSwitch = { channel ->
-                            lifecycleScope.launch {
-                                val fresh = fetchChannelStreams(channel)
-                                if (fresh.isNotEmpty()) {
-                                    sources = fresh
-                                    notifySourcesChanged()
-                                    preferredStartIndex().let { playSource(it) }
-                                }
-                            }
-                        },
-                    )
+        val options = mutableListOf<GlassOption>()
+        val channels = channelSurfController?.channels.orEmpty()
+        val currentIndex = channelSurfController?.currentIndex ?: -1
+        if (channels.isEmpty()) {
+            Toast.makeText(this, I18n.t("No active channel list"), Toast.LENGTH_SHORT).show()
+            return
+        }
+        channels.forEachIndexed { i, ch ->
+            val isCurrent = i == currentIndex
+            options.add(
+                GlassOption(
+                    label = "${i + 1}. ${ch.name}",
+                    selected = isCurrent,
+                )
+            )
+        }
+        showGlassMenu(
+            I18n.t("IPTV Channels"),
+            options,
+            hint = I18n.t("Switching keeps you inside the player."),
+            iconRes = R.drawable.ic_episodes,
+        ) { which ->
+            channels.getOrNull(which)?.let { channel ->
+                if (channelSurfController != null) {
+                    lifecycleScope.launch {
+                        channelSurfController?.switch(which)
+                        val fresh = fetchChannelStreams(channel)
+                        if (fresh.isNotEmpty()) {
+                            sources = fresh
+                            notifySourcesChanged()
+                            preferredStartIndex().let { playSource(it) }
+                        }
+                    }
                 }
             }
         }
-        dialog.setContentView(composeView, ViewGroup.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT
-        ))
-        dialog.window?.let { w ->
-            w.setBackgroundDrawable(ColorDrawable(0x99000000.toInt()))
-            w.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
-        }
-        dialog.show()
     }
 
     /** The Episodes pill: lists the title's episodes (fetched from the provideres (fetched from the provider
