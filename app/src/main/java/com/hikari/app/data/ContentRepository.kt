@@ -2037,7 +2037,13 @@ class ContentRepository(private val manager: ProviderManager) {
         // at 45s here dies mid-extraction while the reference app plays it.
         val originSkyBudgetMs =
             if (isOrigin && p.config.type == ProviderType.SKYSTREAM) 90_000L else 0L
-        val attemptBudgetMs = maxOf(fullTimeoutMs, originCs3BudgetMs, originSkyBudgetMs)
+        val attemptBudgetMs = if (p.config.type == ProviderType.IPTV) {
+            // A channel lookup is a local playlist row read — it answers in
+            // milliseconds. The 45s floor exists for plugin runtimes that boot
+            // a VM before their first call; an IPTV origin has no runtime, so
+            // a long budget only stretches a call that is already done.
+            NetTuning.timeout(5_000L)
+        } else maxOf(fullTimeoutMs, originCs3BudgetMs, originSkyBudgetMs)
         // The re-ask budget SHRINKS when the first attempt was slow: a cold
         // extension answering empty in milliseconds gets the full budget again
         // (its runtime is still booting), but an attempt that burned seconds
@@ -3091,6 +3097,31 @@ class ContentRepository(private val manager: ProviderManager) {
             detached(budgetMs) { fetchStreams(origin, item, episode) }
         }
         return got.orEmpty()
+    }
+
+    /**
+     * IPTV fast path. An IPTV channel is a LIVE CHANNEL of one playlist: the
+     * origin's [ContentProvider.getStreams] finds the row in the already-cached
+     * playlist and wraps the URL — a local lookup that returns in milliseconds.
+     *
+     * It used to go through the same pass machinery as every other title
+     * ([streamsForInner]): a [BackgroundWork] wakelock, [ensureHangWatchdog],
+     * a [CrossTally], [publishCrossTally], the big log line, and a
+     * `scope.async` launch of [fetchStreams] under a 45s floor with up to three
+     * attempts. Every one of those is overhead for a call that answers in a
+     * moment, so an IPTV channel sat on "Searching this playlist for servers…"
+     * while the pass started up around it. This asks the origin directly, with
+     * no budget, no retry loop, no tally, and no sweep.
+     *
+     * Returns empty when the origin is missing, disabled, or the item is not
+     * an IPTV mark — never a "not a verdict", because there is nothing to be
+     * undecided about: the playlist is local and the answer is immediate.
+     */
+    suspend fun iptvStreams(item: MediaItem, episode: Episode?): List<StreamSource> {
+        if (!IptvMark.of(item)) return emptyList()
+        val origin = manager.byId(item.providerId) ?: return emptyList()
+        if (!origin.config.enabled) return emptyList()
+        return origin.getStreams(item, episode)
     }
 
     /** [streamsFor] plus "did this lookup actually finish?" — see [StreamLookup].

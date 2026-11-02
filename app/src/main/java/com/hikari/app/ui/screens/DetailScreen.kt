@@ -1261,6 +1261,19 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
                 onProgress?.invoke(recent)
             }
         }
+        // IPTV fast path: a channel is a live row of one playlist, so its origin
+        // answers with a local lookup in milliseconds. The pass machinery below
+        // (BackgroundWork, the tally, scope.async, a 45s fetchStreams floor) is
+        // all overhead for that, so an IPTV channel skips it entirely — the
+        // player gets its server on the same pass the cover line is painted.
+        if (com.hikari.app.data.IptvMark.of(item)) {
+            val iptv = repo.iptvStreams(item, ep)
+            if (iptv.isNotEmpty()) {
+                _liveStreams.value = iptv
+                onProgress?.invoke(iptv)
+                return StreamLookup(iptv, complete = true)
+            }
+        }
         // Every provider response is mirrored into the live feed so the UI can
         // start playback with the first server found, regardless of which caller
         // kicked off the search (prefetch or Play tap) — and it is also what a

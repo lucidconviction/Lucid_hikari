@@ -13808,7 +13808,14 @@ class PlayerActivity : ComponentActivity() {
             title = channel.name,
             type = MediaType.MOVIE,
         )
-        val streams = runCatching { contentRepo.streamsFor(item, null) }.getOrDefault(emptyList())
+        val streams = runCatching {
+            // IPTV fast path: a channel lookup is a local playlist row read,
+            // so it skips the pass machinery (BackgroundWork, the tally,
+            // scope.async, the 45s fetchStreams floor) that a CH+/CH- tap
+            // used to pay on every switch.
+            if (com.hikari.app.data.IptvMark.of(item)) contentRepo.iptvStreams(item, null)
+            else contentRepo.streamsFor(item, null)
+        }.getOrDefault(emptyList())
         return streams.mapNotNull { runCatching { it.toPlayerSource() }.getOrNull() }
     }
 
