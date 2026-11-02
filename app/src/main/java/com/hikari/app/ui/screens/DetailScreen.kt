@@ -5524,6 +5524,13 @@ fun DetailScreen(
                                 modifier = Modifier.size(18.dp)
                             )
                         }
+                        // MultiView: icon-only, same size as Download — a text
+                        // label ("MultiView") made the pill wider than its
+                        // siblings and pushed Play off the start of the row on
+                        // narrow screens. The icon alone is enough affordance.
+                        FilledTonalButton(onClick = { Routes.navigateTab(nav, Routes.MULTI_VIEW) }) {
+                            Icon(Icons.Filled.GridView, contentDescription = tr("MultiView"), modifier = Modifier.size(18.dp))
+                        }
                         // Library toggle, mirroring the player's heart: the same
                         // MediaItem and the same store calls, so the two views
                         // can never disagree about what is saved.
