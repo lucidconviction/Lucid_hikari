@@ -2453,11 +2453,12 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                 OutlinedButton(
                     onClick = { showAddRegion = true },
                     shape = RoundedCornerShape(20.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
                     colors = ButtonDefaults.outlinedButtonColors(
                         contentColor = Color.White.copy(alpha = 0.85f),
                     ),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                    modifier = Modifier.height(32.dp).border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(20.dp)),
+                    modifier = Modifier.height(32.dp),
                 ) {
                     Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
@@ -2466,11 +2467,12 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                 OutlinedButton(
                     onClick = { showAddChannel = true },
                     shape = RoundedCornerShape(20.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
                     colors = ButtonDefaults.outlinedButtonColors(
                         contentColor = Color.White.copy(alpha = 0.85f),
                     ),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                    modifier = Modifier.height(32.dp).border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(20.dp)),
+                    modifier = Modifier.height(32.dp),
                 ) {
                     Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
