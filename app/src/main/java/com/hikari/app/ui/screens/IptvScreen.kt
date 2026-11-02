@@ -541,6 +541,28 @@ addStream = false
         showAdd = true
     }
 
+    /** F2 — the header's Validate button. Probes every installed playlist's
+     *  channels in parallel (3 at a time, same as the card read) and caches
+     *  the results, so the health dots on each playlist's tile update
+     *  without re-reading the whole M3U. Declared before [SectionPage] so
+     *  the composable can call it without a forward-reference issue. */
+    fun validateAllPlaylists() {
+        val ps = playlists
+        if (ps.isEmpty()) return
+        scope.launch {
+            ps.chunked(3).forEach { chunk ->
+                withContext(Dispatchers.IO) {
+                    chunk.forEach { p ->
+                        val chs = runCatching { p.channels() }.getOrNull().orEmpty()
+                        chs.filter { it.url.startsWith("http") }.forEach { c ->
+                            IptvProbeCache.put(c.url, com.hikari.app.net.StreamProbe.probe(c.url))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     @Composable
     fun SectionPage(kind: String) {
         IptvSectionPage(
@@ -559,6 +581,7 @@ addStream = false
             onCycleStream = { scope.launch { app.store.setIptvStreamShape(nextShape(streamShape)) } },
             onAddPreset = { presetAdd(it) },
             onRemove = { removeTarget = it },
+            onValidateAll = { validateAllPlaylists() },
         )
     }
 
@@ -1978,6 +2001,7 @@ private fun IptvSectionPage(
     onCycleStream: () -> Unit,
     onAddPreset: (String) -> Unit,
     onRemove: (IptvCard) -> Unit,
+    onValidateAll: () -> Unit,
 ) {
     // Combine tor and stream cards for the LINKS section
     val allLinkCards = remember(torCards, streamCards) { torCards + streamCards }
@@ -2017,6 +2041,11 @@ private fun IptvSectionPage(
                 { Routes.navigateTab(nav, Routes.SEARCH) }
             } else null,
             onAdd = { onAddPreset(kind) },
+            // F2 — the Validate button. It only ever makes sense on the
+            // playlist page (probing a single stream's URL is pointless), so
+            // the other two pages pass null and the header skips the button.
+            onValidate = if (kind == IptvSection.PLAYLIST) onValidateAll else null,
+            validating = false,
         )
         IptvKindGrid(
             kind = kind,

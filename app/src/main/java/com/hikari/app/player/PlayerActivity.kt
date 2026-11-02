@@ -2887,6 +2887,14 @@ class PlayerActivity : ComponentActivity() {
                             // .getStreams path the first play used) and only
                             // swap them in once they're ready, so the picture
                             // never cuts to a dead stream mid-frame.
+                            //
+                            // The title bar and the loading cover both still
+                            // wore the OLD channel's name/logo: the intent's
+                            // "title" extra is set once at launch and nothing
+                            // rewrites it, so a CH+/CH- surf left "CNN" up top
+                            // while "ESPN" was on screen. Refresh both here so
+                            // the name and logo follow the picture.
+                            updateTitleForChannel(channel)
                             coverPlaybackLine = I18n.t("Switching to %s…").replace("%s", channel.name)
                             lifecycleScope.launch {
                                 val fresh = fetchChannelStreams(channel)
@@ -13833,7 +13841,54 @@ class PlayerActivity : ComponentActivity() {
      * this re-runs the same IptvProvider.getStreams path the first play used and
      * returns the rows to swap in.
      */
-    private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel): List<PlayerSource> {
+    /**
+ * Rewrite the player's title bar and loading cover to the channel that was
+ * just switched to. The intent's "title"/"titleLogo" extras are fixed at
+ * launch, so without this a CH+/CH- surf left the OLD channel's name and
+ * logo on screen while the new one played underneath.
+ */
+private fun updateTitleForChannel(channel: com.hikari.app.data.IptvChannel) {
+    val name = channel.name
+    val logo = channel.logo.takeIf { !it.isNullOrBlank() }
+    val epName = intent.getStringExtra("histEpisodeName").orEmpty()
+    val epSeason = intent.getIntExtra("histEpisodeSeason", 0)
+    val epNumber = intent.getIntExtra("histEpisodeNumber", 0)
+    val epText = when {
+        epSeason > 1 && epNumber > 0 -> "S$epSeason E$epNumber" + episodeNameSuffix(epName)
+        epNumber > 0 -> "Episode $epNumber" + episodeNameSuffix(epName)
+        else -> epName
+    }
+
+    // Title bar (title_text / subtitle_text) — the same two views the
+    // reference player's overlay uses.
+    val titleView = findViewById<TextView>(R.id.title_text)
+    titleView?.text = name
+    val sub = findViewById<TextView>(R.id.subtitle_text)
+    sub?.apply {
+        text = epText
+        visibility = if (epText.isBlank()) android.view.View.GONE else android.view.View.VISIBLE
+    }
+
+    // Loading cover's name + wordmark — same slot, only one draws.
+    val logoModel = PosterLoader.model(logo)
+    loadingTitle?.visibility = if (logoModel != null) android.view.View.GONE else android.view.View.VISIBLE
+    loadingTitle?.text = name.uppercase()
+    loadingLogo?.apply {
+        if (logoModel != null) {
+            visibility = android.view.View.VISIBLE
+            load(logoModel)
+        } else {
+            setImageDrawable(null)
+            visibility = android.view.View.GONE
+        }
+    }
+    loadingEpisode?.apply {
+        text = epText
+        visibility = if (epText.isBlank()) android.view.View.GONE else android.view.View.VISIBLE
+    }
+}
+
+private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel): List<PlayerSource> {
         val cfg = runCatching { (applicationContext as HikariApp).store.providers() }
             .getOrDefault(emptyList()).firstOrNull { it.id == originProviderId } ?: return emptyList()
         val item = AppMediaItem(
