@@ -91,7 +91,7 @@ fun WebsitesScreen(nav: NavController) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(tr("Websites") + " · ${sites.size}") },
+                title = { Text(tr("Web Apps") + " · ${sites.size}") },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                 actions = {
                     IconButton(onClick = { isGrid = !isGrid }) {
@@ -102,7 +102,7 @@ fun WebsitesScreen(nav: NavController) {
                         )
                     }
                     IconButton(onClick = { showAddDialog = true }) {
-                        Icon(Icons.Filled.Add, contentDescription = tr("Add website"), tint = Color.White.copy(alpha = 0.8f))
+                        Icon(Icons.Filled.Add, contentDescription = tr("Add web app"), tint = Color.White.copy(alpha = 0.8f))
                     }
                 },
             )
@@ -185,7 +185,7 @@ fun WebsitesScreen(nav: NavController) {
             }
             Spacer(Modifier.height(12.dp))
             Text(
-                tr("Saved websites"),
+                tr("Saved web apps"),
                 color = Color.White.copy(alpha = 0.6f),
                 fontSize = 11.sp,
                 letterSpacing = 1.sp,
@@ -208,7 +208,7 @@ fun WebsitesScreen(nav: NavController) {
                         )
                         Spacer(Modifier.height(12.dp))
                         Text(
-                            tr("No websites added yet — add one below to open any site ad-free."),
+                            tr("No web apps added yet — add one below to open any site ad-free."),
                             color = Color.White.copy(alpha = 0.5f),
                             fontSize = 14.sp,
                         )
@@ -224,7 +224,7 @@ fun WebsitesScreen(nav: NavController) {
                             ) {
                                 Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.Black)
                                 Spacer(Modifier.width(6.dp))
-                                Text(tr("Add website"), color = Color.Black, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                Text(tr("Add web app"), color = Color.Black, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -269,13 +269,13 @@ fun WebsitesScreen(nav: NavController) {
     if (showAddDialog) {
         AlertDialog(
             onDismissRequest = { showAddDialog = false },
-            title = { Text(tr("Add website")) },
+            title = { Text(tr("Add web app")) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedTextField(
                         value = addName,
                         onValueChange = { addName = it },
-                        label = { Text(tr("Website name")) },
+                        label = { Text(tr("Web app name")) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                         colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(),
@@ -283,7 +283,7 @@ fun WebsitesScreen(nav: NavController) {
                     OutlinedTextField(
                         value = addUrl,
                         onValueChange = { addUrl = it },
-                        label = { Text(tr("Website URL")) },
+                        label = { Text(tr("Web app URL")) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                         colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(),
@@ -322,7 +322,7 @@ fun WebsitesScreen(nav: NavController) {
     removeTarget?.let { site ->
         AlertDialog(
             onDismissRequest = { removeTarget = null },
-            title = { Text(tr("Remove website")) },
+            title = { Text(tr("Remove web app")) },
             text = { Text(tr("Remove \"{}\"?").replace("{}", site.name)) },
             confirmButton = {
                 TextButton(onClick = {
@@ -391,7 +391,7 @@ fun SiteCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
             ) {
                 Icon(
                     Icons.Filled.Delete,
-                    contentDescription = tr("Delete website"),
+                    contentDescription = tr("Delete web app"),
                     tint = androidx.compose.material3.MaterialTheme.colorScheme.error,
                     modifier = Modifier.size(16.dp),
                 )
@@ -456,7 +456,7 @@ fun SiteGridCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
             ) {
                 Icon(
                     Icons.Filled.Delete,
-                    contentDescription = tr("Delete website"),
+                    contentDescription = tr("Delete web app"),
                     tint = androidx.compose.material3.MaterialTheme.colorScheme.error,
                     modifier = Modifier.size(14.dp),
                 )

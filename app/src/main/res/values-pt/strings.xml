@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Hikari</string>
+    <string name="app_name">Lucid Hikari</string>
     <string name="settings_language_title">Idioma do aplicativo</string>
     <string name="settings_language_subtitle">Muda os textos do app e os controles do player</string>
     <string name="settings_language_system">Padrão do sistema</string>

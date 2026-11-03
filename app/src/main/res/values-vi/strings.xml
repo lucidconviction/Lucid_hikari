@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Hikari</string>
+    <string name="app_name">Lucid Hikari</string>
     <string name="settings_language_title">Ngôn ngữ ứng dụng</string>
     <string name="settings_language_subtitle">Thay đổi nội dung ứng dụng và điều khiển trình phát</string>
     <string name="settings_language_system">Mặc định hệ thống</string>

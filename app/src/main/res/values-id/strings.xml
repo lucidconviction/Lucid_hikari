@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Hikari</string>
+    <string name="app_name">Lucid Hikari</string>
     <string name="settings_language_title">Bahasa aplikasi</string>
     <string name="settings_language_subtitle">Mengubah teks aplikasi dan kontrol pemutar</string>
     <string name="settings_language_system">Bawaan sistem</string>

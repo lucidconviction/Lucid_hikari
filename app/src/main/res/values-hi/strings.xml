@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Hikari</string>
+    <string name="app_name">Lucid Hikari</string>
     <string name="settings_language_title">ऐप की भाषा</string>
     <string name="settings_language_subtitle">ऐप के शब्द और प्लेयर नियंत्रण बदलता है</string>
     <string name="settings_language_system">सिस्टम डिफ़ॉल्ट</string>

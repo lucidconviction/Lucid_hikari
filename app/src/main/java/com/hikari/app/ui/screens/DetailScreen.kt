@@ -9,13 +9,7 @@ import android.content.Intent
 import android.net.Uri
 import android.view.ViewGroup
 import android.view.Gravity
-import android.widget.FrameLayout
-import android.webkit.WebChromeClient
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -4041,7 +4035,7 @@ fun DetailScreen(
             items = listOf(
                 ChoiceItem(
                     key = "hikari",
-                    label = tr("In Hikari"),
+                    label = tr("In Lucid Hikari"),
                     supporting = tr("Kept offline inside the app"),
                 ),
                 ChoiceItem(
@@ -6735,64 +6729,12 @@ fun DetailScreen(
         }
     }
 
-    // YouTube trailer embedded iframe overlay — plays the trailer in-app
-    // without launching the YouTube app.
+    // YouTube trailer — opens the YouTube app so the video plays properly
+    // (the in-app WebView can't handle YouTube's m.youtube.com redirect).
     activeTrailerKey?.let { (ytKey, ytTitle) ->
-        Dialog(onDismissRequest = { activeTrailerKey = null }) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.92f)),
-                contentAlignment = Alignment.TopEnd,
-            ) {
-                // Close button
-                IconButton(
-                    onClick = { activeTrailerKey = null },
-                    modifier = Modifier.padding(end = 8.dp, top = 8.dp).align(Alignment.TopEnd),
-                ) {
-                    Icon(
-                        Icons.Default.Close,
-                        contentDescription = tr("Close"),
-                        tint = Color.White,
-                        modifier = Modifier.size(28.dp),
-                    )
-                }
-                // Title bar
-                Box(
-                    Modifier
-                        .align(Alignment.TopStart)
-                        .padding(start = 12.dp, top = 10.dp),
-                ) {
-                    Text(
-                        ytTitle,
-                        color = Color.White.copy(alpha = 0.88f),
-                        style = MaterialTheme.typography.titleSmall,
-                        maxLines = 1,
-                        modifier = Modifier.fillMaxWidth(0.75f),
-                    )
-                }
-                // Embedded YouTube iframe via WebView
-                AndroidView(
-                    factory = { ctx ->
-                        WebView(ctx).apply {
-                            layoutParams = FrameLayout.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                ViewGroup.LayoutParams.MATCH_PARENT,
-                            )
-                            settings.javaScriptEnabled = true
-                            settings.domStorageEnabled = true
-                            settings.mediaPlaybackRequiresUserGesture = false
-                            webViewClient = object : WebViewClient() {
-                                override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean = false
-                            }
-                            webChromeClient = WebChromeClient()
-                            loadUrl("https://www.youtube.com/embed/$ytKey?autoplay=1&playsinline=1")
-                        }
-                    },
-                    update = {},
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
+        LaunchedEffect(ytKey) {
+            openYouTubeVideo(context, ytKey, ytTitle)
+            activeTrailerKey = null
         }
     }
 }

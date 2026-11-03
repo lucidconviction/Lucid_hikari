@@ -745,7 +745,7 @@ object BackupManager {
                 "kept $deviceLocal device-local setting(s) of this device's own (app lock / layout)",
             )
         }
-        val fromName = fromApp.ifBlank { "another Hikari" }
+        val fromName = fromApp.ifBlank { "another Lucid Hikari" }
         for ((target, tmp) in staged) {
             val ok = runCatching {
                 if (target.exists() && !target.delete()) false else tmp.renameTo(target)

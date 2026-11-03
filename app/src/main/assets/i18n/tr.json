@@ -1358,5 +1358,14 @@
   "No websites added yet — add one below to open any site ad-free.": "No websites added yet — add one below to open any site ad-free.",
   "Go": "Go",
   "Grid view": "Grid view",
-  "List view": "List view"
+  "List view": "List view",
+  "Web Apps": "Web Apps",
+  "Saved web apps": "Saved web apps",
+  "No web apps added yet — add one below to open any site ad-free.": "No web apps added yet — add one below to open any site ad-free.",
+  "Add web app": "Add web app",
+  "Web app name": "Web app name",
+  "Web app URL": "Web app URL",
+  "Remove web app": "Remove web app",
+  "Delete web app": "Delete web app",
+  "On by default — switch off to hide the Web Apps tab": "On by default — switch off to hide the Web Apps tab"
 }

@@ -1460,7 +1460,7 @@ fun HomeScreen(nav: NavHostController) {
             }
             GlassDialog(
                 onDismiss = dismissCrash,
-                title = tr("Hikari crashed last time"),
+                title = tr("Lucid Hikari crashed last time"),
             ) {
                 Text(
                     tr(
@@ -3075,7 +3075,7 @@ private fun HomeHeader(
     ) {
         Column(Modifier.weight(1f)) {
             Text(
-                tr("Hikari"),
+                tr("Lucid Hikari"),
                 style = MaterialTheme.typography.headlineLarge,
                 fontWeight = FontWeight.Bold,
                 color = accent,

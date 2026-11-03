@@ -19,10 +19,8 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.lifecycleScope
-import com.hikari.app.net.Updater
 import com.hikari.app.ui.AccentStore
 import com.hikari.app.ui.components.TelegramDialog
-import com.hikari.app.ui.components.UpdateDialog
 import com.hikari.app.ui.navigation.AppRoot
 import com.hikari.app.ui.theme.HikariAccent
 import com.hikari.app.ui.theme.HikariTheme
@@ -421,18 +419,6 @@ class MainActivity : AppCompatActivity() {
                 ).isAppearanceLightStatusBars = themeMode == HikariThemeMode.LIGHT
             }
 
-            var showUpdateDialog by remember { mutableStateOf(false) }
-            var updateChecked by remember { mutableStateOf(false) }
-            LaunchedEffect(Unit) {
-                // One quiet check on launch — the dialog only appears when a
-                // newer build exists on GitHub.
-                runCatching { Updater.checkForUpdate() }
-                    .getOrNull()
-                    ?.takeIf { it.available }
-                    ?.let { showUpdateDialog = true }
-                updateChecked = true
-            }
-
             // One-time community invitation per version. Held back until the update
             // check has finished so the two dialogs never stack. "Don't show
             // this again" holds for the CURRENT version only: after an update
@@ -500,13 +486,7 @@ class MainActivity : AppCompatActivity() {
                 // over the lock.
                 com.hikari.app.ui.AppLockGate(this@MainActivity) {
                 AppRoot(themeMode.key)
-                if (showUpdateDialog) {
-                    UpdateDialog(
-                        context = this@MainActivity,
-                        onDismiss = { showUpdateDialog = false },
-                    )
-                }
-                if (showTelegramDialog && updateChecked && !showUpdateDialog) {
+                if (showTelegramDialog) {
                     TelegramDialog(
                         context = this@MainActivity,
                         onDismiss = {

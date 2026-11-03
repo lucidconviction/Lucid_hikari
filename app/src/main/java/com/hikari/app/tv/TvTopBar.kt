@@ -241,7 +241,7 @@ fun TvHomeHeaderBar(
     ) {
         Column(Modifier.weight(1f)) {
             Text(
-                tr("Hikari"),
+                tr("Lucid Hikari"),
                 style = MaterialTheme.typography.headlineLarge,
                 fontWeight = FontWeight.Bold,
                 color = accent,

@@ -100,16 +100,12 @@ import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestorePage
-import androidx.compose.material.icons.filled.Forum
-import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.SaveAlt
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.SettingsBackupRestore
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Slideshow
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Translate
@@ -184,7 +180,6 @@ import com.hikari.app.net.AdBlocker
 import com.hikari.app.net.DnsProviders
 import com.hikari.app.net.DohDns
 import com.hikari.app.net.NetTuning
-import com.hikari.app.net.Updater
 import com.hikari.app.player.EnhancePreset
 import com.hikari.app.player.CustomEnhancePreset
 import com.hikari.app.player.PlayerSkins
@@ -211,17 +206,12 @@ import com.hikari.app.ui.screens.MultiViewLayout
 import com.hikari.app.ui.components.TrackerLoginDialog
 import com.hikari.app.ui.components.helpShown
 import com.hikari.app.ui.LanguageManager
-import com.hikari.app.ui.components.UpdateDialog
 import com.hikari.app.ui.navigation.BottomTab
 import com.hikari.app.ui.navigation.BottomTabs
 import com.hikari.app.ui.navigation.LocalTaskbarInset
 import com.hikari.app.ui.navigation.NavStyles
 import com.hikari.app.ui.navigation.Routes
 import com.hikari.app.ui.edgeLight
-import com.hikari.app.ui.DISCORD_INVITE_URL
-import com.hikari.app.ui.REDDIT_COMMUNITY_URL
-import com.hikari.app.ui.openCommunity
-import com.hikari.app.ui.openTelegram
 import java.io.File
 import com.hikari.app.ui.theme.HikariAccent
 import com.hikari.app.ui.theme.HikariThemeMode
@@ -429,7 +419,7 @@ private enum class SettingsFolder(
     CLEAR_DATA(
         "clear-data",
         "Clear App data",
-        "Delete everything Hikari has stored on this device",
+        "Delete everything Lucid Hikari has stored on this device",
         Icons.Filled.DeleteForever,
     ),
 
@@ -678,9 +668,6 @@ fun SettingsScreen(nav: NavHostController) {
     val isTv = TvMode.current()
 
     var themeMenuOpen by remember { mutableStateOf(false) }
-    var checkingUpdates by remember { mutableStateOf(false) }
-    var updateStatus by remember { mutableStateOf<Updater.UpdateStatus?>(null) }
-    var showUpdateDialog by remember { mutableStateOf(false) }
     var openFolder by remember { mutableStateOf<SettingsFolder?>(null) }
     var settingsQuery by remember { mutableStateOf("") }
     val searchHits = remember(settingsQuery) {
@@ -1191,139 +1178,9 @@ fun SettingsScreen(nav: NavHostController) {
                                         Text(BuildConfig.VERSION_NAME + I18n.t(" (build ") + BuildConfig.VERSION_CODE + ")")
                                     }
                                 )
-                                SettingsDivider()
-                                ListItem(
-                                    leadingContent = {
-                                        Icon(
-                                            Icons.Filled.SystemUpdate,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
-                                    },
-                                    headlineContent = { Text(tr("Check for updates")) },
-                                    supportingContent = {
-                                        if (checkingUpdates) {
-                                            Text(tr("Checking GitHub…"))
-                                        } else {
-                                            Text(tr("Version ") + Updater.currentVersion())
-                                        }
-                                    },
-                                    trailingContent = {
-                                        if (checkingUpdates) {
-                                            CircularProgressIndicator(
-                                                Modifier.size(20.dp),
-                                                strokeWidth = 2.dp
-                                            )
-                                        }
-                                    },
-                                    modifier = Modifier.clickable {
-                                        if (!checkingUpdates) {
-                                            checkingUpdates = true
-                                            scope.launch {
-                                                updateStatus = runCatching { Updater.checkForUpdate() }.getOrNull()
-                                                checkingUpdates = false
-                                                showUpdateDialog = true
-                                            }
-                                        }
-                                    }
-                                )
-                                SettingsDivider()
-                                ListItem(
-                                    leadingContent = {
-                                        Icon(
-                                            Icons.Filled.OpenInNew,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
-                                    },
-                                    headlineContent = { Text(tr("GitHub")) },
-                                    supportingContent = { Text(tr("github.com/codegeasse1/hikari — releases & source")) },
-                                    trailingContent = {
-                                        Icon(
-                                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    },
-                                    modifier = Modifier.clickable {
-                                        context.startActivity(
-                                            Intent(
-                                                Intent.ACTION_VIEW,
-                                                Uri.parse("https://github.com/codegeasse1/hikari")
-                                            )
-                                        )
-                                    }
-                                )
-                                SettingsDivider()
-                                ListItem(
-                                    leadingContent = {
-                                        Icon(
-                                            Icons.Filled.Send,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
-                                    },
-                                    headlineContent = { Text(tr("Telegram")) },
-                                    supportingContent = { Text(tr("t.me/CodegeasseHikari — help, bugs & feature requests")) },
-                                    trailingContent = {
-                                        Icon(
-                                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    },
-                                    modifier = Modifier.clickable {
-                                        openTelegram(context)
-                                    }
-                                )
-                                SettingsDivider()
-                                ListItem(
-                                    leadingContent = {
-                                        Icon(
-                                            Icons.Filled.Forum,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
-                                    },
-                                    headlineContent = { Text(tr("Reddit")) },
-                                    supportingContent = { Text(tr("r/HikariApp — help, discussion & release news")) },
-                                    trailingContent = {
-                                        Icon(
-                                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    },
-                                    modifier = Modifier.clickable {
-                                        openCommunity(context, REDDIT_COMMUNITY_URL)
-                                    }
-                                )
-                                SettingsDivider()
-                                ListItem(
-                                    leadingContent = {
-                                        Icon(
-                                            Icons.Filled.Chat,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
-                                    },
-                                    headlineContent = { Text(tr("Discord")) },
-                                    supportingContent = { Text(tr("Hikari server — help, discussion & release news")) },
-                                    trailingContent = {
-                                        Icon(
-                                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    },
-                                    modifier = Modifier.clickable {
-                                        openCommunity(context, DISCORD_INVITE_URL)
-                                    }
-                                )
                             }
                         }
                     }
-                    item { SettingsCard { RoadmapCard() } }
                     item { SettingsCard { AboutCard() } }
                 }
                 // Deleting the app's data lives here, and only here. The card
@@ -1552,14 +1409,6 @@ fun SettingsScreen(nav: NavHostController) {
         }
     }
 
-    if (showUpdateDialog) {
-        UpdateDialog(
-            context = context,
-            onDismiss = { showUpdateDialog = false },
-            initialStatus = updateStatus,
-        )
-    }
-
     // The warning the folder's button opens. Nothing about clearing data is
     // destructive until the confirm button here is tapped, so this dialog is
     // the only place the wipe is called from.
@@ -1572,7 +1421,7 @@ fun SettingsScreen(nav: NavHostController) {
                     tr(
                         "All your data will be deleted: every setting, signed-in " +
                             "account, catalog, favorite, watch-history entry and " +
-                            "download record Hikari has stored on this device. " +
+                            "download record Lucid Hikari has stored on this device. " +
                             "This cannot be undone."
                     )
                 )
@@ -1968,33 +1817,6 @@ private fun AdultContentCard(app: HikariApp) {
                     scope.launch { runCatching { app.store.setNsfwEnabled(v) } }
                 },
             )
-        }
-    }
-}
-
-@Composable
-private fun RoadmapCard() {
-    Column(Modifier.padding(16.dp)) {
-        Text(
-            tr("Roadmap"),
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.primary
-        )
-        Spacer(Modifier.height(6.dp))
-        if (!LocalHideHelp.current) {
-        Text(
-            tr("✓ Stremio addons\n" + "✓ Universal scrapers\n") +
-                I18n.t("✓ HLS/DASH player with headers + subtitles\n") +
-                I18n.t("✓ CloudStream .cs3 plugin loader\n") +
-                I18n.t("✓ Torrent engine for infoHash streams\n") +
-                I18n.t("✓ Watch history + Continue Watching (all extensions)\n") +
-                I18n.t("✓ Downloads — offline copies, export to phone storage, concurrent limit\n") +
-                I18n.t("✓ SkyStream .sky extensions (scriptable JS providers)\n") +
-                I18n.t("✓ Trackers — AniList, MyAnimeList, Kitsu, Simkl, Shikimori & Trakt\n") +
-                I18n.t("• Manga reading progress on your tracker (AniList + MyAnimeList)"),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
         }
     }
 }
@@ -2446,7 +2268,7 @@ private fun TaskbarCard(app: HikariApp) {
                     }
                     if (tab.route == Routes.WEBSITES) {
                         Text(
-                            tr("On by default — switch off to hide the Websites tab"),
+                            tr("On by default — switch off to hide the Web Apps tab"),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -2640,7 +2462,7 @@ private fun FontCard(app: HikariApp) {
             if (picked == null) {
                 Toast.makeText(
                     context,
-                    I18n.t("That file isn't a font Hikari can read."),
+                    I18n.t("That file isn't a font Lucid Hikari can read."),
                     Toast.LENGTH_SHORT,
                 ).show()
             } else {
@@ -2885,7 +2707,7 @@ private fun PosterStyleCard(app: HikariApp) {
         SettingsToggle(
             label = tr("Quality tag on posters"),
             supporting = tr(
-                "The best quality Hikari knows for a title — from its name, or from the " +
+                "The best quality Lucid Hikari knows for a title — from its name, or from the " +
                     "servers found when you last opened it. Titles it has never seen show nothing."
             ),
             checked = qualityBadge,
@@ -6323,7 +6145,7 @@ private fun AppLockCard(app: HikariApp) {
     Column(Modifier.padding(16.dp)) {
         SettingsCardHeading(Icons.Filled.Lock, tr("App lock"))
         SettingsToggle(
-            label = tr("Ask for a password when Hikari opens"),
+            label = tr("Ask for a password when Lucid Hikari opens"),
             supporting = if (on) tr("On — the app opens locked") else tr("Off"),
             checked = on,
             onCheckedChange = { want ->
@@ -6916,7 +6738,7 @@ private fun TrackerServiceCard(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
-                    if (connected) tr("This account can receive Hikari watch updates.") else kind.blurb,
+                    if (connected) tr("This account can receive Lucid Hikari watch updates.") else kind.blurb,
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.White.copy(alpha = 0.78f),
                 )
@@ -6979,12 +6801,12 @@ private fun TrackersCard(app: HikariApp) {
         Spacer(Modifier.height(10.dp))
         val librarySource by app.store.trackerLibrarySourceFlow().collectAsState(initial="nuvio")
         var libraryPicker by remember { mutableStateOf(false) }
-        val libraryLabels=mapOf("nuvio" to tr("Hikari Library"),"anilist" to tr("AniList"),"mal" to tr("MyAnimeList"),"kitsu" to tr("Kitsu"),"simkl" to tr("Simkl"),"shikimori" to tr("Shikimori"),"trakt" to tr("Trakt"))
+        val libraryLabels=mapOf("nuvio" to tr("Lucid Hikari Library"),"anilist" to tr("AniList"),"mal" to tr("MyAnimeList"),"kitsu" to tr("Kitsu"),"simkl" to tr("Simkl"),"shikimori" to tr("Shikimori"),"trakt" to tr("Trakt"))
         Text(tr("Library source"),style=MaterialTheme.typography.titleSmall,color=MaterialTheme.colorScheme.primary)
-        Text(tr("Load watchlists and personal/status lists from the connected tracker directly into Hikari."),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(tr("Load watchlists and personal/status lists from the connected tracker directly into Lucid Hikari."),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(8.dp))
         ChoiceRow(value=libraryLabels[librarySource] ?: librarySource,leadingIcon=Icons.Filled.FolderOpen,onClick={libraryPicker=true})
-        if(libraryPicker) ChoiceDialog(title=tr("Choose library source"),items=libraryLabels.map{(key,label)->ChoiceItem(key,label,if(key=="nuvio") tr("Use Hikari's saved library") else tr("Connect this tracker first"))},selectedKey=librarySource,onPick={scope.launch{app.store.setTrackerLibrarySource(it)}},onDismiss={libraryPicker=false})
+        if(libraryPicker) ChoiceDialog(title=tr("Choose library source"),items=libraryLabels.map{(key,label)->ChoiceItem(key,label,if(key=="nuvio") tr("Use Lucid Hikari's saved library") else tr("Connect this tracker first"))},selectedKey=librarySource,onPick={scope.launch{app.store.setTrackerLibrarySource(it)}},onDismiss={libraryPicker=false})
         Spacer(Modifier.height(14.dp))
 
         for (kind in TrackerKind.entries) {
@@ -7520,7 +7342,7 @@ private fun BackupCard(app: HikariApp, onPair: () -> Unit) {
         Spacer(Modifier.height(12.dp))
         BackupRow(
             icon = Icons.Filled.SaveAlt,
-            title = tr("Back up Hikari data"),
+            title = tr("Back up Lucid Hikari data"),
             subtitle = tr("Save extensions and settings to a file"),
             action = tr("Back up"),
             enabled = !busy,
@@ -7530,7 +7352,7 @@ private fun BackupCard(app: HikariApp, onPair: () -> Unit) {
         BackupRow(
             icon = Icons.Filled.RestorePage,
             title = tr("Restore from a backup"),
-            subtitle = tr("Bring a Hikari backup back"),
+            subtitle = tr("Bring a Lucid Hikari backup back"),
             action = tr("Restore"),
             enabled = !busy,
             onClick = { picker.launch(arrayOf("application/json", "text/plain", "*/*")) },

@@ -441,7 +441,7 @@ private fun AppLockScreen(
     // The strings the fingerprint prompt is built from are read HERE, in the
     // composable body: `tr` is itself composable and cannot be called from the
     // plain functions below.
-    val bioTitle = tr("Unlock Hikari")
+    val bioTitle = tr("Unlock Lucid Hikari")
     val bioSubtitle = tr("Use your fingerprint to open the app")
     val bioNegative = tr("Use password")
 
@@ -571,7 +571,7 @@ private fun AppLockScreen(
             )
             Spacer(Modifier.height(12.dp))
             Text(
-                tr("Unlock to use Hikari"),
+                tr("Unlock to use Lucid Hikari"),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
             )

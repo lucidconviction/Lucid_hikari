@@ -1163,8 +1163,8 @@ class ExtensionsViewModel(app: Application) : AndroidViewModel(app) {
             val detail = HikariPluginManager.lastError?.take(600)
             return Result.failure(
                 Exception(
-                    if (detail.isNullOrBlank()) "No Hikari extension found in this .hiki file"
-                    else "No Hikari extension loaded:\n$detail"
+                    if (detail.isNullOrBlank()) "No Lucid Hikari extension found in this .hiki file"
+                    else "No Lucid Hikari extension loaded:\n$detail"
                 )
             )
         }
@@ -2548,9 +2548,9 @@ class ExtensionsViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 throw Exception(
-                    "That file does not look like a repo Hikari can auto-add — open " +
+                    "That file does not look like a repo Lucid Hikari can auto-add — open " +
                         "Extensions and paste it into the matching box (CloudStream / " +
-                        "Nuvio / SkyStream / Aniyomi / Vega / Sora / Anymex / Hikari / Stremio / LNReader)"
+                        "Nuvio / SkyStream / Aniyomi / Vega / Sora / Anymex / Lucid Hikari / Stremio / LNReader)"
                 )
             }
             if (body.startsWith("[")) {
@@ -2588,11 +2588,11 @@ class ExtensionsViewModel(app: Application) : AndroidViewModel(app) {
                     return@runCatching RepoLinkResult(repo)
                 }
                 throw Exception(
-                    "That file is a JSON array Hikari does not recognise — Aniyomi " +
+                    "That file is a JSON array Lucid Hikari does not recognise — Aniyomi " +
                         "indexes, Vega manifests, Zangetsu manifests and LNReader indexes are supported"
                 )
             }
-            throw Exception("That file is not a repo Hikari understands (not JSON)")
+            throw Exception("That file is not a repo Lucid Hikari understands (not JSON)")
         }
     }
 
@@ -4920,7 +4920,7 @@ fun ExtensionsScreen(nav: NavHostController? = null) {
                         Spacer(Modifier.width(12.dp))
                         Text(
                             when (repoDialogKind) {
-                                RepoKind.HIKARI -> "Hikari"
+                                RepoKind.HIKARI -> "Lucid Hikari"
                                 RepoKind.NUVIO -> "Nuvio"
                                 RepoKind.SKYSTREAM -> "SkyStream"
                                 RepoKind.ANIYOMI -> "Aniyomi"
@@ -6233,7 +6233,7 @@ private fun RepoBrowserView(
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         srcCard(Icons.Filled.Cloud, tr("CloudStream repos"), tr("repo.json · CloudStream extensions"), { onOpenFolder(SourceFolder.CLOUDSTREAM) })
-                        srcCard(HikariTorii, tr("Hikari repos"), tr("repo.json · Hikari extensions"), { onOpenFolder(SourceFolder.HIKARI) })
+                        srcCard(HikariTorii, tr("Lucid Hikari repos"), tr("repo.json · Lucid Hikari extensions"), { onOpenFolder(SourceFolder.HIKARI) })
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         srcCard(NuvioTriangle, tr("Nuvio repos"), tr("manifest.json · Nuvio providers"), { onOpenFolder(SourceFolder.NUVIO) })
@@ -6288,8 +6288,8 @@ private fun RepoBrowserView(
                     SourceDivider()
                     SourceActionRow(
                         icon = HikariTorii,
-                        title = tr("Hikari repos"),
-                        subtitle = tr("repo.json · Hikari extensions"),
+                        title = tr("Lucid Hikari repos"),
+                        subtitle = tr("repo.json · Lucid Hikari extensions"),
                         onClick = { onOpenFolder(SourceFolder.HIKARI) }
                     )
                     SourceDivider()
@@ -7983,7 +7983,7 @@ private fun RepoCard(
                     Text(
                         when (repo.kind) {
                             RepoKind.CS3 -> "CloudStream"
-                            RepoKind.HIKARI -> "Hikari"
+                            RepoKind.HIKARI -> "Lucid Hikari"
                             RepoKind.NUVIO -> "Nuvio"
                             RepoKind.SKYSTREAM -> "SkyStream"
                             RepoKind.ANIYOMI -> "Aniyomi"
@@ -8847,7 +8847,7 @@ private fun SourceFolderView(
     }
     val (title, subtitle) = when (folder) {
         SourceFolder.CLOUDSTREAM -> "CloudStream repos" to "repo.json · CloudStream extensions"
-        SourceFolder.HIKARI -> "Hikari repos" to "repo.json · Hikari extensions"
+        SourceFolder.HIKARI -> "Lucid Hikari repos" to "repo.json · Lucid Hikari extensions"
         SourceFolder.NUVIO -> "Nuvio repos" to "manifest.json · Nuvio providers"
         SourceFolder.SKYSTREAM -> "SkyStream repos" to "repo.json · SkyStream extensions"
         SourceFolder.ANIYOMI -> "Aniyomi repos" to "index.min.json · Aniyomi extensions"
@@ -8864,7 +8864,7 @@ private fun SourceFolderView(
     }
     val kindLabel = when (folder) {
         SourceFolder.CLOUDSTREAM -> "CloudStream"
-        SourceFolder.HIKARI -> "Hikari"
+        SourceFolder.HIKARI -> "Lucid Hikari"
         SourceFolder.NUVIO -> "Nuvio"
         SourceFolder.SKYSTREAM -> "SkyStream"
         SourceFolder.ANIYOMI -> "Aniyomi"
@@ -9315,7 +9315,7 @@ private fun SourcesOverviewView(
         )
     }
     val cs3GroupTitle = tr("CloudStream")
-    val hikiGroupTitle = tr("Hikari")
+    val hikiGroupTitle = tr("Lucid Hikari")
     val nuvioGroupTitle = tr("Nuvio")
     val skyGroupTitle = tr("SkyStream")
     val aniyomiGroupTitle = tr("Aniyomi")
@@ -9880,7 +9880,7 @@ private fun AllReposView(
                 item {
                     EmptyState(
                         title = tr("No repos added yet"),
-                        subtitle = tr("Tap \"Add repo\" below to add a CloudStream, Hikari or Nuvio repo."),
+                        subtitle = tr("Tap \"Add repo\" below to add a CloudStream, Lucid Hikari or Nuvio repo."),
                         actionLabel = null,
                         action = null
                     )

@@ -138,7 +138,7 @@ fun TrackerLoginDialog(
 
     fun copy(text: String) {
         val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        cb.setPrimaryClip(ClipData.newPlainText("Hikari", text))
+        cb.setPrimaryClip(ClipData.newPlainText("Lucid Hikari", text))
         Toast.makeText(context, copiedMsg, Toast.LENGTH_SHORT).show()
     }
 
@@ -435,7 +435,7 @@ fun TrackerLoginDialog(
                     Text(
                         tr(
                             if (hasBuiltIn) {
-                                "${kind.label} is ready to sign in with Hikari's own app id — " +
+                                "${kind.label} is ready to sign in with Lucid Hikari's own app id — " +
                                     "you are only seeing these fields because this device was set " +
                                     "to a different one. Either go back to the built-in below, or " +
                                     "paste another app id:"
@@ -498,7 +498,7 @@ fun TrackerLoginDialog(
                                 error = null
                                 credentialsDone = true
                             }
-                        }) { Text(tr("Use Hikari's built-in id instead")) }
+                        }) { Text(tr("Use Lucid Hikari's built-in id instead")) }
                     }
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(

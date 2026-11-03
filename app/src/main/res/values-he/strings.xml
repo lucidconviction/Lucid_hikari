@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Hikari</string>
+    <string name="app_name">Lucid Hikari</string>
     <string name="settings_language_title">שפת האפליקציה</string>
     <string name="settings_language_subtitle">משנה את טקסטי האפליקציה ואת בקרות הנגן</string>
     <string name="settings_language_system">ברירת מחדל של המערכת</string>

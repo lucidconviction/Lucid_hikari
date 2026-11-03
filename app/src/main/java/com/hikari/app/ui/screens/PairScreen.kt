@@ -599,7 +599,7 @@ fun PairScreen(app: HikariApp, onBack: () -> Unit) {
                             )
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                tr("Reopen Hikari if a screen still looks like it did before."),
+                                tr("Reopen Lucid Hikari if a screen still looks like it did before."),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -796,7 +796,7 @@ private fun QrScannerPage(onScanned: (String) -> Unit, onClose: () -> Unit) {
             )
         }
         val problem = when {
-            refused -> tr("Hikari needs the camera to scan the code — type the code instead")
+            refused -> tr("Lucid Hikari needs the camera to scan the code — type the code instead")
             failed.isNotBlank() -> failed + " — " + tr("type the code instead")
             else -> ""
         }

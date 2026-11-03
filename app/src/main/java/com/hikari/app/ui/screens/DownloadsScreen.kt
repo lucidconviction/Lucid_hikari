@@ -97,7 +97,7 @@ fun DownloadsScreen(nav: NavHostController, embedded: Boolean = false) {
             item {
                 EmptyState(
                     title = tr("No downloads yet"),
-                    subtitle = tr("Tap the Download button while watching a video to save it for " + "offline viewing inside Hikari, or into your phone's Downloads folder."),
+                    subtitle = tr("Tap the Download button while watching a video to save it for " + "offline viewing inside Lucid Hikari, or into your phone's Downloads folder."),
                     actionLabel = tr("Browse"),
                     action = { Routes.navigateTab(nav, Routes.HOME) }
                 )
@@ -324,7 +324,7 @@ private fun statusLine(t: DownloadTask): String {
         DownloadStatus.DONE -> when {
             t.kind == DownloadKind.EXPORT && t.playableOffline -> "Saved to Downloads · also available offline"
             t.kind == DownloadKind.EXPORT ->
-                "Saved to phone storage (Downloads/Hikari) — tap ▶ to play"
+                "Saved to phone storage (Downloads/Lucid-Hikari) — tap ▶ to play"
             else -> "Available offline"
         }
     }
@@ -378,7 +378,7 @@ private fun playOffline(context: Context, t: DownloadTask) {
 }
 
 /** Plays an EXPORTED file (a MediaStore content:// URI, or a plain path on
- *  pre-Q) through Hikari's own player, which ships software audio decoders. */
+ *  pre-Q) through Lucid Hikari's own player, which ships software audio decoders. */
 private fun playSaved(context: Context, t: DownloadTask) {
     val saved = t.savedUri ?: return
     if (saved.isBlank()) return

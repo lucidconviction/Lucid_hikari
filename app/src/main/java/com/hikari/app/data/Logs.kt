@@ -146,7 +146,7 @@ object Logs {
     private var enabled = false
 
     @Volatile
-    private var versionLine = "Hikari"
+    private var versionLine = "Lucid Hikari"
 
     /** One shareable log file plus the wording the Settings screen shows. */
     data class LogFile(
@@ -363,6 +363,6 @@ object Logs {
 
     private fun versionString(context: Context): String = runCatching {
         val info = context.packageManager.getPackageInfo(context.packageName, 0)
-        "Hikari ${info.versionName} (build ${if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()})"
-    }.getOrDefault("Hikari")
+        "Lucid Hikari ${info.versionName} (build ${if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()})"
+    }.getOrDefault("Lucid Hikari")
 }

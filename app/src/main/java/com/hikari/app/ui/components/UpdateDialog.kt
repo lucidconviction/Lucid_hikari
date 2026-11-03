@@ -61,7 +61,7 @@ fun UpdateDialog(
     AlertDialog(
         onDismissRequest = { if (downloading == null && !checking) onDismiss() },
         title = {
-            Text(if (s?.available == true) I18n.t("Update available") else I18n.t("Hikari updates"))
+            Text(if (s?.available == true) I18n.t("Update available") else I18n.t("Lucid Hikari updates"))
         },
         text = {
             Column {
@@ -131,7 +131,7 @@ fun UpdateDialog(
                                 when {
                                     !Updater.canInstall(context) -> {
                                         error =
-                                            "Unknown apps are blocked for Hikari. " +
+                                            "Unknown apps are blocked for Lucid Hikari. " +
                                                 "Grant \"Install unknown apps\" on the next screen, then tap Download again."
                                         Updater.openInstallSettings(context)
                                     }

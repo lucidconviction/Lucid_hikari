@@ -124,6 +124,7 @@ import com.hikari.app.ui.screens.MyStuff
 import com.hikari.app.ui.screens.MyStuffScreen
 import com.hikari.app.ui.screens.SearchScreen
 import com.hikari.app.ui.screens.SettingsScreen
+import com.hikari.app.ui.screens.SportsScreen
 import com.hikari.app.ui.screens.StatsScreen
 import com.hikari.app.ui.screens.TelegramScreen
 import com.hikari.app.ui.screens.WebsitesScreen
@@ -140,6 +141,7 @@ object Routes {
     const val HOME = "home"
     const val ANIME_CALENDAR = "anime-calendar"
     const val SEARCH = "search"
+    const val SPORTS = "sports"
     const val EXTENSIONS = "extensions"
     const val SETTINGS = "settings"
     const val HISTORY = "history"
@@ -1029,6 +1031,7 @@ data class BottomTab(
 val BottomTabs = listOf(
     BottomTab(Routes.HOME, "Home", Icons.Filled.Home),
     BottomTab(Routes.ANIME_CALENDAR, "Anime", Icons.Filled.CalendarMonth),
+    BottomTab(Routes.SPORTS, "Sports", Icons.Filled.LiveTv),
     BottomTab(Routes.SEARCH, "Search", Icons.Filled.Search),
     // Library + History + Downloads are ONE slot: they are all "my stuff"
     // (saved titles, what you played, what you saved offline) rather than
@@ -1057,7 +1060,7 @@ val BottomTabs = listOf(
     // clean browser that streams extensions use. ON by default: a user who
     // cares about web browsing sees it right away; one who does not still has
     // Extensions open sites for them.
-    BottomTab(Routes.WEBSITES, "Websites", Icons.Filled.Public),
+    BottomTab(Routes.WEBSITES, "Web Apps", Icons.Filled.Public),
     BottomTab(Routes.EXTENSIONS, "Extensions", Icons.Filled.Extension),
     BottomTab(Routes.SETTINGS, "Settings", Icons.Filled.Settings),
 )
@@ -1461,6 +1464,7 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
                 ) {
             composable(Routes.HOME) { HomeScreen(nav) }
             composable(Routes.ANIME_CALENDAR) { AnimeCalendarScreen(nav) }
+            composable(Routes.SPORTS) { SportsScreen(nav) }
             composable(Routes.SEARCH) { SearchScreen(nav) }
             composable(
                 route = Routes.SEARCH_QUERY,

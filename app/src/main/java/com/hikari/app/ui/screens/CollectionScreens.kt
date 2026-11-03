@@ -2215,7 +2215,7 @@ private fun TmdbSourceSheet(
                         singleLine = true,
                         label = { Text(tr("Display title")) },
                         supportingText = {
-                            Text(tr("Shown as the row name. Leave blank and Hikari names it from TMDB."))
+                            Text(tr("Shown as the row name. Leave blank and Lucid Hikari names it from TMDB."))
                         },
                         modifier = Modifier
                             .fillMaxWidth().tvTextFieldKeys(displayTitle)
