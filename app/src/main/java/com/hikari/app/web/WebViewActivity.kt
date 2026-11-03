@@ -2615,12 +2615,29 @@ class WebViewActivity : ComponentActivity() {
                     }
                   }catch(e){}
                 }
-                cleanBait();
-                cleanCloseAd();
+                // cleanBait/cleanCloseAd are expensive — only run them once on
+                // initial load, not on every DOM mutation.
+                if(!window.__hikariAdCleanRun){
+                  window.__hikariAdCleanRun=true;
+                  cleanBait();
+                  cleanCloseAd();
+                }
               }
-              clean();
+              // Defer initial clean by 50ms so the page can paint first — this
+              // avoids layout thrashing blocking the first render.
+              if(document.readyState==='loading'){
+                document.addEventListener('DOMContentLoaded',function(){setTimeout(clean,50);});
+              }else{
+                setTimeout(clean,50);
+              }
+              var adObPending=false;
+              function adObLater(){
+                if(adObPending)return;
+                adObPending=true;
+                setTimeout(function(){adObPending=false;clean();},200);
+              }
               try{
-                new MutationObserver(clean).observe(document.documentElement,{childList:true,subtree:true});
+                new MutationObserver(adObLater).observe(document.documentElement,{childList:true,subtree:true});
               }catch(e){}
             })();
         """.trimIndent()
@@ -2730,7 +2747,12 @@ class WebViewActivity : ComponentActivity() {
                   }
                 }catch(x){}
               }
-              clean();
+              // Defer initial clean by 50ms so the page can paint first.
+              if(document.readyState==='loading'){
+                document.addEventListener('DOMContentLoaded',function(){setTimeout(clean,50);});
+              }else{
+                setTimeout(clean,50);
+              }
               // Throttled: an ad-heavy extension page mutates constantly, and
               // walking every link on every mutation is work the page cannot
               // afford — one pass every 400ms is invisible to the user and
