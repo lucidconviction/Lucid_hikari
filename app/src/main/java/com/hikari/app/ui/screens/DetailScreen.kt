@@ -7,7 +7,15 @@ import com.hikari.app.i18n.trTag
 import android.app.Application
 import android.content.Intent
 import android.net.Uri
+import android.view.ViewGroup
+import android.view.Gravity
+import android.widget.FrameLayout
+import android.webkit.WebChromeClient
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -57,7 +65,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -203,6 +210,8 @@ import com.hikari.app.tv.Cs3ShowDetails
 import com.hikari.app.tv.Cs3SortChip
 import com.hikari.app.tv.Cs3TrailerCard
 import com.hikari.app.tv.Cs3ViewAllCastCard
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import com.hikari.app.web.WebViewActivity
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CompletableDeferred
@@ -2259,6 +2268,10 @@ fun DetailScreen(
     // reference client's "View All Cast & Crew" opens the whole roster, and
     // Hikari has no person page — a dialog grid over the detail page instead.
     var showFullCast by remember { mutableStateOf(false) }
+    // YouTube trailer iframe overlay — set to (youtubeKey, title) when a trailer
+    // is tapped; the dialog plays it in-app via an embedded iframe instead of
+    // handing off to the YouTube app.
+    var activeTrailerKey by remember { mutableStateOf<Pair<String, String>?>(null) }
 
     var playerLaunched by remember { mutableStateOf(false) }
     // Resets the once-only launch guard the moment the player activity returns
@@ -4507,8 +4520,7 @@ fun DetailScreen(
                         extras?.trailers?.firstOrNull()?.let { tvTrailer ->
                             FilledTonalButton(
                                 onClick = {
-                                    openYouTubeVideo(
-                                        context,
+                                    activeTrailerKey = Pair(
                                         tvTrailer.youtubeKey,
                                         (m?.title ?: title) + " — " + tvTrailer.name
                                     )
@@ -4516,8 +4528,7 @@ fun DetailScreen(
                                 modifier = Modifier.tvPress(
                                     previewPass = true,
                                     onClick = {
-                                        openYouTubeVideo(
-                                            context,
+                                        activeTrailerKey = Pair(
                                             tvTrailer.youtubeKey,
                                             (m?.title ?: title) + " — " + tvTrailer.name
                                         )
@@ -5877,8 +5888,7 @@ fun DetailScreen(
                                                 trailer.name.contains("official", ignoreCase = true),
                                             thumbnailUrl = trailer.thumbnailUrl,
                                             onClick = {
-                                                openYouTubeVideo(
-                                                    context,
+                                                activeTrailerKey = Pair(
                                                     trailer.youtubeKey,
                                                     (m?.title ?: title) + " — " + trailer.name
                                                 )
@@ -5891,12 +5901,10 @@ fun DetailScreen(
                     } else {
                         item {
                             TrailerRow(trailers) { trailer ->
-                                // Trailers hand off to the YouTube app instead of
-                                // playing in Hikari's WebView: YouTube redirects to
-                                // m.youtube.com and the WebView's redirect
-                                // protection blocks that, leaving a black page.
-                                openYouTubeVideo(
-                                    context,
+                                // Trailers open in-app via the embedded
+                                // YouTube iframe overlay instead of handing
+                                // off to the YouTube app.
+                                activeTrailerKey = Pair(
                                     trailer.youtubeKey,
                                     (m?.title ?: title) + " — " + trailer.name
                                 )
@@ -6723,6 +6731,67 @@ fun DetailScreen(
                 }
                 }
                 Spacer(Modifier.height(12.dp))
+            }
+        }
+    }
+
+    // YouTube trailer embedded iframe overlay — plays the trailer in-app
+    // without launching the YouTube app.
+    activeTrailerKey?.let { (ytKey, ytTitle) ->
+        Dialog(onDismissRequest = { activeTrailerKey = null }) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.92f)),
+                contentAlignment = Alignment.TopEnd,
+            ) {
+                // Close button
+                IconButton(
+                    onClick = { activeTrailerKey = null },
+                    modifier = Modifier.padding(end = 8.dp, top = 8.dp).align(Alignment.TopEnd),
+                ) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = tr("Close"),
+                        tint = Color.White,
+                        modifier = Modifier.size(28.dp),
+                    )
+                }
+                // Title bar
+                Box(
+                    Modifier
+                        .align(Alignment.TopStart)
+                        .padding(start = 12.dp, top = 10.dp),
+                ) {
+                    Text(
+                        ytTitle,
+                        color = Color.White.copy(alpha = 0.88f),
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        modifier = Modifier.fillMaxWidth(0.75f),
+                    )
+                }
+                // Embedded YouTube iframe via WebView
+                AndroidView(
+                    factory = { ctx ->
+                        WebView(ctx).apply {
+                            layoutParams = FrameLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                            )
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            settings.mediaPlaybackRequiresUserGesture = false
+                            webViewClient = object : WebViewClient() {
+                                override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean = false
+                            }
+                            webChromeClient = WebChromeClient()
+                            loadUrl("https://www.youtube.com/embed/$ytKey?autoplay=1&playsinline=1")
+                        }
+                    },
+                    update = {},
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
         }
     }

@@ -1369,6 +1369,11 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
             }
             else -> Unit
         }
+        // The user's own picture, if one is set: drawn behind the whole page
+        // (and under the glass, since the backdrop above is what the frosted
+        // cards sit on). Without a picture this is a no-op and the theme's own
+        // backdrop is what shows.
+        com.hikari.app.ui.CustomBackgroundLayer()
         Scaffold(
             // Transparent: the backdrop above is the page, so the cards' glass
             // has something to sit on (see the comment on the backdrop).

@@ -90,6 +90,7 @@ import com.hikari.app.ui.Artwork
 import com.hikari.app.ui.PosterLoader
 import com.hikari.app.ui.RatingBadge
 import com.hikari.app.ui.components.EmptyState
+import com.hikari.app.ui.SearchSuggestionsDropdown
 import com.hikari.app.ui.components.GlassSearchField
 import com.hikari.app.ui.navigation.LocalTaskbarInset
 import com.hikari.app.ui.navigation.Routes
@@ -700,6 +701,19 @@ fun SearchScreen(
                 }
             }
         )
+        // TMDB-powered search suggestions: shown only while the box is NON-EMPTY
+        // and only on phone/tablet (TV has no use for a suggestion dropdown).
+        // Picks one to run a fresh search immediately.
+        if (!searchIsTv && query.isNotBlank()) {
+            SearchSuggestionsDropdown(
+                query = query,
+                onPick = { title, type ->
+                    translatedFrom = null
+                    vm.setQuery(title)
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
         // ---- Recent searches ----
         //
         // Shown only while the box is EMPTY: once a search is running or has

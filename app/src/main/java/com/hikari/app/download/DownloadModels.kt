@@ -88,8 +88,25 @@ data class DownloadTask(
             append(title)
             if (episodeLabel.isNotBlank()) append(" - ").append(episodeLabel)
         }
-        return sanitizeFile(stem).ifBlank { "hikari-video" }
+        return sanitizeFile(stem).ifBlank { "lucid-hikari-video" }
     }
+
+    /**
+     * Folder name for this title's downloads: every episode of "Renegade
+     * Immortal" lands under a "Renegade Immortal" folder, so a later EP4
+     * joins the folder EP3 already created — in Hikari storage and in the
+     * phone's Downloads folder alike.
+     */
+    fun titleFolder(): String = sanitizeFile(title).ifBlank { "lucid-hikari-video" }
+
+    /**
+     * File/dir stem for this episode under its title folder (no extension):
+     * the episode label ("E3", "S1 E4") when there is one, else the title
+     * itself (movies), so the folder holds one entry per episode.
+     */
+    fun episodeStem(): String =
+        sanitizeFile(episodeLabel).ifBlank { sanitizeFile(title) }
+            .ifBlank { "video" }
 
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)

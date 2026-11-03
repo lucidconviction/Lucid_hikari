@@ -742,50 +742,51 @@ class WebViewActivity : ComponentActivity() {
         // source to Hikari's ExoPlayer so playback actually starts.
         webView.addJavascriptInterface(HikariJsBridge(), "HikariBridge")
 
-        // Small floating ⋯ pill in the top-right corner — the only always-visible
-        // control. Tapping it opens a small menu (Back/Forward/Reload/Player) so
-        // the app never draws a header bar over the site's own header or search.
-        val togglePill = TextView(this).apply {
-            text = I18n.t("\u22EF")
-            textSize = 18f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            setBackgroundColor(0x661A1A1A.toInt())
-            setPadding(dp(8), dp(2), dp(8), dp(2))
-            isClickable = true
-            setOnClickListener { showMenu(it) }
-        }
-        // Tab-count pill — sits left of the ⋯ pill. Tapping it opens the tab
-        // grid dialog so the user can switch between or close open tabs.
-        val tabPill = TextView(this).apply {
-            text = "\uD83D\uDD17" // paperclip = tabs
-            textSize = 16f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            setBackgroundColor(0x661A1A1A.toInt())
-            setPadding(dp(8), dp(2), dp(8), dp(2))
-            isClickable = true
-            setOnClickListener { showTabGrid() }
+        // Top margin bar — gives the webview room at the top so the site's own
+        // header / search bar is not covered. Houses the menu (⋯) and tabs pill
+        // as fixed controls in the margin.
+        val TOP_BAR_HEIGHT = dp(48)
+        val topBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                TOP_BAR_HEIGHT,
+            )
+            gravity = Gravity.CENTER_VERTICAL or Gravity.END
+            setBackgroundColor(0xAA000000.toInt())
+            setPadding(dp(8), 0, dp(8), 0)
+
+            // Tab-count pill — left side of the bar. Tapping it opens the tab
+            // grid dialog so the user can switch between or close open tabs.
+            val tabPill = TextView(this@WebViewActivity).apply {
+                text = "\uD83D\uDD17" // paperclip = tabs
+                textSize = 16f
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+                setBackgroundColor(0x661A1A1A.toInt())
+                setPadding(dp(10), dp(4), dp(10), dp(4))
+                isClickable = true
+                setOnClickListener { showTabGrid() }
+            }
+            addView(tabPill)
+
+            // Small floating ⋯ pill — the only always-visible control. Tapping
+            // it opens a small menu (Back/Forward/Reload/Player).
+            val togglePill = TextView(this@WebViewActivity).apply {
+                text = I18n.t("\u22EF")
+                textSize = 18f
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+                setBackgroundColor(0x661A1A1A.toInt())
+                setPadding(dp(10), dp(4), dp(10), dp(4))
+                isClickable = true
+                setOnClickListener { showMenu(it) }
+            }
+            addView(togglePill)
         }
 
         val content = FrameLayout(this).apply {
             addView(webView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-            addView(
-                togglePill,
-                FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    Gravity.TOP or Gravity.END
-                ).apply { topMargin = dp(2); rightMargin = dp(4) }
-            )
-            addView(
-                tabPill,
-                FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    Gravity.TOP or Gravity.END
-                ).apply { topMargin = dp(2); rightMargin = dp(36) }
-            )
             addView(
                 videoChip,
                 FrameLayout.LayoutParams(
@@ -800,61 +801,13 @@ class WebViewActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.BLACK)
             addView(progressBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(4)))
+            addView(topBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, TOP_BAR_HEIGHT))
             addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         }
         setContentView(rootView)
-        contentFrame = rootView.getChildAt(1) as? FrameLayout
+        contentFrame = rootView.getChildAt(2) as? FrameLayout
         mouseMode = com.hikari.app.tv.MouseMode.enabled
         if (mouseMode) showCursor(center = true)
-        // Draggable ⋯ pill: it floats over the site (top-right by default) and
-        // can cover a site's search/header button, so let the user drag it
-        // anywhere along the top edge. A plain tap still opens the menu.
-        val pillLp = togglePill.layoutParams as FrameLayout.LayoutParams
-        var pillDownX = 0f
-        var pillDownY = 0f
-        var pillStartRight = 0
-        var pillStartTop = 0
-        var pillDragging = false
-        val pillTouchSlop = android.view.ViewConfiguration.get(this).scaledTouchSlop
-        togglePill.setOnTouchListener { v, e ->
-            when (e.actionMasked) {
-                android.view.MotionEvent.ACTION_DOWN -> {
-                    pillDownX = e.rawX
-                    pillDownY = e.rawY
-                    pillStartRight = pillLp.rightMargin
-                    pillStartTop = pillLp.topMargin
-                    pillDragging = false
-                    false
-                }
-                android.view.MotionEvent.ACTION_MOVE -> {
-                    val dx = e.rawX - pillDownX
-                    val dy = e.rawY - pillDownY
-                    if (!pillDragging &&
-                        (kotlin.math.abs(dx) > pillTouchSlop || kotlin.math.abs(dy) > pillTouchSlop)
-                    ) {
-                        pillDragging = true
-                    }
-                    if (pillDragging) {
-                        val maxRight = (content.width - v.width).coerceAtLeast(0)
-                        val maxTop = (content.height - v.height).coerceAtLeast(0)
-                        pillLp.rightMargin = (pillStartRight - dx.toInt()).coerceIn(0, maxRight)
-                        pillLp.topMargin = (pillStartTop + dy.toInt()).coerceIn(0, maxTop)
-                        v.layoutParams = pillLp
-                    }
-                    pillDragging
-                }
-                android.view.MotionEvent.ACTION_UP -> {
-                    if (pillDragging) {
-                        pillDragging = false
-                        true
-                    } else {
-                        v.performClick()
-                        false
-                    }
-                }
-                else -> false
-            }
-        }
 
         // Load the user's ad-blocking config (hosts lists are cached on disk;
         // lists the user never downloaded get fetched lazily here). Blocking

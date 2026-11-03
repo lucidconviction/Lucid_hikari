@@ -152,7 +152,16 @@ object DownloadsRepository {
             val t = _tasks.value.firstOrNull { it.id == id }
             val path = t?.localPath
             if (path != null && !path.startsWith("content:")) {
-                runCatching { File(path).parentFile?.deleteRecursively() }
+                runCatching {
+                    val f = File(path)
+                    // An HLS copy is a bundle dir (index.m3u8 + parts): drop
+                    // the episode dir. A single file is deleted on its own —
+                    // its parent is the shared title folder now, which must
+                    // survive while sibling episodes are still in it. The
+                    // per-task work dir is cleaned below either way.
+                    if (f.name == "index.m3u8") f.parentFile?.deleteRecursively()
+                    else f.delete()
+                }
             }
             runCatching { workDirFor(ctx, id).deleteRecursively() }
             _tasks.value = _tasks.value.filterNot { it.id == id }
@@ -187,6 +196,52 @@ object DownloadsRepository {
 
     fun workDirFor(ctx: Context, id: String): File =
         File(File(ctx.filesDir, "downloads"), id.replace(Regex("[^A-Za-z0-9_.-]"), "_"))
+
+    /**
+     * Moves a finished OFFLINE copy into its title folder —
+     * filesDir/downloads/<Title>/<ep>/… — so every episode of a title shares
+     * one folder (a later EP4 joins the folder EP3 created), exactly like the
+     * phone-storage exports. Returns the new on-disk path, or the original
+     * when the move is impossible (playback then uses the old path). Runs on
+     * success only, so pause/resume keep working out of the per-task work dir.
+     */
+    private fun relocateOffline(ctx: Context, task: DownloadTask, path: String?): String? {
+        if (path.isNullOrBlank()) return path
+        return runCatching {
+            val root = File(File(ctx.filesDir, "downloads"), sanitizeFile(task.title).ifBlank { "lucid-hikari-video" })
+            val src = File(path)
+            if (!src.exists()) return path
+            if (src.name == "index.m3u8") {
+                // HLS bundle: the whole work dir becomes <Title>/<ep>/.
+                val parent = src.parentFile ?: return path
+                val epDir = File(root, task.episodeStem())
+                if (parent.canonicalPath != epDir.canonicalPath) {
+                    if (epDir.exists()) runCatching { epDir.deleteRecursively() }
+                    root.mkdirs()
+                    if (!parent.renameTo(epDir)) {
+                        epDir.mkdirs()
+                        parent.copyRecursively(epDir, overwrite = true)
+                        parent.deleteRecursively()
+                    }
+                }
+                File(epDir, "index.m3u8").takeIf { it.exists() }?.absolutePath ?: path
+            } else {
+                // Single file: <Title>/<ep>.ext, then drop the empty work dir.
+                root.mkdirs()
+                val ext = src.extension.takeIf { it.isNotBlank() }?.let { ".$it" }.orEmpty()
+                val dest = File(root, task.episodeStem() + ext)
+                if (src.canonicalPath != dest.canonicalPath) {
+                    if (dest.exists()) dest.delete()
+                    if (!src.renameTo(dest)) {
+                        src.copyTo(dest, overwrite = true)
+                        src.delete()
+                    }
+                    runCatching { workDirFor(ctx, task.id).deleteRecursively() }
+                }
+                dest.takeIf { it.exists() }?.absolutePath ?: path
+            }
+        }.getOrDefault(path)
+    }
 
     /** Runs the queue until it is drained, keeping up to [maxConcurrent] tasks
      *  in flight. Re-reads the limit each pass, so changing it in Settings takes
@@ -256,7 +311,7 @@ object DownloadsRepository {
             update(ctx, task.id, force = true) {
                 it.copy(
                     status = DownloadStatus.DONE,
-                    localPath = result.localPath,
+                    localPath = if (task.kind == DownloadKind.OFFLINE) relocateOffline(ctx, task, result.localPath) else result.localPath,
                     savedUri = result.savedUri,
                     error = null,
                     resumePartial = false,

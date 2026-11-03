@@ -64,7 +64,7 @@ data class DlResult(
  * already on disk.
  *
  * EXPORT additionally produces ONE playable file in the phone's
- * Downloads/Hikari folder via MediaStore. A single self-contained stream (TS,
+ * Downloads/Lucid-Hikari folder via MediaStore. A single self-contained stream (TS,
  * or fMP4 with muxed audio) just concatenates its parts; a stream whose audio
  * arrives as a SEPARATE rendition is remuxed — the video-only parts and the
  * audio-only parts are each assembled into a file, then both tracks are muxed
@@ -132,8 +132,8 @@ object DownloadEngine {
             val file = downloadDirect(task, headers, ua, workDir, Reporter(onProgress), isCancelled)
             if (task.kind == DownloadKind.EXPORT) {
                 onConverting()
-                val name = task.fileBaseName() + "." + file.extension.ifBlank { "mp4" }
-                val saved = writeToDownloads(ctx, file, name, mimeForName(name), "")
+                val name = task.episodeStem() + "." + file.extension.ifBlank { "mp4" }
+                val saved = writeToDownloads(ctx, file, name, mimeForName(name), task.titleFolder())
                 runCatching { workDir.deleteRecursively() }
                 DlResult(null, saved)
             } else {
@@ -733,7 +733,8 @@ object DownloadEngine {
     // --------------------------------------------------------------- Export --
 
     private fun exportHls(ctx: Context, task: DownloadTask, workDir: File, res: HlsResult): String {
-        val base = task.fileBaseName()
+        // Exports live under the title folder: Downloads/Lucid-Hikari/<Title>/<ep>.mp4.
+        val base = task.episodeStem()
         val hasSeparateAudio = res.audioParts.isNotEmpty()
 
         // Single self-contained stream: it is already a complete playable file
@@ -743,11 +744,11 @@ object DownloadEngine {
             return if (!res.fmp4) {
                 val out = File(workDir, "export.ts")
                 concat(res.videoParts, out)
-                writeToDownloads(ctx, out, "$base.ts", "video/mp2t", "")
+                writeToDownloads(ctx, out, "$base.ts", "video/mp2t", task.titleFolder())
             } else {
                 val out = File(workDir, "export.mp4")
                 concat(listOfNotNull(res.initPart) + res.videoParts, out)
-                writeToDownloads(ctx, out, "$base.mp4", "video/mp4", "")
+                writeToDownloads(ctx, out, "$base.mp4", "video/mp4", task.titleFolder())
             }
         }
 
@@ -763,7 +764,7 @@ object DownloadEngine {
             muxTracks(vFile, aFile, out)
             vFile.delete()
             aFile.delete()
-            return writeToDownloads(ctx, out, "$base.mp4", "video/mp4", "")
+            return writeToDownloads(ctx, out, "$base.mp4", "video/mp4", task.titleFolder())
         } catch (t: Throwable) {
             // Last resort: keep every byte on disk as the local bundle folder so
             // nothing is lost, even though it won't be a single playable file.
@@ -772,22 +773,22 @@ object DownloadEngine {
                 runCatching { File(workDir, "$stem.ts").delete() }
             }
             runCatching { File(workDir, "export.mp4").delete() }
-            return exportBundle(ctx, base, workDir)
+            return exportBundle(ctx, base, workDir, task.titleFolder())
         }
     }
 
     /** Fallback export: copy the whole local bundle (playlists + parts) into a
-     *  named folder inside Downloads/Hikari. */
-    private fun exportBundle(ctx: Context, base: String, workDir: File): String {
+     *  title-scoped folder inside Downloads/Lucid-Hikari: <Title>/<ep>/… */
+    private fun exportBundle(ctx: Context, base: String, workDir: File, titleFolder: String): String {
         val folder = sanitizeFile(base).ifBlank { "hikari-video" }
         var entryUri = ""
         workDir.listFiles().orEmpty().sortedBy { it.name }.forEach { f ->
             if (f.isFile) {
-                val uri = writeToDownloads(ctx, f, f.name, mimeForName(f.name), folder)
+                val uri = writeToDownloads(ctx, f, f.name, mimeForName(f.name), "$titleFolder/$folder")
                 if (f.name == "index.m3u8") entryUri = uri
             }
         }
-        return entryUri.ifBlank { "Downloads/Hikari/$folder/index.m3u8" }
+        return entryUri.ifBlank { "Downloads/Lucid-Hikari/$titleFolder/$folder/index.m3u8" }
     }
 
     private fun concat(parts: List<File>, out: File) {
@@ -938,7 +939,7 @@ object DownloadEngine {
     ): String {
         if (Build.VERSION.SDK_INT >= 29) {
             val rel = buildString {
-                append(Environment.DIRECTORY_DOWNLOADS).append("/Hikari")
+                append(Environment.DIRECTORY_DOWNLOADS).append("/Lucid-Hikari")
                 if (subPath.isNotBlank()) append('/').append(subPath)
             }
             val values = ContentValues().apply {
@@ -959,7 +960,7 @@ object DownloadEngine {
         }
         val dir = File(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-            if (subPath.isBlank()) "Hikari" else "Hikari/$subPath",
+            if (subPath.isBlank()) "Lucid-Hikari" else "Lucid-Hikari/$subPath",
         ).apply { mkdirs() }
         val dest = uniqueFile(dir, displayName)
         src.inputStream().use { input -> dest.outputStream().use { input.copyTo(it, BUFFER) } }

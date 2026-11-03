@@ -199,6 +199,10 @@ class MainActivity : AppCompatActivity() {
             }
         }.getOrNull() ?: false
         applyImmersiveMode()
+        // Load the custom background picture once per process, before the first
+        // compose: the picture is private storage, so reading it here (synchronously,
+        // via runBlocking) is safe and means the first frame already carries it.
+        runCatching { kotlinx.coroutines.runBlocking { com.hikari.app.ui.CustomBackground.load(this@MainActivity) } }
         setContent {
             val scope = rememberCoroutineScope()
             // Remember the Flow — a fresh store.themeFlow() per recomposition

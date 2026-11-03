@@ -138,6 +138,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
@@ -147,6 +148,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.input.pointer.pointerInput
@@ -1051,6 +1053,7 @@ fun SettingsScreen(nav: NavHostController) {
                     item { SettingsCard(top = 2.dp) { UiScaleCard(app) } }
                     item { SettingsCard { DetailRatingCard(app) } }
                     item { SettingsCard { HeroBannerCard(app) } }
+                    item { SettingsCard { CustomBackgroundCard(app) } }
                     item { SettingsCard { DetailHeaderCard(app) } }
                     item { SettingsCard { ContinueWatchingCard(app, hideContinue, scope) } }
                     // Animated covers (a personal catalog's GIF folder tiles).
@@ -3637,6 +3640,115 @@ private fun HeroBannerCard(app: HikariApp) {
             },
             onDismiss = { pickerOpen = false },
         )
+    }
+}
+
+/**
+ * Custom background (Settings → App Layout): the user's own picture behind
+ * every screen, with a darkness slider so text stays readable over it.
+ *
+ * The picture is private storage — copied in when the user picks it, so it
+ * keeps working after the gallery picture is moved or deleted. Without a
+ * picture this card does nothing: the normal theme backdrop is what shows.
+ */
+@Composable
+private fun CustomBackgroundCard(app: HikariApp) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val img = com.hikari.app.ui.CustomBackground.image
+    val dim = com.hikari.app.ui.CustomBackground.dim
+    var pickerOpen by remember { mutableStateOf(false) }
+    var dimSlider by remember { mutableFloatStateOf(dim) }
+    LaunchedEffect(dim) { dimSlider = dim }
+
+    val importer = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val ok = runCatching { com.hikari.app.ui.CustomBackground.set(context, uri) }.getOrDefault(false)
+            if (ok) {
+                Toast.makeText(context, I18n.t("Background set"), Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, I18n.t("That picture couldn't be read"), Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    Column(Modifier.padding(16.dp)) {
+        SettingsCardHeading(Icons.Filled.Wallpaper, tr("Custom background"))
+        if (img == null) {
+            Text(
+                tr("No picture set — the theme's own background is used"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { pickerOpen = true },
+                modifier = Modifier.fillMaxWidth(),
+                shape = GlassShape,
+            ) {
+                Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(tr("Pick a picture"))
+            }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .drawWithContent {
+                            drawContent()
+                            drawImage(img, topLeft = androidx.compose.ui.geometry.Offset.Zero)
+                        },
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(tr("Background set"), style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        tr("Slide to darken so text stays readable"),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                IconButton(onClick = {
+                    scope.launch { runCatching { com.hikari.app.ui.CustomBackground.clear(context) } }
+                }) {
+                    Icon(Icons.Filled.Delete, contentDescription = tr("Remove background"), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            SettingsSlider(
+                label = tr("Darkness"),
+                value = dimSlider,
+                valueText = (dimSlider * 100).roundToInt().toString() + "%",
+                valueRange = 0f..0.9f,
+                steps = 8,
+                onValueChange = { v -> dimSlider = v },
+                onValueChangeFinished = {
+                    scope.launch { runCatching { com.hikari.app.ui.CustomBackground.setDim(context, dimSlider) } }
+                },
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { pickerOpen = true },
+                modifier = Modifier.fillMaxWidth(),
+                shape = GlassShape,
+            ) {
+                Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(tr("Change picture"))
+            }
+        }
+        if (!LocalHideHelp.current) {
+        Text(
+            tr("A picture you pick becomes the app's background — behind every screen, under the glass. Slide the darkness to keep text readable over it."),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        }
     }
 }
 

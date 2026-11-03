@@ -6,6 +6,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.material.ripple.rememberRipple
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -73,6 +74,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -699,8 +701,25 @@ private fun VideoCell(
         }
     }
 
+    // Overlay auto-hide: starts visible, fades out after 4s of no interaction.
+    var showOverlay by remember { mutableStateOf(true) }
+    var interactionCount by remember { mutableStateOf(0) }
+
+    val overlayAlpha by animateFloatAsState(
+        targetValue = if (showOverlay) 1f else 0f,
+        animationSpec = tween(durationMillis = 300),
+        label = "overlayAlpha",
+    )
+
+    LaunchedEffect(interactionCount) {
+        kotlinx.coroutines.delay(4000)
+        showOverlay = false
+    }
+
     fun onInteraction() {
         MultiWindowStore.setAudioFocus(stream.id)
+        interactionCount++
+        showOverlay = true
     }
 
     val isStreamAlive = !StreamValidationStore.isKnownDeadSync(stream.url)
@@ -708,8 +727,9 @@ private fun VideoCell(
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(12.dp))
-            .background(SurfaceContainerLow)
-            .then(borderModifier),
+            .background(Color.Transparent)
+            .then(borderModifier)
+            .clickable(onClick = { onInteraction() }),
     ) {
         AndroidView(
             factory = { ctx ->
@@ -727,11 +747,16 @@ private fun VideoCell(
             update = { pv -> pv.resizeMode = lucidResizeModeToPlayerView(resizeMode) },
         )
 
-        // Overlay with always-visible, always-tappable controls.
-        // NOTE: no .graphicsLayer alpha fade — fading the container makes the
-        // buttons untouchable.  Controls stay visible and functional at all times.
-        Box(Modifier.fillMaxSize()) {
-            Box(Modifier.fillMaxSize().background(GlassBg.copy(alpha = 0.35f)))
+        // Overlay with auto-hide controls. Starts visible; fades out after
+        // 4s of no interaction. Touching the cell (or any control) resets
+        // the timer via onInteraction() and brings the overlay back.
+        // Background is transparent so the video shows through; only the
+        // control widgets have their own backdrop.
+        Box(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer(alpha = overlayAlpha),
+        ) {
 
             // Top-left badge with stream validation green dot
             Box(

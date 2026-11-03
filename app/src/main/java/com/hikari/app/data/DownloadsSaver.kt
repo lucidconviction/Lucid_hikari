@@ -30,7 +30,7 @@ import java.io.OutputStream
  *
  * The shape that works is the one this app's own download exporter already used
  * (see `download/DownloadEngine.writeToDownloads`): display name + MIME +
- * `RELATIVE_PATH = Download/Hikari` + `IS_PENDING`, write, then un-pend. The
+ * `RELATIVE_PATH = Download/Lucid-Hikari` + `IS_PENDING`, write, then un-pend. The
  * legacy public directory is still tried for API < 29 (where
  * WRITE_EXTERNAL_STORAGE, capped at that level in the manifest, permits it) and
  * as a fallback above it, so an OEM whose MediaStore refuses for its own reasons
@@ -42,14 +42,14 @@ import java.io.OutputStream
 object DownloadsSaver {
 
     /** The folder saved files land in, under the public Downloads folder. */
-    const val FOLDER = "Hikari"
+    const val FOLDER = "Lucid-Hikari"
 
     /** Where a saved file appears, for the message the user sees. */
     fun pathOf(name: String): String = "Downloads/$FOLDER/$name"
 
     /**
-     * Copy [source] into `Downloads/Hikari` under [displayName]. The returned
-     * path is what to tell the user; the failure carries the reason.
+     * Copy [source] into `Downloads/Lucid-Hikari` under [displayName]. The
+     * returned path is what to tell the user; the failure carries the reason.
      */
     fun save(
         context: Context,

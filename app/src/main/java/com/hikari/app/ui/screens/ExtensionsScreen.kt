@@ -75,6 +75,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -9941,16 +9942,28 @@ private fun InstalledExtensionsView(
     }
 
     var extFilter by remember { mutableStateOf("") }
+    // Group by language: when on, the list is reordered into language groups
+    // (English, Hindi, Telugu…) so the user can quickly scan providers that
+    // speak their language without scrolling past dozens of English ones.
+    var langGrouped by remember { mutableStateOf(false) }
     // The drawable rows, grouped into one per extension (see [ProviderPacks]).
-    // Built ONCE per filter/provider change rather than inside the LazyColumn's
-    // item list: the lambda there is re-invoked on every recomposition of this
-    // screen, and regrouping the whole installed list on each of them is work
-    // nothing on screen depends on.
-    val packs = remember(providers, extFilter) {
-        ProviderPacks.rows(
-            if (extFilter.isBlank()) providers
-            else providers.filter { it.config.name.contains(extFilter, ignoreCase = true) },
-        )
+    // Built ONCE per filter/provider/language-change rather than inside the
+    // LazyColumn's item list: the lambda there is re-invoked on every
+    // recomposition of this screen, and regrouping the whole installed list on
+    // each of them is work nothing on screen depends on.
+    val packs = remember(providers, extFilter, langGrouped) {
+        val filtered = if (extFilter.isBlank()) providers
+            else providers.filter { it.config.name.contains(extFilter, ignoreCase = true) }
+        if (!langGrouped) ProviderPacks.rows(filtered)
+        else {
+            // Group by the first-language tag the provider claims, then sort
+            // within each group by name so everything is alphabetised.
+            val grouped: Map<String, List<ContentProvider>> = filtered
+                .groupBy { p -> com.hikari.app.ui.classifyProvider(p.config).code }
+            grouped.toSortedMap().flatMap { (_, list) ->
+                list.sortedBy { p -> p.config.name.lowercase() }
+            }.let { ProviderPacks.rows(it) }
+        }
     }
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -10023,7 +10036,7 @@ private fun InstalledExtensionsView(
         }
         LazyColumn(
             // Installed-extensions position held per filter (see ScrollKeeper).
-            state = com.hikari.app.ui.components.keptListState("extInstalled:$extFilter"),
+            state = com.hikari.app.ui.components.keptListState("extInstalled:$extFilter:$langGrouped"),
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
@@ -10042,6 +10055,22 @@ private fun InstalledExtensionsView(
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 4.dp)
                 )
+            }
+            // Language group toggle: shown right below the search bar so it is
+            // the first thing the user sees after typing.
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    FilterChip(
+                        selected = langGrouped,
+                        onClick = { langGrouped = !langGrouped },
+                        label = { Text(tr("Group by language")) },
+                    )
+                }
             }
             val filteredProviders = providers.filter {
                 extFilter.isBlank() || it.config.name.contains(extFilter, ignoreCase = true)

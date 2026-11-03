@@ -475,6 +475,27 @@ object IptvPlaylist {
         return b.substring(0, i + 3) + host
     }
 
+    /** ISO country code for a group/country name ("India" → "in", "USA" → "us",
+     *  "UK" → "gb") — what a group tile wears instead of a generated initials
+     *  tile. Null when the name is no known country: the tile falls back to a
+     *  channel logo from inside the group (see the IPTV tab's group grid). */
+    fun countryCodeOf(name: String): String? {
+        val v = name.trim()
+        if (v.isEmpty()) return null
+        for ((iso, label) in COUNTRY_CODES) {
+            if (label.equals(v, ignoreCase = true)) return iso.lowercase()
+        }
+        return when (v.uppercase()) {
+            "USA", "U.S.A", "U.S.A.", "US", "UNITED STATES", "AMERICA" -> "us"
+            "UK", "U.K.", "GB", "GREAT BRITAIN", "ENGLAND" -> "gb"
+            "UAE", "U.A.E.", "U.A.E" -> "ae"
+            else -> null
+        }
+    }
+
+    /** Flag image for an ISO code from [countryCodeOf] (w320, tile-grade). */
+    fun flagUrl(code: String): String = "https://flagcdn.com/w320/${code.lowercase()}.png"
+
     /** A channel name for a URL line that carried no `#EXTINF`: its last path
      *  segment, with the extension trimmed, else the host. */
     private fun nameFromUrl(url: String): String {

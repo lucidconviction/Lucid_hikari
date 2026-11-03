@@ -582,6 +582,7 @@ addStream = false
             onAddPreset = { presetAdd(it) },
             onRemove = { removeTarget = it },
             onValidateAll = { validateAllPlaylists() },
+            onRefresh = { scope.launch { app.providers.refresh() } },
         )
     }
 
@@ -2004,6 +2005,7 @@ private fun IptvSectionPage(
     onAddPreset: (String) -> Unit,
     onRemove: (IptvCard) -> Unit,
     onValidateAll: () -> Unit,
+    onRefresh: () -> Unit,
 ) {
     // Combine tor and stream cards for the LINKS section
     val allLinkCards = remember(torCards, streamCards) { torCards + streamCards }
@@ -2048,6 +2050,7 @@ private fun IptvSectionPage(
             // the other two pages pass null and the header skips the button.
             onValidate = if (kind == IptvSection.PLAYLIST) onValidateAll else null,
             validating = false,
+            onRefresh = onRefresh,
         )
         IptvKindGrid(
             kind = kind,
@@ -2250,6 +2253,8 @@ private fun IptvHeader(
     onValidate: (() -> Unit)? = null,
     /** F2 — true while a validation probe is in flight. */
     validating: Boolean = false,
+    /** Refresh all IPTV playlists. */
+    onRefresh: (() -> Unit)? = null,
 ) {
     Row(
         Modifier
@@ -2327,6 +2332,11 @@ private fun IptvHeader(
                         contentDescription = tr("Validate channels"),
                     )
                 }
+            }
+        }
+        if (onRefresh != null) {
+            IconButton(onClick = onRefresh) {
+                Icon(Icons.Default.Refresh, contentDescription = tr("Refresh playlists"))
             }
         }
     }
@@ -3070,6 +3080,8 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
         val seed = editingChannel ?: QuickChannel("", emptyList(), emptyList(), emptyList())
         var channelName by remember(editingChannel, showAddChannel) { mutableStateOf(seed.displayName) }
         var channelAlias by remember(editingChannel, showAddChannel) { mutableStateOf(seed.aliases.joinToString(", ")) }
+        var channelRegion by remember(editingChannel, showAddChannel) { mutableStateOf(selectedQcRegion) }
+        var regionDropdownExpanded by remember { mutableStateOf(false) }
         AlertDialog(
             onDismissRequest = { showAddChannel = false; editingChannel = null },
             title = { Text(if (isEdit) tr("Edit channel") else tr("Add channel")) },
@@ -3092,6 +3104,53 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                         maxLines = 3,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    Spacer(Modifier.height(8.dp))
+                    // Region picker — ExposedDropdownMenu so the user can pick
+                    // an existing preset or custom region when adding a channel.
+                    val allRegions = buildList {
+                        add("All")
+                        add("US")
+                        add("UK")
+                        add("CA")
+                        add("Premium")
+                        add("Sports")
+                        add("News")
+                        add("Custom")
+                        addAll(customRegions.map { it.name })
+                    }
+                    val currentRegionLabel = runCatching {
+                        customRegions.first { it.name == channelRegion }.name
+                    }.getOrElse { channelRegion }
+                    ExposedDropdownMenuBox(
+                        expanded = regionDropdownExpanded,
+                        onExpandedChange = { regionDropdownExpanded = it },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        OutlinedTextField(
+                            value = currentRegionLabel,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text(tr("Region")) },
+                            trailingIcon = {
+                                ExposedDropdownMenuDefaults.TrailingIcon(expanded = regionDropdownExpanded)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        ExposedDropdownMenu(
+                            expanded = regionDropdownExpanded,
+                            onDismissRequest = { regionDropdownExpanded = false },
+                        ) {
+                            allRegions.forEach { region ->
+                                DropdownMenuItem(
+                                    text = { Text(region) },
+                                    onClick = {
+                                        channelRegion = region
+                                        regionDropdownExpanded = false
+                                    },
+                                )
+                            }
+                        }
+                    }
                 }
             },
             confirmButton = {
@@ -3103,11 +3162,11 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                         val targetRegions = if (isEdit) {
                             seed.regions
                         } else {
-                            when (selectedQcRegion) {
+                            when (channelRegion) {
                                 "All", "Custom" -> listOf("custom")
                                 else -> {
-                                    val reg = customRegions.firstOrNull { it.name == selectedQcRegion }
-                                    listOf(reg?.tag ?: selectedQcRegion.lowercase())
+                                    val reg = customRegions.firstOrNull { it.name == channelRegion }
+                                    listOf(reg?.tag ?: channelRegion.lowercase())
                                 }
                             }
                         }
