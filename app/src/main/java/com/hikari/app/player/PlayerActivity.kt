@@ -8190,7 +8190,7 @@ class PlayerActivity : ComponentActivity() {
         val currentSource = sources.getOrNull(currentIndex) ?: return
         val name = currentSource.name
         val url = currentSource.url
-        val maxSlots = 6
+        val maxSlots = 9
         val options = (0 until maxSlots).map { i ->
             val occupied = com.hikari.app.ui.screens.MultiWindowStore.getStreamsForSlot(i)
             val status = if (occupied != null) occupied.name else I18n.t("Empty")

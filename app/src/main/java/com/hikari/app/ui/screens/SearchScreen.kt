@@ -305,6 +305,25 @@ class SearchViewModel(
         _selectedProviders.value = next.toSet()
         savedState["providers"] = ArrayList(next)
     }
+
+    /**
+     * Selects every installed IPTV playlist — the IPTV tab's search icon leads
+     * here via [Routes.iptvScopedSearchQuery], so a search from the IPTV page
+     * sweeps live channels and nothing else. Resolved here (not at navigation
+     * time) because that is where the provider list lives; the route just
+     * carries the [Routes.IPTV_SCOPE] marker.
+     */
+    fun selectIptvProviders() {
+        val ids = manager.providers.value
+            .filterIsInstance<com.hikari.app.providers.IptvProvider>()
+            .map { it.config.id }
+        if (ids.isEmpty()) {
+            selectAll()
+            return
+        }
+        _selectedProviders.value = ids.toSet()
+        savedState["providers"] = ArrayList(ids)
+    }
 }
 
 @Composable
@@ -504,7 +523,13 @@ fun SearchScreen(
 
     LaunchedEffect(Unit) {
         if (initialQuery.isNotBlank()) vm.setQuery(initialQuery)
-        if (initialProvider.isNotBlank()) vm.selectProvider(initialProvider)
+        if (initialProvider.isNotBlank()) {
+            // The IPTV tab's search icon carries the [Routes.IPTV_SCOPE]
+            // marker rather than a real provider id — it means "select every
+            // installed IPTV playlist", resolved here where the list lives.
+            if (initialProvider == com.hikari.app.ui.navigation.Routes.IPTV_SCOPE) vm.selectIptvProviders()
+            else vm.selectProvider(initialProvider)
+        }
     }
 
     // One tap EN -> target language (Chinese by default), tap again to restore

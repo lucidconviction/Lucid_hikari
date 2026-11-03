@@ -1151,10 +1151,8 @@ fun QuickChannelOverlay(
         isRefreshing = true
         loadState = try {
             val matches = withContext(Dispatchers.IO) {
-                val allChannels = mutableListOf<IptvChannel>()
-                for (p in app.providers.providers.value.filterIsInstance<IptvProvider>()) {
-                    runCatching { allChannels.addAll(p.channels(force = true)) }.getOrNull()
-                }
+                val playlists = app.providers.providers.value.filterIsInstance<IptvProvider>()
+                val allChannels = com.hikari.app.providers.gatherIptvChannels(playlists, force = true)
                 allChannels.filter { ch -> QuickChannelList.matches(qc, ch) }
             }
             if (matches.isEmpty()) {

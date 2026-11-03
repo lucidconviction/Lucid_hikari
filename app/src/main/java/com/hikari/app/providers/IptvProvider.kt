@@ -15,6 +15,7 @@ import com.hikari.app.data.StreamSource
 import com.hikari.app.net.Http
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -486,6 +487,12 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
         resolved
     }
 
+    /** The channels already in memory, without touching the network. Null when
+     *  this playlist has never been loaded — the quick-channel matcher uses this
+     *  first so opening the IPTV tab or the multi-view picker does not kick off
+     *  nine 45-second downloads just to list preset channels. */
+    fun cachedChannels(): List<IptvChannel>? = channelsCache
+
     /** When [config.url] is a stream rather than a playlist (an m3u8/m3u link
      *  pasted straight in), that stream is the playlist's only channel. */
     /** Display name for a saved torrent (mirrors the Add dialog's). */
@@ -793,5 +800,40 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
     fun invalidate() {
         loadedAt.remove(config.id)
         channelsCache = null
+    }
+}
+
+/**
+ * Every channel across every installed IPTV playlist, fast.
+ *
+ * Two-tier, and the tier is the whole point: cached playlists return their
+ *  in-memory copy straight away (the first time the user plays a channel from a
+ *  playlist it is loaded and stays for [IptvProvider.TTL_MS]), so opening the
+ *  IPTV tab or the multi-view quick-channel picker never fires a 45-second
+ *  download per playlist. Only playlists with nothing cached are fetched, and
+ *  those are fetched CONCURRENTLY rather than one after another — the old loop
+ *  awaited each `p.channels()` in turn, so ten slow playlists cost ten times
+ *  as long. [force] re-downloads every playlist regardless of cache — the
+ *  multi-view picker's "refresh" path.
+ */
+suspend fun gatherIptvChannels(
+    playlists: List<IptvProvider>,
+    force: Boolean = false,
+): List<IptvChannel> = withContext(Dispatchers.IO) {
+    if (force) {
+        val fresh = playlists.map { p ->
+            async { runCatching { p.channels(force = true) }.getOrNull() ?: emptyList() }
+        }.awaitAll()
+        fresh.flatten()
+    } else {
+        val cached = playlists.mapNotNull { it.cachedChannels() }
+        val cold = playlists.filter { it.cachedChannels() == null }
+        if (cold.isEmpty()) cached.flatten()
+        else {
+            val fresh = cold.map { p ->
+                async { runCatching { p.channels(force = true) }.getOrNull() ?: emptyList() }
+            }.awaitAll()
+            (cached + fresh).flatten()
+        }
     }
 }

@@ -435,6 +435,22 @@ object Routes {
     fun searchQuery(q: String): String = "$SEARCH_QUERY_BASE?q=${Uri.encode(q)}&provider="
 
     /**
+     * Where the IPTV tab's search icon leads: the global Search tab, scoped to
+     * every installed IPTV playlist. The old wiring opened the tab with nothing
+     * selected, so a search from the IPTV page ran across every extension in
+     * the app — manga, anime, movies — and buried the live channels the user
+     * was actually looking for. The [IPTV_SCOPE] marker is what [SearchScreen]
+     * recognises; it resolves it to the IPTV providers' ids and selects them
+     * all, so the sweep is exactly that list and nothing else.
+     */
+    fun iptvScopedSearchQuery(): String = "$SEARCH_QUERY_BASE?provider=$IPTV_SCOPE"
+
+    /** Marker [iptvScopedSearchQuery] hands to [SearchScreen] — it means "select
+     *  every installed IPTV playlist", resolved there where the provider list
+     *  lives. */
+    const val IPTV_SCOPE = "iptv-scope"
+
+    /**
      * Where a Stats row leads: the title's own page, reopened from the key the
      * row was filed under.
      *

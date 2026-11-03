@@ -2040,7 +2040,7 @@ private fun IptvSectionPage(
             // extension" uses. Without it the only search on this page was
             // buried inside one playlist's own group list.
             onSearch = if (kind == IptvSection.PLAYLIST) {
-                { Routes.navigateTab(nav, Routes.SEARCH) }
+                { Routes.safeNavigate(nav, Routes.iptvScopedSearchQuery()) }
             } else null,
             onAdd = { onAddPreset(kind) },
             // F2 — the Validate button. It only ever makes sense on the
@@ -2595,11 +2595,9 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
         scope.launch(Dispatchers.IO) {
             qcValidating = true
             val currentMatches = qcMatches.ifEmpty {
-                val allChannels = mutableListOf<IptvChannel>()
-                for (p in playlists) {
-                    runCatching { allChannels.addAll(p.channels()) }.getOrNull()
+                com.hikari.app.providers.gatherIptvChannels(playlists).filter { ch ->
+                    QuickChannelList.matches(selectedQc!!, ch)
                 }
-                allChannels.filter { ch -> QuickChannelList.matches(selectedQc!!, ch) }
             }
             qcMatches = currentMatches
             validateChannelStatuses(currentMatches) { url, isAlive ->
@@ -2642,10 +2640,7 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
         aliveByUrl = emptyMap()
 
         scope.launch(Dispatchers.IO) {
-            val allChannels = mutableListOf<IptvChannel>()
-            for (p in playlists) {
-                runCatching { allChannels.addAll(p.channels()) }.getOrNull()
-            }
+            val allChannels = com.hikari.app.providers.gatherIptvChannels(playlists)
             val matches = allChannels.filter { ch ->
                 QuickChannelList.matches(qc, ch)
             }
