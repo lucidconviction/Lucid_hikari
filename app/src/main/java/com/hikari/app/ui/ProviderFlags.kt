@@ -26,6 +26,10 @@ import coil.compose.AsyncImage
  * ("BD", "Bangla", "Dhaka", "BDIX") and a small table of well-known
  * extension names whose country the name alone declares. Anything that names
  * no country gets NO flag — never guessed.
+ *
+ * The [FlagIcon] composable that draws one of these lives in its own file
+ * (com/hikari/app/ui/FlagIcon.kt) so screens can import the drawing half
+ * without pulling the whole matcher in.
  */
 object ProviderFlags {
     /** Real flag image for an ISO code ("BD" → flagcdn w80 PNG). */
@@ -137,35 +141,5 @@ object ProviderFlags {
     fun flagOf(vararg texts: String?): String? {
         val (code, label) = pairOf(*texts) ?: return null
         return emojiOf(code) + " " + label
-    }
-}
-
-/**
- * A real flag image ([ProviderFlags.urlOf]) with the emoji flag as the
- * offline fallback, so the row shows a flag with or without network.
- */
-@Composable
-fun FlagIcon(
-    code: String,
-    size: Dp,
-    modifier: Modifier = Modifier,
-) {
-    var failed by remember(code) { mutableStateOf(false) }
-    if (failed) {
-        Text(
-            ProviderFlags.emojiOf(code),
-            fontSize = (size.value * 0.72f).sp,
-            modifier = modifier,
-        )
-    } else {
-        AsyncImage(
-            model = ProviderFlags.urlOf(code),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            onError = { failed = true },
-            modifier = modifier
-                .size(size)
-                .clip(RoundedCornerShape(4.dp)),
-        )
     }
 }
