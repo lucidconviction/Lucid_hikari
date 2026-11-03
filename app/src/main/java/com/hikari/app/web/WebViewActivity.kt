@@ -35,6 +35,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
+import coil.load
 import com.hikari.app.HikariApp
 import com.hikari.app.data.Site
 import com.hikari.app.net.AdBlocker
@@ -958,6 +959,7 @@ class WebViewActivity : ComponentActivity() {
         })
 
         restoreActiveTab()
+        setupWebView(startUrl)
     }
 
     private fun setupWebView(startUrl: String) {
@@ -1644,35 +1646,47 @@ class WebViewActivity : ComponentActivity() {
         closeBtn?.setOnClickListener { dialog.dismiss() }
         if (list != null) {
             val adapter = object : androidx.recyclerview.widget.RecyclerView.Adapter<androidx.recyclerview.widget.RecyclerView.ViewHolder>() {
-                inner class TabHolder(view: android.view.View) : androidx.recyclerview.widget.RecyclerView.ViewHolder(view)
+                inner class TabGridHolder(view: android.view.View) : androidx.recyclerview.widget.RecyclerView.ViewHolder(view) {
+                    val favicon: android.widget.ImageView = view.findViewById(R.id.item_tab_favicon)
+                    val title: android.widget.TextView = view.findViewById(R.id.item_tab_title)
+                    val close: android.widget.ImageView = view.findViewById(R.id.item_tab_close)
+                }
+
                 override fun onCreateViewHolder(parent: android.view.ViewGroup, viewType: Int): androidx.recyclerview.widget.RecyclerView.ViewHolder {
                     val v = android.view.LayoutInflater.from(parent.context)
-                        .inflate(android.R.layout.simple_list_item_2, parent, false)
-                    return TabHolder(v)
+                        .inflate(R.layout.item_tabs_grid, parent, false)
+                    return TabGridHolder(v)
                 }
+
                 override fun onBindViewHolder(holder: androidx.recyclerview.widget.RecyclerView.ViewHolder, position: Int) {
+                    val gridHolder = holder as TabGridHolder
                     val tab = openTabs[position]
-                    val tv1 = holder.itemView.findViewById<android.widget.TextView>(android.R.id.text1)
-                    val tv2 = holder.itemView.findViewById<android.widget.TextView>(android.R.id.text2)
-                    tv1?.text = tab.title
-                    tv2?.text = tab.url
-                    holder.itemView.setBackgroundColor(
+                    gridHolder.title.text = tab.title
+                    gridHolder.favicon.load(tab.faviconUrl) {
+                        crossfade(true)
+                    }
+                    gridHolder.itemView.setBackgroundColor(
                         if (position == activeTabIndex)
                             0x33FFFFFF.toInt()
                         else
                             0x00000000.toInt()
                     )
-                    holder.itemView.setOnClickListener {
+                    gridHolder.itemView.setOnClickListener {
                         activeTabIndex = position
                         saveTabs()
                         switchToActiveTab()
                         dialog.dismiss()
                     }
+                    gridHolder.close.setOnClickListener {
+                        closeTabAt(position)
+                        notifyItemRemoved(position)
+                        notifyItemRangeChanged(position, openTabs.size)
+                    }
                 }
                 override fun getItemCount() = openTabs.size
             }
             list.adapter = adapter
-            list.layoutManager = androidx.recyclerview.widget.LinearLayoutManager(this)
+            list.layoutManager = androidx.recyclerview.widget.GridLayoutManager(this, 2)
         }
         dialog.show()
     }
