@@ -56,6 +56,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -89,6 +90,7 @@ import com.hikari.app.data.QuickChannelList
 import com.hikari.app.data.StreamValidationStore
 import com.hikari.app.player.PlayerPool
 import com.hikari.app.providers.IptvProvider
+import com.hikari.app.providers.ContentProvider
 import com.hikari.app.ui.navigation.Routes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
@@ -276,6 +278,8 @@ private fun MultiViewContent(
 
     // State for quick channel sheet (from Browse IPTV empty state)
     var quickChannelSheetOpen by remember { mutableStateOf(false) }
+    // State for IPTV playlist browser sheet (from IPTV Browser button in empty state)
+    var iptvPlaylistBrowserOpen by remember { mutableStateOf(false) }
     // State for saved-layouts picker sheet
     var savedLayoutsSheetOpen by remember { mutableStateOf(false) }
     var showSaveLayoutDialog by remember { mutableStateOf(false) }
@@ -309,7 +313,7 @@ private fun MultiViewContent(
                 }
                 Spacer(Modifier.height(12.dp))
                 Surface(
-                    onClick = onBrowseIptv,
+                    onClick = { iptvPlaylistBrowserOpen = true },
                     shape = RoundedCornerShape(50),
                     color = SurfaceContainer,
                     modifier = Modifier.padding(top = 8.dp)
@@ -343,6 +347,17 @@ private fun MultiViewContent(
                     MultiWindowStore.addToSlot(channel.name, channel.url, channel.logo, slotIndex)
                 },
                 onDismiss = { quickChannelSheetOpen = false },
+            )
+        }
+
+        // Popup browser for browsing IPTV playlists within multi-view
+        if (iptvPlaylistBrowserOpen) {
+            IptvPlaylistBrowserSheet(
+                currentSlotIndex = -1,
+                onAddStream = { channel, slotIndex ->
+                    MultiWindowStore.addToSlot(channel.name, channel.url, channel.logo, slotIndex)
+                },
+                onDismiss = { iptvPlaylistBrowserOpen = false },
             )
         }
         return
@@ -1866,4 +1881,76 @@ fun SaveLayoutNameDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = OnSurfaceVariant) } },
     )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun IptvPlaylistBrowserSheet(
+    currentSlotIndex: Int,
+    onAddStream: (IptvChannel, Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val app = context.applicationContext as HikariApp
+    val allProviders by app.providers.providers.collectAsState(initial = emptyList())
+    val allProvidersList = remember(allProviders) { allProviders.filterIsInstance<IptvProvider>() }
+    
+    var allChannels by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    
+    LaunchedEffect(allProvidersList) {
+        withContext(Dispatchers.IO) {
+            val list = mutableListOf<IptvChannel>()
+            for (p in allProvidersList) {
+                runCatching { list.addAll(p.channels(force = true)) }.getOrNull()
+            }
+            allChannels = list.filter { it.url.startsWith("http") }
+            loading = false
+        }
+    }
+    
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = SurfaceContainer.copy(alpha = 0.97f),
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp).fillMaxWidth().height(480.dp)) {
+            Text("IPTV Channel Browser", color = OnSurface, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Spacer(Modifier.height(16.dp))
+            
+            if (loading) {
+                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                    androidx.compose.material3.CircularProgressIndicator(color = Primary)
+                }
+            } else if (allChannels.isEmpty()) {
+                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                    Text("No IPTV channels found", color = OnSurfaceVariant, fontSize = 14.sp)
+                }
+            } else {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.weight(1f)) {
+                    items(allChannels, key = { ch -> ch.url }) { ch ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(SurfaceLow)
+                                .clickable {
+                                    onAddStream(ch, currentSlotIndex)
+                                    onDismiss()
+                                }
+                                .padding(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(ch.name, color = OnSurface, fontSize = 14.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Box(modifier = Modifier.clip(RoundedCornerShape(50)).background(PrimaryContainer).padding(horizontal = 8.dp, vertical = 4.dp)) {
+                                Text("+", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

@@ -1638,34 +1638,36 @@ fun IptvAllPlaylistsScreen(nav: NavHostController) {
         val m = IptvPlaylist.normalizeGroupMode(groupMode)
         tiles = withContext(Dispatchers.IO) {
             val out = ArrayList<AllPlaylistTile>()
-            playlists.forEach { p ->
-                val pid = p.config.id
-                val channels = runCatching {
-                    withTimeoutOrNull(60_000L) { p.channels() }
-                }.getOrNull().orEmpty()
-                if (channels.isEmpty()) return@forEach
-                out += AllPlaylistTile(
-                    provider = p,
-                    name = I18n.t("All channels"),
-                    catalogId = IptvProvider.CATALOG_ALL,
-                    count = channels.size,
-                    key = "$pid|all",
-                )
-                channels.groupBy { IptvPlaylist.groupKey(it, m) }
-                    .entries
-                    .sortedWith(
-                        compareByDescending<Map.Entry<String, List<com.hikari.app.data.IptvChannel>>> { it.value.size }
-                            .thenBy { it.key.lowercase() },
+            playlists.chunked(3).forEach { chunk ->
+                chunk.forEach { p ->
+                    val pid = p.config.id
+                    val channels = runCatching {
+                        withTimeoutOrNull(60_000L) { p.channels() }
+                    }.getOrNull().orEmpty()
+                    if (channels.isEmpty()) return@forEach
+                    out += AllPlaylistTile(
+                        provider = p,
+                        name = I18n.t("All channels"),
+                        catalogId = IptvProvider.CATALOG_ALL,
+                        count = channels.size,
+                        key = "$pid|all",
                     )
-                    .forEach { (group, chs) ->
-                        out += AllPlaylistTile(
-                            provider = p,
-                            name = group,
-                            catalogId = IptvProvider.catalogIdForGroup(group),
-                            count = chs.size,
-                            key = "$pid|$group",
+                    channels.groupBy { IptvPlaylist.groupKey(it, m) }
+                        .entries
+                        .sortedWith(
+                            compareByDescending<Map.Entry<String, List<com.hikari.app.data.IptvChannel>>> { it.value.size }
+                                .thenBy { it.key.lowercase() },
                         )
-                    }
+                        .forEach { (group, chs) ->
+                            out += AllPlaylistTile(
+                                provider = p,
+                                name = group,
+                                catalogId = IptvProvider.catalogIdForGroup(group),
+                                count = chs.size,
+                                key = "$pid|$group",
+                            )
+                        }
+                }
             }
             out
         }
