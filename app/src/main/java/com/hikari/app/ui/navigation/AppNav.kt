@@ -30,6 +30,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Extension
@@ -125,6 +126,7 @@ import com.hikari.app.ui.screens.SearchScreen
 import com.hikari.app.ui.screens.SettingsScreen
 import com.hikari.app.ui.screens.StatsScreen
 import com.hikari.app.ui.screens.TelegramScreen
+import com.hikari.app.ui.screens.WebsitesScreen
 import com.hikari.app.ui.screens.TmdbGridScreen
 import com.hikari.app.ui.theme.HikariThemeMode
 import com.hikari.app.ui.theme.rememberGlassTokens
@@ -213,6 +215,11 @@ object Routes {
      * with no channels should not carry a spare button.
      */
     const val TELEGRAM = "telegram"
+
+    /** The Websites tab: the user's saved ad-free WebView sites (see
+     *  [com.hikari.app.ui.screens.WebsitesScreen]). ON by default — any install
+     *  with added sites needs a one-tap home for them. */
+    const val WEBSITES = "websites"
 
     /** Opens one manga. [url] is the source's own url for the title (its id). */
     fun mangaDetail(
@@ -1046,6 +1053,11 @@ val BottomTabs = listOf(
     // Telegram channels the user added, played in Hikari's player (Settings →
     // Taskbar buttons switches the button on).
     BottomTab(Routes.TELEGRAM, "Telegram", Icons.Filled.Send),
+    // Websites: the user's saved ad-free WebView sites — opened in the same
+    // clean browser that streams extensions use. ON by default: a user who
+    // cares about web browsing sees it right away; one who does not still has
+    // Extensions open sites for them.
+    BottomTab(Routes.WEBSITES, "Websites", Icons.Filled.Public),
     BottomTab(Routes.EXTENSIONS, "Extensions", Icons.Filled.Extension),
     BottomTab(Routes.SETTINGS, "Settings", Icons.Filled.Settings),
 )
@@ -1103,6 +1115,11 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
     // Telegram: a grid of streams the user can watch side by side.
     val multiViewTabFlow = remember { app.store.multiViewTabFlow() }
     val multiViewTabOn by multiViewTabFlow.collectAsState(initial = true)
+    // Websites is ON by default like Telegram — the user's saved ad-free
+    // WebView sites belong here, so they can reach them even when Extensions
+    // are closed.
+    val websitesTabFlow = remember { app.store.websitesTabFlow() }
+    val websitesTabOn by websitesTabFlow.collectAsState(initial = true)
     val visibleTabs: Set<String> = buildSet {
         addAll(hiddenTabs)
         if (!iptvTabOn) add(Routes.IPTV)
@@ -1110,6 +1127,7 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
         if (!statsTabOn) add(Routes.STATS)
         if (!telegramTabOn) add(Routes.TELEGRAM)
         if (!multiViewTabOn) add(Routes.MULTI_VIEW)
+        if (!websitesTabOn) add(Routes.WEBSITES)
     }
     // How the bar itself is drawn (Settings → App Layout → Taskbar & navigation).
     val navStyleFlow = remember { app.store.navStyleFlow() }
@@ -1491,6 +1509,10 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
             // The Telegram tab (off by default — see Routes.TELEGRAM): the public
             // channels the user added, played in this app's own player.
             composable(Routes.TELEGRAM) { TelegramScreen(nav) }
+            // The Websites tab: the user's saved ad-free WebView sites, with an
+            // address bar for any URL and one-tap launch in the same browser that
+            // streams extensions use.
+            composable(Routes.WEBSITES) { WebsitesScreen(nav) }
             // ---- Manga (the off-by-default tab, its detail page and reader) ----
             composable(Routes.MANGA) { MangaScreen(nav) }
             composable(

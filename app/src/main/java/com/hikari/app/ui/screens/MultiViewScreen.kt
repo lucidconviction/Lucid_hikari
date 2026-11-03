@@ -278,8 +278,6 @@ private fun MultiViewContent(
 
     // State for quick channel sheet (from Browse IPTV empty state)
     var quickChannelSheetOpen by remember { mutableStateOf(false) }
-    // State for IPTV playlist browser sheet (from IPTV Browser button in empty state)
-    var iptvPlaylistBrowserOpen by remember { mutableStateOf(false) }
     // State for saved-layouts picker sheet
     var savedLayoutsSheetOpen by remember { mutableStateOf(false) }
     var showSaveLayoutDialog by remember { mutableStateOf(false) }
@@ -312,26 +310,10 @@ private fun MultiViewContent(
                     }
                 }
                 Spacer(Modifier.height(12.dp))
-                Surface(
-                    onClick = { iptvPlaylistBrowserOpen = true },
-                    shape = RoundedCornerShape(50),
-                    color = SurfaceContainer,
-                    modifier = Modifier.padding(top = 8.dp)
-                        .border(0.5.dp, OutlineVariant.copy(alpha = 0.3f), RoundedCornerShape(50)),
-                ) {
-                    Row(
-                        Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(Icons.Filled.ArrowBack, contentDescription = null, modifier = Modifier.size(16.dp), tint = OnSurfaceVariant)
-                        Spacer(Modifier.width(6.dp))
-                        Text("IPTV Browser", color = OnSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
                 Box(
                     Modifier.clip(RoundedCornerShape(9999.dp)).background(SurfaceContainer)
                         .border(0.5.dp, OutlineVariant.copy(alpha = 0.3f), RoundedCornerShape(9999.dp))
+                        .clickable { savedLayoutsSheetOpen = true }
                         .padding(horizontal = 20.dp, vertical = 8.dp),
                 ) {
                     Text("★ Saved Layouts", color = OnSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
@@ -350,14 +332,24 @@ private fun MultiViewContent(
             )
         }
 
-        // Popup browser for browsing IPTV playlists within multi-view
-        if (iptvPlaylistBrowserOpen) {
-            IptvPlaylistBrowserSheet(
-                currentSlotIndex = -1,
-                onAddStream = { channel, slotIndex ->
-                    MultiWindowStore.addToSlot(channel.name, channel.url, channel.logo, slotIndex)
+        if (savedLayoutsSheetOpen) {
+            SavedLayoutsSheet(
+                cacheDir = cacheDir,
+                layouts = MultiWindowStore.savedLayouts,
+                onApply = { name -> MultiWindowStore.applyLayout(cacheDir, name) },
+                onRename = { name -> showSaveLayoutDialog = true },
+                onDelete = { name -> MultiWindowStore.deleteLayout(cacheDir, name) },
+                onDismiss = { savedLayoutsSheetOpen = false },
+            )
+        }
+        if (showSaveLayoutDialog) {
+            SaveLayoutNameDialog(
+                onDismiss = { showSaveLayoutDialog = false },
+                onConfirm = { name ->
+                    MultiWindowStore.saveLayouts(cacheDir, name)
+                    showSaveLayoutDialog = false
+                    savedLayoutsSheetOpen = true
                 },
-                onDismiss = { iptvPlaylistBrowserOpen = false },
             )
         }
         return
@@ -1879,76 +1871,4 @@ fun SaveLayoutNameDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = OnSurfaceVariant) } },
     )
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun IptvPlaylistBrowserSheet(
-    currentSlotIndex: Int,
-    onAddStream: (IptvChannel, Int) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val context = LocalContext.current
-    val app = context.applicationContext as HikariApp
-    val allProviders by app.providers.providers.collectAsState(initial = emptyList())
-    val allProvidersList = remember(allProviders) { allProviders.filterIsInstance<IptvProvider>() }
-    
-    var allChannels by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
-    
-    LaunchedEffect(allProvidersList) {
-        withContext(Dispatchers.IO) {
-            val list = mutableListOf<IptvChannel>()
-            for (p in allProvidersList) {
-                runCatching { list.addAll(p.channels(force = true)) }.getOrNull()
-            }
-            allChannels = list.filter { it.url.startsWith("http") }
-            loading = false
-        }
-    }
-    
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = SurfaceContainer.copy(alpha = 0.97f),
-        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp).fillMaxWidth().height(480.dp)) {
-            Text("IPTV Channel Browser", color = OnSurface, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-            Spacer(Modifier.height(16.dp))
-            
-            if (loading) {
-                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                    androidx.compose.material3.CircularProgressIndicator(color = Primary)
-                }
-            } else if (allChannels.isEmpty()) {
-                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                    Text("No IPTV channels found", color = OnSurfaceVariant, fontSize = 14.sp)
-                }
-            } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.weight(1f)) {
-                    items(allChannels, key = { ch -> ch.url }) { ch ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(SurfaceLow)
-                                .clickable {
-                                    onAddStream(ch, currentSlotIndex)
-                                    onDismiss()
-                                }
-                                .padding(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(ch.name, color = OnSurface, fontSize = 14.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Box(modifier = Modifier.clip(RoundedCornerShape(50)).background(PrimaryContainer).padding(horizontal = 8.dp, vertical = 4.dp)) {
-                                Text("+", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
 }

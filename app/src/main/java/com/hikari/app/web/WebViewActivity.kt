@@ -845,6 +845,11 @@ class WebViewActivity : ComponentActivity() {
                 view: WebView?,
                 request: WebResourceRequest
             ): Boolean {
+                // If the user tapped a link, they are actively browsing the site —
+                // cancel verification auto-close so the view doesn't disappear.
+                if (request.isForMainFrame && request.hasGesture()) {
+                    autoCloseWhenCloudflarePassed = false
+                }
                 // A donation / "support the developer" page is never part of
                 // watching something (see PromoGuard) — these are exactly the
                 // links an extension hangs off its content, and once they load
@@ -1118,6 +1123,14 @@ class WebViewActivity : ComponentActivity() {
         })
 
         webView.webChromeClient = object : WebChromeClient() {
+            override fun onCloseWindow(window: WebView?) {
+                // Prevent ad scripts / popunders from closing the main WebView via window.close()
+                if (window === popupChild) {
+                    runCatching { popupChild?.destroy() }
+                    popupChild = null
+                }
+            }
+
             override fun onCreateWindow(
                 view: WebView?,
                 isDialog: Boolean,
@@ -2263,13 +2276,8 @@ class WebViewActivity : ComponentActivity() {
         private const val VERIFY_NO_CHALLENGE_POLLS = 12
 
         /** How many times a crashed renderer may be recovered by relaunching
-         *  this activity inside one browsing session. A page that kills
-         *  Chromium's renderer does it again on the next load — before this
-         *  limit the activity relaunched itself from its own intent, so a
-         *  crash-on-load page (a Cloudflare challenge on a low-end device is the
-         *  classic one) reopened and crashed in a loop: "it keeps opening over
-         *  and over". After the limit the view just closes. */
-        private const val MAX_RENDER_RESTARTS = 1
+         *  this activity inside one browsing session. */
+        private const val MAX_RENDER_RESTARTS = 3
 
         /** HLS/DASH/MP4 URLs ending the request path (optional query). */
         private val VIDEO_URL_RE =

@@ -255,6 +255,12 @@ class AppStore(private val ctx: Context) {
          * feature, so a fresh install gets a button for it.
          */
         val MULTI_VIEW_TAB = booleanPreferencesKey("showMultiViewTab")
+        /**
+         * Whether the Websites tab's button is drawn in the taskbar. ON by
+         * default — the user's saved WebView sites are a page of their own, so a
+         * fresh install with added sites gets a button for them.
+         */
+        val WEBSITES_TAB = booleanPreferencesKey("showWebsitesTab")
         /** The Telegram channels the Telegram tab browses, as JSON. */
         val TELEGRAM_CHANNELS = stringPreferencesKey("telegramChannels")
         /**
@@ -2814,6 +2820,15 @@ fun searchExceptionOnFlow(): Flow<Boolean> =
 
     suspend fun setMultiViewTab(shown: Boolean) {
         write("MULTI_VIEW_TAB") { it[K.MULTI_VIEW_TAB] = shown }
+    }
+
+    fun websitesTabFlow(): Flow<Boolean> =
+        store.data.map { it[K.WEBSITES_TAB] ?: true }.distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    suspend fun websitesTab(): Boolean = websitesTabFlow().first()
+
+    suspend fun setWebsitesTab(shown: Boolean) {
+        write("WEBSITES_TAB") { it[K.WEBSITES_TAB] = shown }
     }
 
     /**

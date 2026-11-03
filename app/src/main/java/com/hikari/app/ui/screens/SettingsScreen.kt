@@ -2344,22 +2344,26 @@ private fun TaskbarCard(app: HikariApp) {
     // Telegram: a grid of streams the user can watch side by side.
     val multiViewFlow = remember { app.store.multiViewTabFlow() }
     val multiViewTab by multiViewFlow.collectAsState(initial = true)
+    // Websites is ON by default (AppStore.websitesTabFlow): saved WebView sites.
+    val websitesFlow = remember { app.store.websitesTabFlow() }
+    val websitesTab by websitesFlow.collectAsState(initial = true)
     fun shown(tab: BottomTab): Boolean = when (tab.route) {
         Routes.IPTV -> iptvTab
         Routes.MANGA -> mangaTab
         Routes.STATS -> statsTab
         Routes.TELEGRAM -> telegramTab
         Routes.MULTI_VIEW -> multiViewTab
+        Routes.WEBSITES -> websitesTab
         else -> tab.route !in hidden
     }
     // The tabs that obey "the last one cannot be switched off" rule. IPTV,
     // Manga, Stats and Telegram are not among them: they are extra pages, so
     // switching any of them on or off can never leave the user without a way
     // around the app.
-    val extras = setOf(Routes.IPTV, Routes.MANGA, Routes.STATS, Routes.TELEGRAM, Routes.MULTI_VIEW)
+    val extras = setOf(Routes.IPTV, Routes.MANGA, Routes.STATS, Routes.TELEGRAM, Routes.MULTI_VIEW, Routes.WEBSITES)
     val coreVisible = BottomTabs.filter { it.route !in extras && it.route !in hidden }
     val visibleCount = coreVisible.size + (if (iptvTab) 1 else 0) + (if (mangaTab) 1 else 0) +
-        (if (statsTab) 1 else 0) + (if (telegramTab) 1 else 0) + (if (multiViewTab) 1 else 0)
+        (if (statsTab) 1 else 0) + (if (telegramTab) 1 else 0) + (if (multiViewTab) 1 else 0) + (if (websitesTab) 1 else 0)
     val labelsFlow = remember { app.store.tabLabelsFlow() }
     val labels by labelsFlow.collectAsState(initial = true)
 
@@ -2437,6 +2441,13 @@ private fun TaskbarCard(app: HikariApp) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                    if (tab.route == Routes.WEBSITES) {
+                        Text(
+                            tr("On by default — switch off to hide the Websites tab"),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     if (tab.route == Routes.LIBRARY) {
                         // My Stuff is really THREE pages behind one button, so
                         // its own sections get their own switches directly under
@@ -2458,6 +2469,7 @@ private fun TaskbarCard(app: HikariApp) {
                             Routes.STATS -> app.store.setStatsTab(on)
                             Routes.TELEGRAM -> app.store.setTelegramTab(on)
                             Routes.MULTI_VIEW -> app.store.setMultiViewTab(on)
+                            Routes.WEBSITES -> app.store.setWebsitesTab(on)
                             else -> app.store.setTabHidden(tab.route, !on)
                         }
                     }
