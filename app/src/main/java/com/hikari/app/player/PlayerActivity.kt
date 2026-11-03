@@ -8180,45 +8180,35 @@ class PlayerActivity : ComponentActivity() {
         originalPillLabels[R.id.auto_next_btn] = label
     }
 
-    /** Open the slot-picker dialog so the current stream can be placed into an
+    /** Open the slot-picker menu so the current stream can be placed into an
      *  empty multi-view slot without leaving this player screen.
      *
-     *  Nuvio workflow: the picker is a Compose bottom-sheet shown by AppRoot.
-     *  We signal the request via [com.hikari.app.HikariApp.slotPickerRequest]
-     *  which AppRoot observes and turns into [showSlotPickerDialog]. */
+     *  Uses the player's native glass menu style (same as Channels, Episodes,
+     *  Audio, Subtitles) to avoid Dialog+ComposeView lifecycle crashes.
+     */
     fun openMultiWindow() {
         val currentSource = sources.getOrNull(currentIndex) ?: return
         val name = currentSource.name
         val url = currentSource.url
-        val dialog = Dialog(this, android.R.style.Theme_Translucent_NoTitleBar)
-        dialog.setCancelable(true)
-        dialog.setCanceledOnTouchOutside(true)
-        val composeView = androidx.compose.ui.platform.ComposeView(this).apply {
-            setContent {
-                androidx.compose.material3.MaterialTheme {
-                    com.hikari.app.ui.screens.SlotPickerBottomSheet(
-                        name = name,
-                        url = url,
-                        logo = null,
-                        onDismiss = { dialog.dismiss() },
-                        onSlotSelected = { slotIndex ->
-                            com.hikari.app.ui.screens.MultiWindowStore.addToSlot(name, url, null, slotIndex = slotIndex)
-                            dialog.dismiss()
-                            Toast.makeText(this@PlayerActivity, "Added to MultiView slot ${slotIndex + 1}", Toast.LENGTH_SHORT).show()
-                        },
-                    )
-                }
-            }
+        val maxSlots = 6
+        val options = (0 until maxSlots).map { i ->
+            val occupied = com.hikari.app.ui.screens.MultiWindowStore.getStreamsForSlot(i)
+            val status = if (occupied != null) occupied.name else I18n.t("Empty")
+            GlassOption(
+                label = "Slot ${i + 1}",
+                sub = status,
+                selected = occupied != null && occupied.url == url,
+            )
         }
-        dialog.setContentView(composeView, ViewGroup.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT
-        ))
-        dialog.window?.let { w ->
-            w.setBackgroundDrawable(ColorDrawable(0x99000000.toInt()))
-            w.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
+        showGlassMenu(
+            I18n.t("Add to MultiView"),
+            options,
+            hint = name,
+            iconRes = R.drawable.ic_episodes,
+        ) { slotIndex ->
+            com.hikari.app.ui.screens.MultiWindowStore.addToSlot(name, url, logo = null, slotIndex = slotIndex)
+            Toast.makeText(this, "Added to MultiView slot ${slotIndex + 1}", Toast.LENGTH_SHORT).show()
         }
-        dialog.show()
     }
 
     /** A video that played to its real end advances itself when autoplay is on.

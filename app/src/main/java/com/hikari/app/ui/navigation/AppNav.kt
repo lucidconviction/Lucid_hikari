@@ -2,6 +2,7 @@ package com.hikari.app.ui.navigation
 import com.hikari.app.i18n.tr
 
 import android.net.Uri
+import android.widget.Toast
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -1212,6 +1213,7 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
         }
     }
     if (showSlotPicker) {
+        val context = LocalContext.current
         SlotPickerBottomSheet(
             name = slotPickerName,
             url = slotPickerUrl,
@@ -1219,6 +1221,7 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
             onSlotSelected = { slotIndex ->
                 MultiWindowStore.addToSlot(slotPickerName, slotPickerUrl, slotIndex = slotIndex)
                 showSlotPicker = false
+                Toast.makeText(context, "Added to MultiView slot ${slotIndex + 1}", Toast.LENGTH_SHORT).show()
             },
         )
     }
