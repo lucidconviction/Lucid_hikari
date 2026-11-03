@@ -1354,5 +1354,16 @@
   "Your provider is searched first. Every server shows here the moment it is found.": "Se busca primero en tu proveedor. Cada servidor aparece aquí en cuanto se encuentra.",
   "YouTube": "youtube",
   "yt-dlp fallback, userscripts, Continue Watching": "Respaldo de yt-dlp, scripts de usuario, Continuar viendo",
-  "Zoom": "Ampliar"
+  "Zoom": "Ampliar",
+  "Open tabs": "Open tabs",
+  "Save this website": "Save this website",
+  "Website name": "Website name",
+  "Website saved": "Website saved",
+  "Remove \"{}\"?": "Remove \"{}\"?",
+  "Delete website": "Delete website",
+  "Saved websites": "Saved websites",
+  "No websites added yet — add one below to open any site ad-free.": "No websites added yet — add one below to open any site ad-free.",
+  "Go": "Go",
+  "Grid view": "Grid view",
+  "List view": "List view"
 }

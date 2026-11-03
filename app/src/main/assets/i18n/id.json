@@ -1345,5 +1345,16 @@
   "Your provider first, then every engine that found a server.": "Penyedia Anda terlebih dahulu, lalu setiap mesin yang menemukan server.",
   "Your provider is searched first. Every server shows here the moment it is found.": "Penyedia Anda dicari lebih dulu. Setiap server muncul di sini begitu ditemukan.",
   "yt-dlp fallback, userscripts, Continue Watching": "fallback yt-dlp, skrip pengguna, Lanjutkan Menonton",
-  "Zoom": "Perbesar"
+  "Zoom": "Perbesar",
+  "Open tabs": "Open tabs",
+  "Save this website": "Save this website",
+  "Website name": "Website name",
+  "Website saved": "Website saved",
+  "Remove \"{}\"?": "Remove \"{}\"?",
+  "Delete website": "Delete website",
+  "Saved websites": "Saved websites",
+  "No websites added yet — add one below to open any site ad-free.": "No websites added yet — add one below to open any site ad-free.",
+  "Go": "Go",
+  "Grid view": "Grid view",
+  "List view": "List view"
 }

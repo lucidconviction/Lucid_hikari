@@ -1330,5 +1330,16 @@
   "Your provider first, then every engine that found a server.": "Πρώτα ο πάροχος σας και μετά κάθε μηχανή που βρήκε διακομιστή.",
   "Your provider is searched first. Every server shows here the moment it is found.": "Ο δικός σας πάροχος αναζητείται πρώτος. Κάθε διακομιστής εμφανίζεται εδώ μόλις βρεθεί.",
   "yt-dlp fallback, userscripts, Continue Watching": "εναλλακτική yt-dlp, userscripts, Continue Watching",
-  "Zoom": "Ζουμ"
+  "Zoom": "Ζουμ",
+  "Open tabs": "Open tabs",
+  "Save this website": "Save this website",
+  "Website name": "Website name",
+  "Website saved": "Website saved",
+  "Remove \"{}\"?": "Remove \"{}\"?",
+  "Delete website": "Delete website",
+  "Saved websites": "Saved websites",
+  "No websites added yet — add one below to open any site ad-free.": "No websites added yet — add one below to open any site ad-free.",
+  "Go": "Go",
+  "Grid view": "Grid view",
+  "List view": "List view"
 }

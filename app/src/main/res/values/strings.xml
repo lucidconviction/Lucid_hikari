@@ -48,4 +48,8 @@
     <string name="cd_player_options">Player options</string>
     <string name="cd_lock_controls">Lock controls</string>
     <string name="cd_fit_or_crop">Fit, crop or stretch video</string>
+    <string name="websites_tabs_title">Open tabs</string>
+    <string name="websites_save_title">Save this website</string>
+    <string name="websites_save_hint">Website name</string>
+    <string name="websites_saved">Website saved</string>
 </resources>

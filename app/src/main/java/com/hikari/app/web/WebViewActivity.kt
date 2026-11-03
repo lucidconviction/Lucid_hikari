@@ -36,10 +36,12 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import com.hikari.app.HikariApp
+import com.hikari.app.data.Site
 import com.hikari.app.net.AdBlocker
 import com.hikari.app.net.Http
 import com.hikari.app.net.PromoGuard
 import com.hikari.app.player.PlayerActivity
+import com.hikari.app.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -132,6 +134,16 @@ class WebViewActivity : ComponentActivity() {
     // Renderer-crash recoveries already spent by this view (carried across the
     // relaunch via the intent, see onRenderProcessGone).
     private var renderRestarts = 0
+    // Open tabs — each tab remembers its URL, a display title, and a short-
+    // lived favicon URL (the Google favicons proxy, which works for any domain
+    // without needing to load the page). Tabs persist across relaunches so the
+    // user always sees the same set when they come back to this activity.
+    private val tabsPrefs by lazy {
+        getSharedPreferences("webview_tabs", MODE_PRIVATE)
+    }
+    private val openTabs = mutableListOf<Tab>()
+    // Which tab in [openTabs] is the currently visible one (index into the list).
+    private var activeTabIndex = 0
     // Video-verification mode (set alongside verifyHost): this view is open
     // solely to pass a CF challenge for a STREAMING site, and
     // the site's redirect to the real video page is legitimate — so main-frame
@@ -277,6 +289,123 @@ class WebViewActivity : ComponentActivity() {
     private var popupAllowHosts: Set<String> = emptySet()
     @Volatile
     private var popupBlockHosts: Set<String> = emptySet()
+
+    // ---- Tab management ---------------------------------------------------
+
+    /** One browsing session tab — a URL with a display title and a favicon URL. */
+    data class Tab(
+        val url: String,
+        val title: String,
+        /** A Google favicons proxy URL: works for any domain without loading the page. */
+        val faviconUrl: String = "https://www.google.com/s2/favicons?domain=${Uri.parse(url).host ?: url}&sz=64",
+    )
+
+    /** Loads persisted tabs from SharedPreferences and restores [openTabs] + [activeTabIndex]. */
+    private fun loadTabs() {
+        val json = tabsPrefs.getString("tabs_json", null) ?: return
+        runCatching {
+            val arr = JSONArray(json)
+            openTabs.clear()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                openTabs.add(Tab(obj.optString("url"), obj.optString("title")))
+            }
+            activeTabIndex = tabsPrefs.getInt("active_tab", 0).coerceIn(0, openTabs.size - 1)
+        }
+    }
+
+    /** Persists [openTabs] + [activeTabIndex] to SharedPreferences. */
+    private fun saveTabs() {
+        val arr = JSONArray()
+        for (t in openTabs) arr.put(JSONObject().apply {
+            put("url", t.url)
+            put("title", t.title)
+        })
+        tabsPrefs.edit().apply {
+            putString("tabs_json", arr.toString())
+            putInt("active_tab", activeTabIndex)
+            apply()
+        }
+    }
+
+    /** Opens a new tab with the given URL/title and makes it the active one. */
+    private fun openTab(url: String, title: String) {
+        val normalized = if (url.startsWith("http://", ignoreCase = true) ||
+            url.startsWith("https://", ignoreCase = true)
+        ) url else "https://$url"
+        openTabs.add(Tab(normalized, title.ifBlank { normalized }))
+        activeTabIndex = openTabs.size - 1
+        saveTabs()
+    }
+
+    /** Closes the tab at the given index; picks the nearest neighbour as active. */
+    private fun closeTabAt(index: Int) {
+        if (openTabs.size <= 1) { finish(); return }
+        openTabs.removeAt(index)
+        activeTabIndex = when {
+            activeTabIndex >= openTabs.size -> openTabs.size - 1
+            activeTabIndex < 0 -> 0
+            else -> activeTabIndex
+        }
+        saveTabs()
+        switchToActiveTab()
+    }
+
+    /** Jumps to the active tab without changing the list. */
+    private fun switchToActiveTab() {
+        if (openTabs.isEmpty()) return
+        val t = openTabs[activeTabIndex]
+        pageUrl = t.url
+        pageTitle = t.title
+        webView.loadUrl(t.url)
+    }
+
+    /** Called when this activity is first created — loads the active tab's URL. */
+    private fun restoreActiveTab() {
+        loadTabs()
+        if (openTabs.isEmpty()) return
+        // If the start URL from the intent is different from any saved tab, push
+        // the intent URL as a new tab so the saved session is not lost.
+        if (!openTabs.any { it.url == startUrl }) {
+            openTabs.add(Tab(startUrl, pageTitle))
+            activeTabIndex = openTabs.size - 1
+            saveTabs()
+        } else {
+            activeTabIndex = openTabs.indexOfFirst { it.url == startUrl }
+                .takeIf { it >= 0 } ?: 0
+        }
+        val t = openTabs[activeTabIndex]
+        pageUrl = t.url
+        pageTitle = t.title
+    }
+
+    // ---- Save current page as a Website -----------------------------------
+
+    /** Adds the currently-viewed page to the user's saved Websites (as seen in
+     *  the Websites tab). Shows a small dialog for the user to confirm or rename
+     *  the site before saving. */
+    private fun saveCurrentSite() {
+        val url = pageUrl ?: webView.url ?: return
+        val host = currentPageHost()?.trim()?.trimEnd('.')?.lowercase().orEmpty()
+        val defaultName = host.ifBlank { pageTitle }
+        val builder = AlertDialog.Builder(this)
+        builder.setTitle(I18n.t("Save this website"))
+        val input = android.widget.EditText(this).apply {
+            setText(defaultName)
+            setHint(I18n.t("Website name"))
+        }
+        builder.setView(input)
+        builder.setPositiveButton(I18n.t("Save")) { _, _ ->
+            val name = input.text?.toString()?.trim()?.ifEmpty { defaultName } ?: defaultName
+            lifecycleScope.launch(Dispatchers.IO) {
+                val app = applicationContext as HikariApp
+                app.store.addSite(Site(name, url))
+            }
+            Toast.makeText(this, I18n.t("Website saved"), Toast.LENGTH_SHORT).show()
+        }
+        builder.setNegativeButton(I18n.t("Cancel"), null)
+        builder.show()
+    }
 
     /** Last popup URL/host the page tried to open (for the ⋯ "block this ad" offer). */
     @Volatile
@@ -625,6 +754,18 @@ class WebViewActivity : ComponentActivity() {
             isClickable = true
             setOnClickListener { showMenu(it) }
         }
+        // Tab-count pill — sits left of the ⋯ pill. Tapping it opens the tab
+        // grid dialog so the user can switch between or close open tabs.
+        val tabPill = TextView(this).apply {
+            text = "\uD83D\uDD17" // paperclip = tabs
+            textSize = 16f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setBackgroundColor(0x661A1A1A.toInt())
+            setPadding(dp(8), dp(2), dp(8), dp(2))
+            isClickable = true
+            setOnClickListener { showTabGrid() }
+        }
 
         val content = FrameLayout(this).apply {
             addView(webView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -634,7 +775,15 @@ class WebViewActivity : ComponentActivity() {
                     FrameLayout.LayoutParams.WRAP_CONTENT,
                     FrameLayout.LayoutParams.WRAP_CONTENT,
                     Gravity.TOP or Gravity.END
-                ).apply { topMargin = dp(2) }
+                ).apply { topMargin = dp(2); rightMargin = dp(4) }
+            )
+            addView(
+                tabPill,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP or Gravity.END
+                ).apply { topMargin = dp(2); rightMargin = dp(36) }
             )
             addView(
                 videoChip,
@@ -799,12 +948,16 @@ class WebViewActivity : ComponentActivity() {
                 when {
                     customView != null -> hideCustomView()
                     webView.canGoBack() -> webView.goBack()
+                    openTabs.size > 1 -> {
+                        // On the home page of a tab: close this tab and switch to the nearest one.
+                        closeTabAt(activeTabIndex)
+                    }
                     else -> finish()
                 }
             }
         })
 
-        setupWebView(startUrl)
+        restoreActiveTab()
     }
 
     private fun setupWebView(startUrl: String) {
@@ -1349,7 +1502,7 @@ class WebViewActivity : ComponentActivity() {
             }
         }
 
-        webView.loadUrl(startUrl)
+        webView.loadUrl(pageUrl ?: startUrl)
     }
 
     @Suppress("DEPRECATION")
@@ -1417,6 +1570,10 @@ class WebViewActivity : ComponentActivity() {
         menu.menu.add(0, 9, 9, "\u2715 Clear all blocks")
         if (translateEnabled) menu.menu.add(0, 10, 10, "\u2716 Translation off")
         menu.menu.add(0, 12, 12, if (mouseMode) "\u2716 Mouse cursor off" else "\u2316 Mouse cursor on")
+        // Save this page as a Website (persisted to the Websites tab).
+        menu.menu.add(0, 20, 20, "\u2764\uFE0F Save this site")
+        // Open the tab grid so the user can switch / close tabs.
+        menu.menu.add(0, 21, 21, "\uD83D\uDD17 Tabs (\u200A${openTabs.size}\u200B)")
         // Per-site adblock switch, instant: a site the blocker breaks goes on
         // the whitelist from here (and back off with the same tap), no trip
         // to Settings. The in-memory set is swapped and the page reloaded, so
@@ -1464,10 +1621,60 @@ class WebViewActivity : ComponentActivity() {
                 12 -> toggleMouse()
                 13 -> toggleSiteAdblock()
                 14 -> blockAdSite()
+                20 -> saveCurrentSite()
+                21 -> showTabGrid()
             }
             true
         }
         menu.show()
+    }
+
+    /**
+     * Shows a full-screen dialog listing all open tabs as cards with favicon
+     * thumbnails. The user can tap a card to switch to it, or tap the X to close
+     * a tab. The active tab is highlighted.
+     */
+    private fun showTabGrid() {
+        if (openTabs.isEmpty()) return
+        val dialog = android.app.Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        dialog.setContentView(R.layout.dialog_tabs_grid)
+        val list = dialog.findViewById<androidx.recyclerview.widget.RecyclerView>(R.id.tabs_list)
+        val closeBtn = dialog.findViewById<android.widget.ImageView>(R.id.tabs_close)
+        closeBtn?.setOnClickListener { dialog.dismiss() }
+        if (list != null) {
+            val adapter = object : androidx.recyclerview.widget.RecyclerView.Adapter<androidx.recyclerview.widget.RecyclerView.ViewHolder>() {
+                inner class TabHolder(view: android.view.View) : androidx.recyclerview.widget.RecyclerView.ViewHolder(view)
+                override fun onCreateViewHolder(parent: android.view.ViewGroup, viewType: Int): androidx.recyclerview.widget.RecyclerView.ViewHolder {
+                    val v = android.view.LayoutInflater.from(parent.context)
+                        .inflate(android.R.layout.simple_list_item_2, parent, false)
+                    return TabHolder(v)
+                }
+                override fun onBindViewHolder(holder: androidx.recyclerview.widget.RecyclerView.ViewHolder, position: Int) {
+                    val tab = openTabs[position]
+                    val tv1 = holder.itemView.findViewById<android.widget.TextView>(android.R.id.text1)
+                    val tv2 = holder.itemView.findViewById<android.widget.TextView>(android.R.id.text2)
+                    tv1?.text = tab.title
+                    tv2?.text = tab.url
+                    holder.itemView.setBackgroundColor(
+                        if (position == activeTabIndex)
+                            0x33FFFFFF.toInt()
+                        else
+                            0x00000000.toInt()
+                    )
+                    holder.itemView.setOnClickListener {
+                        activeTabIndex = position
+                        saveTabs()
+                        switchToActiveTab()
+                        dialog.dismiss()
+                    }
+                }
+                override fun getItemCount() = openTabs.size
+            }
+            list.adapter = adapter
+            list.layoutManager = androidx.recyclerview.widget.LinearLayoutManager(this)
+        }
+        dialog.show()
     }
 
     /**

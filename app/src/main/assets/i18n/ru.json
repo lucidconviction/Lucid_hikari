@@ -1367,5 +1367,16 @@
   "Your provider is searched first. Every server shows here the moment it is found.": "Ваш провайдер ищется первым. Каждый сервер появляется здесь сразу, как только найден.",
   "YouTube": "Ютуб",
   "yt-dlp fallback, userscripts, Continue Watching": "Резервный вариант yt-dlp, пользовательские скрипты, продолжить просмотр",
-  "Zoom": "Увеличить"
+  "Zoom": "Увеличить",
+  "Open tabs": "Open tabs",
+  "Save this website": "Save this website",
+  "Website name": "Website name",
+  "Website saved": "Website saved",
+  "Remove \"{}\"?": "Remove \"{}\"?",
+  "Delete website": "Delete website",
+  "Saved websites": "Saved websites",
+  "No websites added yet — add one below to open any site ad-free.": "No websites added yet — add one below to open any site ad-free.",
+  "Go": "Go",
+  "Grid view": "Grid view",
+  "List view": "List view"
 }

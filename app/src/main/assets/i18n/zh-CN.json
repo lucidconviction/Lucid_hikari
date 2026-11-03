@@ -1364,5 +1364,16 @@
   "Your provider first, then every engine that found a server.": "首先是您的提供商，然后是找到服务器的每个引擎。",
   "Your provider is searched first. Every server shows here the moment it is found.": "会先搜索你的提供源。找到的服务器会立即显示在这里。",
   "yt-dlp fallback, userscripts, Continue Watching": "yt-dlp 后备、用户脚本、继续观看",
-  "Zoom": "变焦"
+  "Zoom": "变焦",
+  "Open tabs": "Open tabs",
+  "Save this website": "Save this website",
+  "Website name": "Website name",
+  "Website saved": "Website saved",
+  "Remove \"{}\"?": "Remove \"{}\"?",
+  "Delete website": "Delete website",
+  "Saved websites": "Saved websites",
+  "No websites added yet — add one below to open any site ad-free.": "No websites added yet — add one below to open any site ad-free.",
+  "Go": "Go",
+  "Grid view": "Grid view",
+  "List view": "List view"
 }

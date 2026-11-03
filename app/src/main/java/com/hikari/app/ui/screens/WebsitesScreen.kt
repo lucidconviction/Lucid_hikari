@@ -14,6 +14,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,10 +25,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -43,6 +49,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -52,6 +59,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import coil.compose.AsyncImage
 import com.hikari.app.HikariApp
 import com.hikari.app.data.Site
 import com.hikari.app.i18n.I18n
@@ -78,12 +86,25 @@ fun WebsitesScreen(nav: NavController) {
     var addName by remember { mutableStateOf("") }
     var addUrl by remember { mutableStateOf("") }
     var removeTarget by remember { mutableStateOf<Site?>(null) }
+    var isGrid by remember { mutableStateOf(true) }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(tr("Websites") + " · ${sites.size}") },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
+                actions = {
+                    IconButton(onClick = { isGrid = !isGrid }) {
+                        Icon(
+                            if (isGrid) Icons.Filled.ViewList else Icons.Filled.GridOn,
+                            contentDescription = if (isGrid) tr("List view") else tr("Grid view"),
+                            tint = Color.White.copy(alpha = 0.8f),
+                        )
+                    }
+                    IconButton(onClick = { showAddDialog = true }) {
+                        Icon(Icons.Filled.Add, contentDescription = tr("Add website"), tint = Color.White.copy(alpha = 0.8f))
+                    }
+                },
             )
         }
     ) { innerPadding ->
@@ -209,16 +230,36 @@ fun WebsitesScreen(nav: NavController) {
                     }
                 }
             } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    items(sites, key = { it.url }) { site ->
-                        SiteCard(site = site, onOpen = {
-                            context.startActivity(
-                                Intent(context, WebViewActivity::class.java).apply {
-                                    putExtra("url", site.url)
-                                    putExtra("title", site.name)
-                                }
-                            )
-                        }, onDelete = { removeTarget = site })
+                if (isGrid) {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(2),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        items(sites, key = { it.url }) { site ->
+                            SiteGridCard(site = site, onOpen = {
+                                context.startActivity(
+                                    Intent(context, WebViewActivity::class.java).apply {
+                                        putExtra("url", site.url)
+                                        putExtra("title", site.name)
+                                    }
+                                )
+                            }, onDelete = { removeTarget = site })
+                        }
+                    }
+                } else {
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(sites, key = { it.url }) { site ->
+                            SiteCard(site = site, onOpen = {
+                                context.startActivity(
+                                    Intent(context, WebViewActivity::class.java).apply {
+                                        putExtra("url", site.url)
+                                        putExtra("title", site.name)
+                                    }
+                                )
+                            }, onDelete = { removeTarget = site })
+                        }
                     }
                 }
             }
@@ -353,6 +394,71 @@ fun SiteCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
                     contentDescription = tr("Delete website"),
                     tint = androidx.compose.material3.MaterialTheme.colorScheme.error,
                     modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun SiteGridCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
+    val faviconUrl = remember(site.url) {
+        val host = runCatching { java.net.URI(site.url).host }.getOrNull() ?: site.url
+        "https://www.google.com/s2/favicons?domain=$host&sz=64"
+    }
+    Surface(
+        onClick = onOpen,
+        color = androidx.compose.material3.MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.6f),
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 16.dp),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                AsyncImage(
+                    model = faviconUrl,
+                    contentDescription = null,
+                    modifier = Modifier.size(48.dp),
+                    contentScale = ContentScale.Fit,
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                site.name,
+                color = androidx.compose.material3.MaterialTheme.colorScheme.onSurface,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                site.url,
+                color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                fontSize = 10.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(6.dp))
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .background(androidx.compose.material3.MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.2f), RoundedCornerShape(14.dp))
+                    .clickable(onClick = onDelete),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Filled.Delete,
+                    contentDescription = tr("Delete website"),
+                    tint = androidx.compose.material3.MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(14.dp),
                 )
             }
         }

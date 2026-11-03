@@ -1347,5 +1347,16 @@
   "Your provider first, then every engine that found a server.": "Đầu tiên là nhà cung cấp của bạn, sau đó là mọi công cụ tìm thấy máy chủ.",
   "Your provider is searched first. Every server shows here the moment it is found.": "Nhà cung cấp của bạn được tìm trước. Mọi máy chủ hiện ở đây ngay khi tìm thấy.",
   "yt-dlp fallback, userscripts, Continue Watching": "dự phòng yt-dlp, mô tả người dùng, Tiếp tục xem",
-  "Zoom": "Thu phóng"
+  "Zoom": "Thu phóng",
+  "Open tabs": "Open tabs",
+  "Save this website": "Save this website",
+  "Website name": "Website name",
+  "Website saved": "Website saved",
+  "Remove \"{}\"?": "Remove \"{}\"?",
+  "Delete website": "Delete website",
+  "Saved websites": "Saved websites",
+  "No websites added yet — add one below to open any site ad-free.": "No websites added yet — add one below to open any site ad-free.",
+  "Go": "Go",
+  "Grid view": "Grid view",
+  "List view": "List view"
 }

@@ -1332,5 +1332,16 @@
   "Your provider first, then every engine that found a server.": "Prima il tuo provider, poi ogni motore che ha trovato un server.",
   "Your provider is searched first. Every server shows here the moment it is found.": "Il tuo provider viene cercato per primo. Ogni server compare qui appena viene trovato.",
   "yt-dlp fallback, userscripts, Continue Watching": "fallback yt-dlp, script utente, Continua a guardare",
-  "Zoom": "Zoom"
+  "Zoom": "Zoom",
+  "Open tabs": "Open tabs",
+  "Save this website": "Save this website",
+  "Website name": "Website name",
+  "Website saved": "Website saved",
+  "Remove \"{}\"?": "Remove \"{}\"?",
+  "Delete website": "Delete website",
+  "Saved websites": "Saved websites",
+  "No websites added yet — add one below to open any site ad-free.": "No websites added yet — add one below to open any site ad-free.",
+  "Go": "Go",
+  "Grid view": "Grid view",
+  "List view": "List view"
 }

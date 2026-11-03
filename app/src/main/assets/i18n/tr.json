@@ -1347,5 +1347,16 @@
   "Your provider first, then every engine that found a server.": "Önce sağlayıcınız, ardından sunucu bulan her motor.",
   "Your provider is searched first. Every server shows here the moment it is found.": "Önce kendi sağlayıcınız aranır. Bulunan her sunucu anında burada görünür.",
   "yt-dlp fallback, userscripts, Continue Watching": "yt-dlp geri dönüşü, kullanıcı komut dosyaları, İzlemeye Devam Et",
-  "Zoom": "Yakınlaştır"
+  "Zoom": "Yakınlaştır",
+  "Open tabs": "Open tabs",
+  "Save this website": "Save this website",
+  "Website name": "Website name",
+  "Website saved": "Website saved",
+  "Remove \"{}\"?": "Remove \"{}\"?",
+  "Delete website": "Delete website",
+  "Saved websites": "Saved websites",
+  "No websites added yet — add one below to open any site ad-free.": "No websites added yet — add one below to open any site ad-free.",
+  "Go": "Go",
+  "Grid view": "Grid view",
+  "List view": "List view"
 }

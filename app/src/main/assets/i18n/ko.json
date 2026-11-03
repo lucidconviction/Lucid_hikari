@@ -1361,5 +1361,16 @@
   "Your provider is searched first. Every server shows here the moment it is found.": "내 제공자를 먼저 검색합니다. 찾은 서버는 곧바로 여기에 표시됩니다.",
   "YouTube": "유튜브",
   "yt-dlp fallback, userscripts, Continue Watching": "yt-dlp 대체, 사용자 스크립트, 계속 시청",
-  "Zoom": "줌"
+  "Zoom": "줌",
+  "Open tabs": "Open tabs",
+  "Save this website": "Save this website",
+  "Website name": "Website name",
+  "Website saved": "Website saved",
+  "Remove \"{}\"?": "Remove \"{}\"?",
+  "Delete website": "Delete website",
+  "Saved websites": "Saved websites",
+  "No websites added yet — add one below to open any site ad-free.": "No websites added yet — add one below to open any site ad-free.",
+  "Go": "Go",
+  "Grid view": "Grid view",
+  "List view": "List view"
 }
