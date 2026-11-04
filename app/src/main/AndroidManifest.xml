@@ -3,8 +3,6 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <!-- Schedule exact alarms for sports event reminders. -->
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <!-- The in-app lock (Settings → Privacy & Browsing → App lock) unlocks with
          the device's fingerprint/face as an alternative to the password. -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
@@ -432,9 +430,6 @@ android:name=".player.PlayerActivity"
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
-        <receiver
-            android:name=".ui.screens.SportsNotificationReceiver"
-            android:exported="false" />
     </application>
 
 </manifest>
