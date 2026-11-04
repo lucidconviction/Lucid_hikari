@@ -1849,6 +1849,53 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * When a new intent arrives (singleTop launch) — e.g. user picks a channel
+     * from a DIFFERENT playlist while the player is already open — update the
+     * channel-surf controller so the Channels button and CH+/CH- use the new
+     * list instead of the old one.
+     */
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        // Re-parse the channel-surf list from the NEW intent so the controller
+        // points at the right playlist going forward.
+        refreshChannelSurfController(intent)
+        // Update the visible title/logo to match the new stream immediately.
+        val title = intent.getStringExtra("title").orEmpty()
+        val logoExtra = intent.getStringExtra("titleLogo")
+        if (title.isNotBlank()) {
+            // Find the channel's logo from the surf channels list if available
+            val surfJson = intent.getStringExtra("channelSurfChannels")
+            var logo = logoExtra?.takeIf { it.isNotBlank() }
+            if (logo.isNullOrBlank() && !surfJson.isNullOrBlank()) {
+                try {
+                    val arr = org.json.JSONArray(surfJson)
+                    for (i in 0 until arr.length()) {
+                        val o = arr.getJSONObject(i)
+                        if (o.optString("name", "").ifBlank { o.optString("title", "") } == title) {
+                            logo = o.optString("logo", o.optString("poster", ""))
+                            break
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+            val ch = com.hikari.app.data.IptvChannel(
+                name = title,
+                url = intent.getStringExtra("sources")?.let { src ->
+                    runCatching {
+                        val o = org.json.JSONArray(src).getJSONObject(0)
+                        o.optString("url", "")
+                    }.getOrNull().orEmpty()
+                } ?: "",
+                logo = logo,
+            )
+            updateTitleForChannel(ch)
+            // Re-show the loading banner so the logo is visible during transition
+            showLoadingCover()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Re-run hardware TV detection before the View-based player decides its loading layout.
@@ -2844,77 +2891,7 @@ class PlayerActivity : ComponentActivity() {
         // as a JSON array ("channelSurfChannels"). The controller lets the
         // D-pad up/down or Auto-Next advance through the playlist without
         // re-opening the search. (Nuvio ports the same controller.)
-        val surfChannelsJson = intent.getStringExtra("channelSurfChannels")
-        if (surfChannelsJson.isNullOrBlank()) {
-            channelSurfController = null
-        } else {
-            try {
-                val arr = org.json.JSONArray(surfChannelsJson)
-                val chs = (0 until arr.length()).mapNotNull { i ->
-                    runCatching {
-                        val o = arr.getJSONObject(i)
-                        com.hikari.app.data.IptvChannel(
-                            name = o.optString("name", "").ifBlank { o.optString("title", "") },
-                            url = o.optString("url", o.optString("id", "")),
-                            logo = o.optString("logo", o.optString("poster", "")),
-                            group = o.optString("group", o.optString("overview", "")),
-                            tvgId = o.optString("tvgId"),
-                            language = o.optString("language"),
-                            country = o.optString("country"),
-                            headers = emptyMap(),
-                            drmKid = null,
-                            drmKey = null,
-                            cookie = null,
-                            kind = "",
-                            probeResult = null,
-                        )
-                    }.getOrNull()
-                }
-                val currentUrl = sources.getOrNull(currentIndex)?.url ?: ""
-                val surfId = currentUrl.ifEmpty { intent.getStringExtra("title").orEmpty() }
-                if (chs.isNotEmpty()) {
-                    channelSurfController = com.hikari.app.player.ChannelSurfController(
-                        store = (applicationContext as HikariApp).store,
-                        channelId = surfId,
-                        channels = chs,
-                        onChannelChanged = { channel ->
-                            // The controller picked a DIFFERENT channel from the
-                            // same playlist. `sources` holds the CURRENT channel's
-                            // stream rows — a sibling's URL is not in it — so
-                            // looking it up by url used to find nothing and the
-                            // tap did nothing. Fetch the picked channel's
-                            // streams in the BACKGROUND (same IptvProvider
-                            // .getStreams path the first play used) and only
-                            // swap them in once they're ready, so the picture
-                            // never cuts to a dead stream mid-frame.
-                            //
-                            // The title bar and the loading cover both still
-                            // wore the OLD channel's name/logo: the intent's
-                            // "title" extra is set once at launch and nothing
-                            // rewrites it, so a CH+/CH- surf left "CNN" up top
-                            // while "ESPN" was on screen. Refresh both here so
-                            // the name and logo follow the picture.
-                            updateTitleForChannel(channel)
-                            coverPlaybackLine = I18n.t("Switching to %s…").replace("%s", channel.name)
-                            lifecycleScope.launch {
-                                val fresh = fetchChannelStreams(channel)
-                                coverPlaybackLine = null
-                                if (fresh.isNotEmpty()) {
-                                    sources = fresh
-                                    notifySourcesChanged()
-                                    preferredStartIndex().let { playSource(it) }
-                                } else {
-                                    showError(I18n.t("That channel has no stream."), false)
-                                }
-                            }
-                        },
-                    )
-                }
-            } catch (e: Exception) {
-                com.hikari.app.data.Logs.log("Player", "channelSurfChannels parse: ${e.message}")
-                channelSurfController = null
-            }
-        }
+        refreshChannelSurfController(intent)
         autoNextBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
         chPrevBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
         chNextBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
@@ -7764,6 +7741,74 @@ class PlayerActivity : ComponentActivity() {
         return com.hikari.app.data.IptvMark.of(item)
     }
 
+    /**
+     * Parses a new [intent]'s channelSurfChannels extra and updates
+     * [channelSurfController]. Called on fresh launch AND on [onNewIntent]
+     * so the Channels button always reflects the list the stream was chosen from.
+     */
+    private fun refreshChannelSurfController(intent: android.content.Intent) {
+        val surfChannelsJson = intent.getStringExtra("channelSurfChannels")
+        if (surfChannelsJson.isNullOrBlank()) {
+            channelSurfController = null
+            return
+        }
+        try {
+            val arr = org.json.JSONArray(surfChannelsJson)
+            val chs = (0 until arr.length()).mapNotNull { i ->
+                runCatching {
+                    val o = arr.getJSONObject(i)
+                    com.hikari.app.data.IptvChannel(
+                        name = o.optString("name", "").ifBlank { o.optString("title", "") },
+                        url = o.optString("url", o.optString("id", "")),
+                        logo = o.optString("logo", o.optString("poster", "")),
+                        group = o.optString("group", o.optString("overview", "")),
+                        tvgId = o.optString("tvgId"),
+                        language = o.optString("language"),
+                        country = o.optString("country"),
+                        headers = emptyMap(),
+                        drmKid = null,
+                        drmKey = null,
+                        cookie = null,
+                        kind = "",
+                        probeResult = null,
+                    )
+                }.getOrNull()
+            }
+            if (chs.isEmpty()) return
+            val currentUrl = sources.getOrNull(currentIndex)?.url ?: ""
+            val surfId = currentUrl.ifEmpty { intent.getStringExtra("title").orEmpty() }
+            // Always rebuild so the controller reflects the new list — even if
+            // the current channel is still in it, the surrounding context
+            // (other channels in the list) has changed.
+            channelSurfController = com.hikari.app.player.ChannelSurfController(
+                store = (applicationContext as HikariApp).store,
+                channelId = surfId,
+                channels = chs,
+                onChannelChanged = { channel ->
+                    updateTitleForChannel(channel)
+                    coverPlaybackLine = I18n.t("Switching to %s…").replace("%s", channel.name)
+                    // Show the loading banner with the new channel's logo
+                    // so it's visible during the transition to the next stream.
+                    showLoadingCover()
+                    lifecycleScope.launch {
+                        val fresh = fetchChannelStreams(channel)
+                        coverPlaybackLine = null
+                        if (fresh.isNotEmpty()) {
+                            sources = fresh
+                            notifySourcesChanged()
+                            preferredStartIndex().let { playSource(it) }
+                        } else {
+                            showError(I18n.t("That channel has no stream."), false)
+                        }
+                    }
+                },
+            )
+        } catch (e: Exception) {
+            com.hikari.app.data.Logs.log("Player", "channelSurfChannels parse: ${e.message}")
+            channelSurfController = null
+        }
+    }
+
     private fun showChannelsDialog() {
         val options = mutableListOf<GlassOption>()
         val channels = channelSurfController?.channels.orEmpty()
@@ -7789,14 +7834,10 @@ class PlayerActivity : ComponentActivity() {
         ) { which ->
             channels.getOrNull(which)?.let { channel ->
                 if (channelSurfController != null) {
+                    // switch() already calls onChannelChanged which handles
+                    // the stream fetch and play, so we just call it here.
                     lifecycleScope.launch {
                         channelSurfController?.switch(which)
-                        val fresh = fetchChannelStreams(channel)
-                        if (fresh.isNotEmpty()) {
-                            sources = fresh
-                            notifySourcesChanged()
-                            preferredStartIndex().let { playSource(it) }
-                        }
                     }
                 }
             }
