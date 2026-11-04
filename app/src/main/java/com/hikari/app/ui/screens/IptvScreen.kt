@@ -2600,6 +2600,8 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
     var qcValidating by remember { mutableStateOf(false) }
     var hideDead by remember { mutableStateOf(true) }
     var sheetExpanded by remember { mutableStateOf(false) }
+    // Full playlist channels — fetched once, reused for playChannel
+    var allChannels by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
 
     fun runQcValidation() {
         if (selectedQc == null || qcValidating) return
@@ -2651,8 +2653,9 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
         aliveByUrl = emptyMap()
 
         scope.launch(Dispatchers.IO) {
-            val allChannels = com.hikari.app.providers.gatherIptvChannels(playlists)
-            val matches = allChannels.filter { ch ->
+            val fetched = com.hikari.app.providers.gatherIptvChannels(playlists)
+            allChannels = fetched
+            val matches = fetched.filter { ch ->
                 QuickChannelList.matches(qc, ch)
             }
             qcMatches = matches
@@ -2973,7 +2976,7 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                                 channel = ch,
                                 isAlive = isWorking,
                                 onClick = {
-                                    playChannel(ctx, ch, nav, sortedMatches)
+                                    playChannel(ctx, ch, nav, allChannels)
                                     showSheet = false
                                     selectedQc = null
                                 },
@@ -3375,15 +3378,16 @@ private suspend fun validateChannelStatuses(
 
 /**
  * Play a channel using the app's player.
- * [channels] is the list the user was browsing (e.g. filtered/sorted Quick Channels
- * or a playlist group). It's passed to the player so the "Channels" button and
- * D-pad CH+/CH- use the same list the stream was chosen from.
+ * [allChannels] is the full channel list from the relevant playlist(s) — passed
+ * by the caller after computing it (channels() is suspend so it must be
+ * pre-fetched off the main thread). This is what the player's "Channels"
+ * button shows and what CH+/CH- steps through.
  */
 private fun playChannel(
     ctx: android.content.Context,
     channel: IptvChannel,
     nav: NavHostController,
-    channels: List<IptvChannel> = emptyList(),
+    allChannels: List<IptvChannel>,
 ) {
     val isM3u8 = channel.url.endsWith(".m3u8", ignoreCase = true)
     val sources = org.json.JSONArray().apply {
@@ -3403,9 +3407,9 @@ private fun playChannel(
     val intent = android.content.Intent(ctx, com.hikari.app.player.PlayerActivity::class.java).apply {
         putExtra("title", channel.name)
         putExtra("sources", sources.toString())
-        if (channels.isNotEmpty()) {
+        if (allChannels.isNotEmpty()) {
             val arr = org.json.JSONArray()
-            channels.forEach { ch ->
+            allChannels.forEach { ch ->
                 arr.put(
                     org.json.JSONObject()
                         .put("name", ch.name)
@@ -3638,7 +3642,7 @@ fun PlayerChannelListDialog(
                     2 -> {
                         // Quick Channels embedded view
                         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                            QuickChannelsSectionEmbedded(playlists = playlists, onChannelSelected = { ch, list ->
+                            QuickChannelsSectionEmbedded(playlists = playlists, onChannelSelected = { ch, _ ->
                                 onSwitch(ch)
                                 onDismiss()
                             })
@@ -3682,6 +3686,8 @@ private fun QuickChannelsSectionEmbedded(playlists: List<IptvProvider>, onChanne
     
     // Cache: QuickChannel.displayName -> filtered channels (persisted across selections)
     val qcChannelCache = remember { mutableMapOf<String, List<IptvChannel>>() }
+    // Full playlist channels (all playlists) — fetched once, reused for playChannel
+    var allChannels by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
 
     fun runQcValidation() {
         val qc = selectedQc
@@ -3690,12 +3696,12 @@ private fun QuickChannelsSectionEmbedded(playlists: List<IptvProvider>, onChanne
             qcValidating = true
             var currentMatches = qcMatches
             if (currentMatches.isEmpty()) {
-                currentMatches = qcChannelCache[qc.displayName] ?: emptyList()
-                if (currentMatches.isEmpty()) {
-                    val allChannels = gatherIptvChannels(playlists)
-                    currentMatches = allChannels.filter { ch -> QuickChannelList.matches(qc, ch) }
-                    qcChannelCache[qc.displayName] = currentMatches
+                currentMatches = if (allChannels.isNotEmpty()) {
+                    allChannels.filter { ch -> QuickChannelList.matches(qc, ch) }
+                } else {
+                    gatherIptvChannels(playlists).filter { ch -> QuickChannelList.matches(qc, ch) }
                 }
+                qcChannelCache[qc.displayName] = currentMatches
             }
             qcMatches = currentMatches
             validateChannelStatusesEmbedded(currentMatches) { url, isAlive ->
@@ -3735,7 +3741,7 @@ private fun QuickChannelsSectionEmbedded(playlists: List<IptvProvider>, onChanne
             if (cached != null && cached.isNotEmpty()) {
                 qcMatches = cached
                 qcLoading = false
-                // Refresh validation in background
+                // Refresh validation in background (allChannels already available)
                 scope.launch(Dispatchers.IO) {
                     validateChannelStatusesEmbedded(cached) { url, isAlive ->
                         aliveByUrl = aliveByUrl + (url to isAlive)
@@ -3750,8 +3756,9 @@ private fun QuickChannelsSectionEmbedded(playlists: List<IptvProvider>, onChanne
             aliveByUrl = emptyMap()
             
             scope.launch(Dispatchers.IO) {
-                val allChannels = gatherIptvChannels(playlists)
-                val matches = allChannels.filter { ch -> QuickChannelList.matches(qc, ch) }
+                val fetched = gatherIptvChannels(playlists)
+                allChannels = fetched
+                val matches = fetched.filter { ch -> QuickChannelList.matches(qc, ch) }
                 qcChannelCache[qc.displayName] = matches
                 qcMatches = matches
                 qcLoading = false
@@ -3894,7 +3901,7 @@ private fun QuickChannelsSectionEmbedded(playlists: List<IptvProvider>, onChanne
                         items(sortedMatches) { ch ->
                             val isWorking = aliveByUrl[ch.url]
                             ChannelListItem(channel = ch, isAlive = isWorking, onClick = {
-                                onChannelSelected(ch, sortedMatches)
+                                onChannelSelected(ch, allChannels)
                                 showSheet = false
                                 selectedQc = null
                             })

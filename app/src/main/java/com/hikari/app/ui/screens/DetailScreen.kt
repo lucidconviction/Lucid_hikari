@@ -172,6 +172,7 @@ import com.hikari.app.player.PlayerActivity
 import com.hikari.app.player.StreamsLive
 import com.hikari.app.providers.ContentProvider
 import com.hikari.app.providers.IptvProvider
+import com.hikari.app.data.IptvChannel
 import com.hikari.app.ui.Artwork
 import com.hikari.app.ui.LoadingStyles
 import com.hikari.app.ui.PosterArt
@@ -1858,25 +1859,32 @@ fun DetailScreen(
     // its player): same group first, the open channel excluded, capped at 24.
     // Loaded once per channel — a playlist parse is cached by the provider.
     var iptvSiblings by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+    // Full channel list for the player's Channels button (all channels in the
+    // playlist, not just same-group siblings — capped so intent payload stays
+    // reasonable; the player still gets every channel the user can surf to).
+    var iptvAllChannels by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
     LaunchedEffect(livePid, mediaId, isIptvPage) {
         iptvSiblings = emptyList()
+        iptvAllChannels = emptyList()
         if (!isIptvPage) return@LaunchedEffect
-        iptvSiblings = withContext(Dispatchers.IO) {
-            runCatching {
-                val prov = providers.firstOrNull { it.config.id == livePid }
-                    as? IptvProvider ?: return@runCatching emptyList()
-                val ref = CatalogRef(
-                    prov.config.id, MediaType.MOVIE,
-                    IptvProvider.CATALOG_ALL, "All channels"
-                )
-                val page1 = prov.getCatalog(ref, 1)
-                val all = if (page1.size >= 240) page1 + prov.getCatalog(ref, 2) else page1
-                if (all.isEmpty()) return@runCatching emptyList<MediaItem>()
+        withContext(Dispatchers.IO) {
+            val prov = providers.firstOrNull { it.config.id == livePid }
+                as? IptvProvider ?: return@withContext
+            val allChs = runCatching { prov.channels() }.getOrNull().orEmpty()
+            iptvAllChannels = allChs
+            // Keep the old same-group cap for the shelf UI (unchanged).
+            val ref = CatalogRef(
+                prov.config.id, MediaType.MOVIE,
+                IptvProvider.CATALOG_ALL, "All channels"
+            )
+            val page1 = prov.getCatalog(ref, 1)
+            val all = if (page1.size >= 240) page1 + prov.getCatalog(ref, 2) else page1
+            if (all.isNotEmpty()) {
                 val group = all.firstOrNull { it.id == mediaId }?.overview
-                all.filter { it.id != mediaId }
+                iptvSiblings = all.filter { it.id != mediaId }
                     .sortedWith(compareBy({ it.overview != group }, { it.title.lowercase() }))
                     .take(24)
-            }.getOrDefault(emptyList())
+            }
         }
     }
 
@@ -2403,15 +2411,15 @@ fun DetailScreen(
                 // advance, Auto-Next on end). Built from iptvSiblings (same
                 // group, same playlist) — omitted otherwise so non-IPTV plays
                 // pay nothing.
-                if (isIptvPage && iptvSiblings.isNotEmpty()) {
+                if (isIptvPage && iptvAllChannels.isNotEmpty()) {
                     val arr = org.json.JSONArray()
-                    iptvSiblings.forEach { sib ->
+                    iptvAllChannels.forEach { ch ->
                         arr.put(
                             org.json.JSONObject()
-                                .put("name", sib.title)
-                                .put("url", sib.id)
-                                .put("logo", sib.posterUrl ?: "")
-                                .put("group", sib.overview ?: "")
+                                .put("name", ch.name)
+                                .put("url", ch.url)
+                                .put("logo", ch.logo ?: "")
+                                .put("group", ch.group)
                         )
                     }
                     putExtra("channelSurfChannels", arr.toString())
