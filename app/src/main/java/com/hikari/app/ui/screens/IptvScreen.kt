@@ -2959,15 +2959,16 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                     }
                     Spacer(Modifier.height(8.dp))
 
-                    // Channel list — working/live channels float to the top as they validate.
-                    val sortedMatches = remember(qcMatches, aliveByUrl, hideDead) {
+                    // Channel list — working/live channels float to the top, most relevant first.
+                    val sortedMatches = remember(qcMatches, aliveByUrl, hideDead, selectedQc) {
                         qcMatches
                             .filter { ch ->
                                 if (!hideDead) true
                                 else aliveByUrl[ch.url] != false
                             }
                             .sortedWith(compareByDescending<IptvChannel> { aliveByUrl[it.url] == true }
-                                .thenByDescending { aliveByUrl[it.url] == null })
+                                .thenByDescending { aliveByUrl[it.url] == null }
+                                .thenByDescending { selectedQc?.let { qc -> relevanceScore(qc, it) } ?: 0 })
                     }
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         items(sortedMatches) { ch ->
@@ -3892,10 +3893,12 @@ private fun QuickChannelsSectionEmbedded(playlists: List<IptvProvider>, onChanne
                     }
                     Spacer(Modifier.height(8.dp))
 
-                    val sortedMatches = remember(qcMatches, aliveByUrl, hideDead) {
+                    val sortedMatches = remember(qcMatches, aliveByUrl, hideDead, selectedQc) {
                         qcMatches
                             .filter { ch -> if (!hideDead) true else aliveByUrl[ch.url] != false }
-                            .sortedWith(compareByDescending<IptvChannel> { aliveByUrl[it.url] == true }.thenByDescending { aliveByUrl[it.url] == null })
+                            .sortedWith(compareByDescending<IptvChannel> { aliveByUrl[it.url] == true }
+                                .thenByDescending { aliveByUrl[it.url] == null }
+                                .thenByDescending { selectedQc?.let { qc -> relevanceScore(qc, it) } ?: 0 })
                     }
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         items(sortedMatches) { ch ->
@@ -3934,4 +3937,21 @@ private suspend fun validateChannelStatusesEmbedded(
         }.awaitAll()
     }
     return out
+}
+
+/**
+ * Score how well [channel] matches [qc] by counting keyword hits in the name.
+ * Higher = more relevant. Used as a secondary sort after alive status so the
+ * top results show the channels whose names most closely match the selection.
+ */
+private fun relevanceScore(qc: com.hikari.app.data.QuickChannel, channel: IptvChannel): Int {
+    val nameLower = channel.name.lowercase()
+    val keywords = (qc.aliases + qc.displayName.lowercase().split("\\s+".toRegex()).filter { it.isNotBlank() }).toSet()
+    var score = 0
+    for (kw in keywords) {
+        val k = kw.replace("*", "").trim()
+        if (k.isEmpty()) continue
+        if (nameLower.contains(k)) score++
+    }
+    return score
 }
