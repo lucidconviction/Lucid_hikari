@@ -70,6 +70,8 @@ import androidx.compose.material3.TabRowDefaults
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.ContextCompat.checkSelfPermission
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -1003,11 +1005,15 @@ private fun EventCardRow(event: SportEvent, nav: NavHostController, ctx: Context
                     Text("📺 $br", fontSize = 10.sp, color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Medium)
                 }
                 if (event.allBroadcasters.size > 1) {
+                    var channelOpen by remember(event.id) { mutableStateOf(false) }
+                    val shown = event.allBroadcasters.drop(1).take(2)
+                    val extra = event.allBroadcasters.size - 1 - shown.size
                     Row(
                         modifier = Modifier.padding(top = 2.dp),
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        event.allBroadcasters.drop(1).take(2).forEach { ch ->
+                        shown.forEach { ch ->
                             Surface(
                                 color = MaterialTheme.colorScheme.secondaryContainer,
                                 shape = RoundedCornerShape(4.dp),
@@ -1019,6 +1025,47 @@ private fun EventCardRow(event: SportEvent, nav: NavHostController, ctx: Context
                                     color = MaterialTheme.colorScheme.onSecondaryContainer,
                                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
                                 )
+                            }
+                        }
+                        if (extra > 0) {
+                            Box(
+                                modifier = Modifier
+                                    .clickable { channelOpen = true }
+                                    .tvPress { channelOpen = true },
+                            ) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                                    shape = RoundedCornerShape(4.dp),
+                                ) {
+                                    Text(
+                                        "+$extra more",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = channelOpen,
+                                    onDismissRequest = { channelOpen = false },
+                                    modifier = Modifier.background(MaterialTheme.colorScheme.surface),
+                                ) {
+                                    event.allBroadcasters.drop(1).forEach { ch ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    "📺 $ch",
+                                                    fontSize = 9.sp,
+                                                    color = MaterialTheme.colorScheme.onSurface,
+                                                )
+                                            },
+                                            onClick = {
+                                                channelOpen = false
+                                                openEventSearch(nav, event)
+                                            },
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -1198,14 +1245,17 @@ private fun CalendarEventRow(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
 
-                    // Broadcasters as badges
+                    // Broadcasters — compact badge + dropdown for full list
                     if (event.allBroadcasters.isNotEmpty()) {
+                        var channelOpen by remember(event.id) { mutableStateOf(false) }
+                        val shown = event.allBroadcasters.take(if (isBigScreen) 4 else 3)
+                        val extra = event.allBroadcasters.size - shown.size
                         Row(
                             modifier = Modifier.padding(top = 3.dp),
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            event.allBroadcasters.take(if (isBigScreen) 4 else 3).forEach { ch ->
+                            shown.forEach { ch ->
                                 Surface(
                                     color = MaterialTheme.colorScheme.secondaryContainer,
                                     shape = RoundedCornerShape(4.dp),
@@ -1219,12 +1269,46 @@ private fun CalendarEventRow(
                                     )
                                 }
                             }
-                            if (event.allBroadcasters.size > (if (isBigScreen) 4 else 3)) {
-                                Text(
-                                    "+${event.allBroadcasters.size - (if (isBigScreen) 4 else 3)}",
-                                    fontSize = badgeSize,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+                            if (extra > 0) {
+                                Box(
+                                    modifier = Modifier
+                                        .clickable { channelOpen = true }
+                                        .tvPress { channelOpen = true },
+                                ) {
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                                        shape = RoundedCornerShape(4.dp),
+                                    ) {
+                                        Text(
+                                            "+$extra more",
+                                            fontSize = badgeSize,
+                                            fontWeight = FontWeight.Medium,
+                                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                                        )
+                                    }
+                                    DropdownMenu(
+                                        expanded = channelOpen,
+                                        onDismissRequest = { channelOpen = false },
+                                        modifier = Modifier.background(MaterialTheme.colorScheme.surface),
+                                    ) {
+                                        event.allBroadcasters.forEach { ch ->
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Text(
+                                                        "📺 $ch",
+                                                        fontSize = badgeSize,
+                                                        color = MaterialTheme.colorScheme.onSurface,
+                                                    )
+                                                },
+                                                onClick = {
+                                                    channelOpen = false
+                                                    openEventSearch(nav, event)
+                                                },
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
