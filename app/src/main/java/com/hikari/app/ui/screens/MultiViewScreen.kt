@@ -83,6 +83,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.navigation.NavHostController
+import android.view.WindowManager
 import com.hikari.app.HikariApp
 import com.hikari.app.R
 import com.hikari.app.data.IptvChannel
@@ -145,6 +146,13 @@ fun MultiViewScreen(
             StreamValidationStore.save(cacheDir)
             MultiWindowStore.saveLayouts(cacheDir, "Last session")
         }
+    }
+
+    // Keep screen on while multi-view is active
+    val activity = (context as androidx.appcompat.app.AppCompatActivity)
+    DisposableEffect(Unit) {
+        activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose { activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
     }
 
     MultiViewContent(
@@ -504,6 +512,18 @@ private fun MultiViewContent(
                         .padding(horizontal = 10.dp, vertical = 5.dp),
                 ) {
                     Text("Save Layouts", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
+                }
+                // Quick Channels — browse and add IPTV streams to open slots
+                Box(
+                    Modifier.clip(RoundedCornerShape(9999.dp)).background(PrimaryContainer)
+                        .border(0.5.dp, Primary.copy(alpha = 0.4f), RoundedCornerShape(9999.dp))
+                        .clickable { quickChannelSheetOpen = true }
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Icon(Icons.Filled.LiveTv, contentDescription = null, modifier = Modifier.size(12.dp), tint = Color.White)
+                        Text("Quick Channels", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
+                    }
                 }
             }
 
