@@ -2972,7 +2972,7 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                                 channel = ch,
                                 isAlive = isWorking,
                                 onClick = {
-                                    playChannel(ctx, ch, nav)
+                                    playChannel(ctx, ch, nav, sortedMatches)
                                     showSheet = false
                                     selectedQc = null
                                 },
@@ -3374,8 +3374,16 @@ private suspend fun validateChannelStatuses(
 
 /**
  * Play a channel using the app's player.
+ * [channels] is the list the user was browsing (e.g. filtered/sorted Quick Channels
+ * or a playlist group). It's passed to the player so the "Channels" button and
+ * D-pad CH+/CH- use the same list the stream was chosen from.
  */
-private fun playChannel(ctx: android.content.Context, channel: IptvChannel, nav: NavHostController) {
+private fun playChannel(
+    ctx: android.content.Context,
+    channel: IptvChannel,
+    nav: NavHostController,
+    channels: List<IptvChannel> = emptyList(),
+) {
     val isM3u8 = channel.url.endsWith(".m3u8", ignoreCase = true)
     val sources = org.json.JSONArray().apply {
         put(org.json.JSONObject()
@@ -3394,6 +3402,19 @@ private fun playChannel(ctx: android.content.Context, channel: IptvChannel, nav:
     val intent = android.content.Intent(ctx, com.hikari.app.player.PlayerActivity::class.java).apply {
         putExtra("title", channel.name)
         putExtra("sources", sources.toString())
+        if (channels.isNotEmpty()) {
+            val arr = org.json.JSONArray()
+            channels.forEach { ch ->
+                arr.put(
+                    org.json.JSONObject()
+                        .put("name", ch.name)
+                        .put("url", ch.url)
+                        .put("logo", ch.logo ?: "")
+                        .put("group", ch.group ?: "")
+                )
+            }
+            putExtra("channelSurfChannels", arr.toString())
+        }
     }
     ctx.startActivity(intent)
 }
@@ -3616,7 +3637,7 @@ fun PlayerChannelListDialog(
                     2 -> {
                         // Quick Channels embedded view
                         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                            QuickChannelsSectionEmbedded(playlists = playlists, onChannelSelected = { ch ->
+                            QuickChannelsSectionEmbedded(playlists = playlists, onChannelSelected = { ch, list ->
                                 onSwitch(ch)
                                 onDismiss()
                             })
@@ -3630,7 +3651,7 @@ fun PlayerChannelListDialog(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun QuickChannelsSectionEmbedded(playlists: List<IptvProvider>, onChannelSelected: (IptvChannel) -> Unit) {
+private fun QuickChannelsSectionEmbedded(playlists: List<IptvProvider>, onChannelSelected: (IptvChannel, List<IptvChannel>) -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val cacheDir = remember { (ctx.applicationContext as? HikariApp)?.cacheDir ?: ctx.cacheDir }
@@ -3851,7 +3872,7 @@ private fun QuickChannelsSectionEmbedded(playlists: List<IptvProvider>, onChanne
                         items(sortedMatches) { ch ->
                             val isWorking = aliveByUrl[ch.url]
                             ChannelListItem(channel = ch, isAlive = isWorking, onClick = {
-                                onChannelSelected(ch)
+                                onChannelSelected(ch, sortedMatches)
                                 showSheet = false
                                 selectedQc = null
                             })
