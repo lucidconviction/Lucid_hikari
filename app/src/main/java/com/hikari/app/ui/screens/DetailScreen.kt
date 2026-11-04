@@ -1801,6 +1801,47 @@ private object AutoResumeGuard {
     }
 }
 
+/**
+ * Loads IPTV siblings (same group, capped at 24) and full channel list
+ * for the player's ChannelSurfController. Extracted to keep DetailScreen
+ * under the ART verifier's method size limit (~9.8k lines).
+ */
+@Composable
+fun IptvSiblingChannels(
+    livePid: String,
+    mediaId: String,
+    isIptvPage: Boolean,
+    providers: List<ContentProvider>,
+): Pair<List<MediaItem>, List<IptvChannel>> {
+    var iptvSiblings by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+    var iptvAllChannels by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
+    LaunchedEffect(livePid, mediaId, isIptvPage) {
+        iptvSiblings = emptyList()
+        iptvAllChannels = emptyList()
+        if (!isIptvPage) return@LaunchedEffect
+        withContext(Dispatchers.IO) {
+            val prov = providers.firstOrNull { it.config.id == livePid }
+                as? IptvProvider ?: return@withContext
+            val allChs = runCatching { prov.channels() }.getOrNull().orEmpty()
+            iptvAllChannels = allChs
+            // Keep the old same-group cap for the shelf UI (unchanged).
+            val ref = CatalogRef(
+                prov.config.id, MediaType.MOVIE,
+                IptvProvider.CATALOG_ALL, "All channels"
+            )
+            val page1 = prov.getCatalog(ref, 1)
+            val all = if (page1.size >= 240) page1 + prov.getCatalog(ref, 2) else page1
+            if (all.isNotEmpty()) {
+                val group = all.firstOrNull { it.id == mediaId }?.overview
+                iptvSiblings = all.filter { it.id != mediaId }
+                    .sortedWith(compareBy({ it.overview != group }, { it.title.lowercase() }))
+                    .take(24)
+            }
+        }
+    }
+    return iptvSiblings to iptvAllChannels
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun DetailScreen(
@@ -1855,38 +1896,9 @@ fun DetailScreen(
     val livePid = activeProviderId.ifBlank { providerId }
     val isVegaPage = livePid.startsWith("vega|")
     val isIptvPage = remember(livePid) { com.hikari.app.data.IptvMark.isIptvProvider(livePid) }
-    // Siblings from the same playlist (the reference app's channel grid under
-    // its player): same group first, the open channel excluded, capped at 24.
-    // Loaded once per channel — a playlist parse is cached by the provider.
-    var iptvSiblings by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
-    // Full channel list for the player's Channels button (all channels in the
-    // playlist, not just same-group siblings — capped so intent payload stays
-    // reasonable; the player still gets every channel the user can surf to).
-    var iptvAllChannels by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
-    LaunchedEffect(livePid, mediaId, isIptvPage) {
-        iptvSiblings = emptyList()
-        iptvAllChannels = emptyList()
-        if (!isIptvPage) return@LaunchedEffect
-        withContext(Dispatchers.IO) {
-            val prov = providers.firstOrNull { it.config.id == livePid }
-                as? IptvProvider ?: return@withContext
-            val allChs = runCatching { prov.channels() }.getOrNull().orEmpty()
-            iptvAllChannels = allChs
-            // Keep the old same-group cap for the shelf UI (unchanged).
-            val ref = CatalogRef(
-                prov.config.id, MediaType.MOVIE,
-                IptvProvider.CATALOG_ALL, "All channels"
-            )
-            val page1 = prov.getCatalog(ref, 1)
-            val all = if (page1.size >= 240) page1 + prov.getCatalog(ref, 2) else page1
-            if (all.isNotEmpty()) {
-                val group = all.firstOrNull { it.id == mediaId }?.overview
-                iptvSiblings = all.filter { it.id != mediaId }
-                    .sortedWith(compareBy({ it.overview != group }, { it.title.lowercase() }))
-                    .take(24)
-            }
-        }
-    }
+
+    // IPTV sibling + full channel loading (extracted to reduce composable size)
+    val (iptvSiblings, iptvAllChannels) = IptvSiblingChannels(livePid, mediaId, isIptvPage, providers)
 
     /**
      * The name the PLAYER's artwork card prints (and the detail page's own
