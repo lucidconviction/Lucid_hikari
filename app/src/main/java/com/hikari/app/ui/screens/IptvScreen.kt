@@ -3420,6 +3420,7 @@ private fun playChannel(
     val intent = android.content.Intent(ctx, com.hikari.app.player.PlayerActivity::class.java).apply {
         putExtra("title", channel.name)
         putExtra("sources", sources.toString())
+        putExtra("askServer", false)
         // Pass providerId as histProviderId so PlayerActivity.originProviderId is set
         // This allows fetchChannelStreams() to find the provider and resolve HLS streams
         putExtra("histProviderId", providerId)
@@ -3431,6 +3432,7 @@ private fun playChannel(
                         .put("name", ch.name)
                         .put("url", ch.url)
                         .put("logo", ch.logo ?: "")
+                        .put("thumbnail", ch.logo ?: "")
                         .put("group", ch.group)
                         .put("providerId", ch.providerId)
                 )
@@ -3580,16 +3582,13 @@ fun PlayerChannelListDialog(
                         }
                     }
                     1 -> {
-                        // All Playlists
+                        // All Playlists - use concurrent fetching with caching
                         var allChannels by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
                         var loading by remember { mutableStateOf(true) }
                         LaunchedEffect(playlists) {
                             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                val list = mutableListOf<IptvChannel>()
-                                for (p in playlists) {
-                                    runCatching { list.addAll(p.channels()) }.getOrNull()
-                                }
-                                allChannels = list
+                                // Use gatherIptvChannels for concurrent fetching with caching
+                                allChannels = com.hikari.app.providers.gatherIptvChannels(playlists)
                                 loading = false
                             }
                         }

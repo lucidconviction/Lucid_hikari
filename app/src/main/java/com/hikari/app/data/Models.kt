@@ -606,6 +606,8 @@ data class StreamSource(
      *  here instead of as images — the novel reader joins them. Blank for
      *  every video/image source. */
     val text: String = "",
+    /** Optional thumbnail/logo URL for this stream source. */
+    val thumbnail: String? = null,
 ) {
     /** Identity across every merge/dedup in the app: a torrent is its
      *  infoHash PLUS its file index — two files of one pack share the hash

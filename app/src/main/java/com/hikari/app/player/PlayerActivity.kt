@@ -252,6 +252,8 @@ class PlayerActivity : ComponentActivity() {
         val torrentFileHint: String? = null,
         /** Same row's declared byte size (see StreamSource.torrentFileSize). */
         val torrentFileSize: Long = 0L,
+        /** Optional thumbnail/logo URL for this stream source. */
+        val thumbnail: String? = null,
     ) {
         /** Identity across every merge/dedup in the player (see
          *  [StreamSource.identityKey]): hash + file index for torrents, and
@@ -1057,6 +1059,7 @@ class PlayerActivity : ComponentActivity() {
         details = details,
         torrentFileHint = torrentFileHint,
         torrentFileSize = torrentFileSize,
+        thumbnail = thumbnail,
     )
 
     /** The inverse of [toPlayerSource]: a player source as a data-layer source,
@@ -1080,6 +1083,7 @@ class PlayerActivity : ComponentActivity() {
         details = details,
         torrentFileHint = torrentFileHint,
         torrentFileSize = torrentFileSize,
+        thumbnail = thumbnail,
     )
 
     /** Which header set the CURRENT source is being tried with, when a CDN
@@ -7790,7 +7794,10 @@ class PlayerActivity : ComponentActivity() {
                     coverPlaybackLine = I18n.t("Switching to %s…").replace("%s", channel.name)
                     // Show the loading banner with the new channel's logo
                     // so it's visible during the transition to the next stream.
-                    showLoadingCover()
+                    showLoadingCover(
+                        titleOverride = channel.name,
+                        logoOverride = channel.logo
+                    )
                     lifecycleScope.launch {
                         val fresh = fetchChannelStreams(channel)
                         coverPlaybackLine = null
@@ -16006,7 +16013,10 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
     /** The cover shown while a server is being found/prepared: the full-screen
      *  title card, or — when the user turned it off in Settings — just a round
      *  spinner on black. */
-    private fun showLoadingCover() {
+    private fun showLoadingCover(
+        titleOverride: String? = null,
+        logoOverride: String? = null
+    ) {
         // Restore whatever is actually happening (or the default line) so a
         // cover re-shown mid-session (failover, second attempt) doesn't look
         // like the app went back to square one. [coverPlaybackLine] wins while a
@@ -16015,7 +16025,7 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
         loadingStatus?.text = line
         loadingSpinnerStatus?.text = line
         startLoadingTicker()
-        if (bannerMode) showLoadingBanner() else showLoadingSpinner()
+        if (bannerMode) showLoadingBanner(titleOverride, logoOverride) else showLoadingSpinner()
     }
 
     /** Re-renders the cover's status line once a second with the number of
@@ -16050,13 +16060,19 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
         spin.visibility = View.VISIBLE
     }
 
-    private fun showLoadingBanner() {
+    private fun showLoadingBanner(
+        titleOverride: String? = null,
+        logoOverride: String? = null
+    ) {
         val banner = loadingBanner ?: return
         val box = loadingTitleBox ?: return
         val tvLayout = com.hikari.app.tv.TvMode.isTv
         val style = if (tvLayout) com.hikari.app.ui.LoadingStyles.CINEMATIC
             else com.hikari.app.ui.LoadingStyles.normalize(loadingStyle)
-        loadingTitle?.text = intent.getStringExtra("title").orEmpty().ifBlank { "Loading" }.uppercase()
+        
+        // Use override title if provided, otherwise fall back to intent
+        val displayTitle = titleOverride ?: intent.getStringExtra("title").orEmpty().ifBlank { "Loading" }
+        loadingTitle?.text = displayTitle.uppercase()
 
         // The title WORDMARK (Settings → App Layout → Loading screen → Title
         // logo). Given the art, the cover draws it INSTEAD of the name — the same
@@ -16067,7 +16083,7 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
         // animation grows and shrinks the wordmark exactly like the text.
         loadingLogoPercent = intent.getIntExtra("titleLogoSize", 100).coerceIn(50, 160)
         val logoModel = PosterLoader.model(
-            intent.getStringExtra("titleLogo")?.takeIf { it.isNotBlank() }
+            logoOverride?.takeIf { it.isNotBlank() } ?: intent.getStringExtra("titleLogo")?.takeIf { it.isNotBlank() }
         )
         loadingLogo?.apply {
             if (logoModel != null) {

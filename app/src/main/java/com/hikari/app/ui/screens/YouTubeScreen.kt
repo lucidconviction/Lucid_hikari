@@ -625,6 +625,7 @@ private fun launchPlayer(context: Context, stream: YtStream) {
     val intent = Intent(context, PlayerActivity::class.java).apply {
         putExtra("title", stream.title)
         putExtra("sources", sources.toString())
+        putExtra("askServer", false)
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
     context.startActivity(intent)
