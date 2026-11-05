@@ -861,13 +861,16 @@ data class CatalogRow(
 )
 
 /**
- * A user-defined YouTube channel. Stored in DataStore and managed through the
- * YouTube tab — the user can add or delete channels freely. Each entry has a
- * display name plus a YouTube channel URL that Hikari resolves into playable
- * streams.
+ * A user-defined YouTube item — either a channel or a direct video. Stored in
+ * DataStore and managed through the YouTube tab. The user can add or delete
+ * items freely. Each entry has a display name, a type (channel or video), and
+ * a YouTube URL that Hikari resolves into playable streams.
  */
 data class YouTubeChannel(
     val id: String = java.util.UUID.randomUUID().toString(),
     val name: String = "",
     val url: String = "",
+    /** "channel" or "video" — determines whether the item resolves to latest
+     *  videos from the channel's RSS feed, or plays a single video directly. */
+    val itemType: String = "channel",
 )
