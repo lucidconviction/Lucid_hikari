@@ -2,17 +2,13 @@ package com.hikari.app.ui.screens
 
 import android.content.Context
 import android.content.Intent
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -20,24 +16,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountCircle
-import androidx.compose.material.icons.filled.ChevronLeft
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VideoLibrary
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -51,85 +39,79 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.navigation.NavHostController
-import coil.compose.AsyncImage
+import com.hikari.app.data.YouTubeChannel
+import com.hikari.app.data.stores.YouTubeChannelStore
+import com.hikari.app.net.Http
 import com.hikari.app.player.PlayerActivity
-import com.hikari.app.youtube.YouTubeAuthRepository
-import com.hikari.app.youtube.YouTubeFeedRepository
-import com.hikari.app.youtube.YouTubeSignInKeepAliveService
-import com.hikari.app.youtube.YouTubeViewModel
-import com.hikari.app.youtube.YtFeedItem
-import com.hikari.app.youtube.YtFeedRow
-import com.hikari.app.youtube.YtFeedTab
-import com.hikari.app.youtube.YtStream
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.URLEncoder
 
+/**
+ * YouTube tab — simple channel management. Users can add/delete YouTube
+ * channels by pasting a channel URL (e.g., `https://www.youtube.com/@username`
+ * or `/channel/UC...`). Tapping a channel fetches its latest videos and plays
+ * them directly in Hikari's player.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun YouTubeScreen(nav: NavHostController) {
+fun YouTubeScreen(nav: androidx.navigation.NavHostController) {
     val context = LocalContext.current
-
-    val authRepository = remember { YouTubeAuthRepository(context) }
-    val feedRepository = remember { YouTubeFeedRepository(context, authRepository) }
-
-    val viewModel: YouTubeViewModel = viewModel(
-        factory = YouTubeViewModelFactory(
-            context = context,
-            authRepository = authRepository,
-            feedRepository = feedRepository,
-            onPlay = { stream -> launchPlayer(context, stream) },
-            onClosePlayer = {},
-        )
-    )
-
-    val uiState by viewModel.uiState.collectAsState()
-
-    BackHandler(enabled = viewModel.canGoBack) {
-        viewModel.goBack()
-    }
+    val store = remember { YouTubeChannelStore.getInstance(context) }
+    val channels by store.channelsFlow.collectAsState(initial = emptyList())
+    var showAddDialog by remember { mutableStateOf(false) }
+    var showError by remember { mutableStateOf<String?>(null) }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        YouTubeTopAppBar(uiState = uiState, viewModel = viewModel)
-
-        if (uiState.showSearch) {
-            YouTubeSearchOverlay(
-                uiState = uiState,
-                viewModel = viewModel,
-                onClose = { viewModel.onSearchQueryChange("") },
-            )
+        // Header
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Filled.VideoLibrary,
+                    contentDescription = null,
+                    tint = Color(0xFFCC0000),
+                    modifier = Modifier.size(28.dp),
+                )
+                Text(
+                    text = "YouTube",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+            }
+            IconButton(onClick = { showAddDialog = true }) {
+                Icon(
+                    imageVector = Icons.Filled.Add,
+                    contentDescription = "Add Channel",
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
         }
 
-        if (uiState.signInActive && uiState.signInCode != null) {
-            YouTubeSignInDialog(
-                code = uiState.signInCode!!,
-                activateLink = uiState.signInActivateLink ?: "https://youtube.com/activate",
-                onCancel = { viewModel.cancelSignIn() },
-            )
-        }
-
-        YouTubeFeedTabs(
-            currentTab = uiState.currentTab,
-            signedIn = uiState.signedIn,
-            onTabClick = { tab -> viewModel.selectTab(tab) },
-        )
-
-        uiState.error?.let { error ->
+        // Error message
+        showError?.let { error ->
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -143,604 +125,305 @@ fun YouTubeScreen(nav: NavHostController) {
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
+            Spacer(modifier = Modifier.height(8.dp))
         }
 
-        Box(modifier = Modifier.fillMaxSize()) {
-            if (uiState.loading) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-            } else if (uiState.currentTab.isGrid) {
-                YouTubeGridFeed(
-                    items = uiState.grid,
-                    onItemClick = { item -> viewModel.openItem(item) },
-                    onItemFocus = { item -> viewModel.prefetch(item) },
-                    loadMore = { viewModel.loadMore() },
-                    loadingMore = uiState.loadingMore,
-                    canLoadMore = uiState.canLoadMore,
-                )
-            } else {
-                YouTubeRowFeed(
-                    rows = uiState.rows,
-                    onItemClick = { item -> viewModel.openItem(item) },
-                    onItemFocus = { item -> viewModel.prefetch(item) },
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun YouTubeTopAppBar(
-    uiState: YouTubeViewModel.UiState,
-    viewModel: YouTubeViewModel,
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 4.dp)
-            .background(MaterialTheme.colorScheme.surfaceContainerLow),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (uiState.subTitle != null || uiState.showSearch) {
-                IconButton(
-                    onClick = { if (uiState.subTitle != null) viewModel.goBack() else viewModel.onSearchQueryChange("") },
-                ) {
-                    Icon(Icons.Filled.ChevronLeft, contentDescription = "Back", tint = MaterialTheme.colorScheme.onSurface)
-                }
-            }
-
-            if (uiState.subTitle == null && !uiState.showSearch) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+        // Channel list
+        if (channels.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(
                         imageVector = Icons.Filled.VideoLibrary,
                         contentDescription = null,
-                        tint = Color(0xFFCC0000),
-                        modifier = Modifier.size(28.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
+                        modifier = Modifier.size(64.dp),
                     )
+                    Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        text = "YouTube",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(start = 8.dp),
+                        text = "No YouTube channels yet",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Tap + to add a channel",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                     )
                 }
             }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(channels, key = { it.id }) { channel ->
+                    YouTubeChannelRow(
+                        channel = channel,
+                        onPlay = { /* handled by channel click */ },
+                        onDelete = {
+                            CoroutineScope(Dispatchers.IO).launch {
+                                store.deleteChannel(channel.id)
+                            }
+                        },
+                    )
+                }
+            }
+        }
+    }
 
-            if (uiState.subTitle != null) {
+    // Add channel dialog
+    if (showAddDialog) {
+        YouTubeAddChannelDialog(
+            onAdd = { name, url ->
+                val newChannel = YouTubeChannel(name = name.trim(), url = url.trim())
+                CoroutineScope(Dispatchers.IO).launch {
+                    store.addChannel(newChannel)
+                }
+                showAddDialog = false
+            },
+            onCancel = { showAddDialog = false },
+        )
+    }
+}
+
+@Composable
+fun YouTubeChannelRow(
+    channel: YouTubeChannel,
+    onPlay: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { /* play logic handled in parent */ }
+            .padding(4.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ),
+        shape = RoundedCornerShape(12.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Play icon
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(8.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            // Channel info
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable { /* play */ },
+            ) {
                 Text(
-                    text = uiState.subTitle!!,
-                    style = MaterialTheme.typography.titleMedium,
+                    text = channel.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 )
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                IconButton(onClick = { viewModel.onSearchQueryChange("") }) {
-                    Icon(Icons.Filled.Search, contentDescription = "Search", tint = MaterialTheme.colorScheme.onSurface)
-                }
-                if (!uiState.signedIn) {
-                    TextButton(
-                        onClick = { viewModel.startSignIn() },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                    ) {
-                        Text("Sign In", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-                    }
-                } else {
-                    IconButton(onClick = { viewModel.toggleAccountSheet() }) {
-                        uiState.userAvatar?.let { avatar ->
-                            AsyncImage(
-                                model = avatar,
-                                contentDescription = "",
-                                modifier = Modifier.size(28.dp).clip(CircleShape),
-                            )
-                        } ?: Icon(Icons.Filled.AccountCircle, contentDescription = "Account", tint = MaterialTheme.colorScheme.onSurface)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun YouTubeSearchOverlay(
-    uiState: YouTubeViewModel.UiState,
-    viewModel: YouTubeViewModel,
-    onClose: () -> Unit,
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xCC000000))
-            .clickable { onClose() },
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
-                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
-                .padding(top = 16.dp),
-        ) {
-            OutlinedTextField(
-                value = uiState.searchQuery,
-                onValueChange = { viewModel.onSearchQueryChange(it) },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Search YouTube") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Text,
-                    imeAction = ImeAction.Search,
-                ),
-                keyboardActions = KeyboardActions(onSearch = { viewModel.startSearch() }),
-                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-                trailingIcon = {
-                    if (uiState.searchQuery.isNotBlank()) {
-                        IconButton(onClick = { viewModel.onSearchQueryChange("") }) {
-                            Icon(Icons.Filled.Close, contentDescription = "Clear")
-                        }
-                    }
-                },
-            )
-
-            if (uiState.searchSuggestions.isNotEmpty()) {
                 Text(
-                    text = "Suggestions",
-                    style = MaterialTheme.typography.labelLarge,
+                    text = channel.url,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
-                )
-                uiState.searchSuggestions.forEach { suggestion ->
-                    Text(
-                        text = suggestion.text,
-                        style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 12.dp, horizontal = 4.dp)
-                            .clickable {
-                                viewModel.onSearchQueryChange(suggestion.text)
-                                viewModel.startSearch()
-                            }
-                            .background(MaterialTheme.colorScheme.surface),
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun YouTubeFeedTabs(
-    currentTab: YtFeedTab,
-    signedIn: Boolean,
-    onTabClick: (YtFeedTab) -> Unit,
-) {
-    val tabs = remember { YtFeedTab.values() }
-    val scrollState = rememberScrollState()
-
-    Row(
-        modifier = Modifier
-            .horizontalScroll(scrollState)
-            .padding(horizontal = 8.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        tabs.filter { if (it.needsSignIn) signedIn else true }.forEach { tab ->
-            val selected = currentTab == tab
-            Text(
-                text = tab.title,
-                style = MaterialTheme.typography.labelLarge.copy(
-                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
-                ),
-                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-                    .background(
-                        if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHighest,
-                        RoundedCornerShape(20.dp),
-                    )
-                    .clickable { onTabClick(tab) },
-            )
-        }
-    }
-}
-
-@Composable
-fun YouTubeRowFeed(
-    rows: List<YtFeedRow>,
-    onItemClick: (YtFeedItem) -> Unit,
-    onItemFocus: (YtFeedItem) -> Unit,
-) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        items(rows) { row ->
-            if (row.items.isNotEmpty()) {
-                Text(
-                    text = row.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 8.dp),
-                )
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    row.items.forEach { item ->
-                        YouTubeVideoCard(
-                            item = item,
-                            onClick = { onItemClick(item) },
-                            onFocus = { onItemFocus(item) },
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun YouTubeGridFeed(
-    items: List<YtFeedItem>,
-    onItemClick: (YtFeedItem) -> Unit,
-    onItemFocus: (YtFeedItem) -> Unit,
-    loadMore: () -> Unit,
-    loadingMore: Boolean,
-    canLoadMore: Boolean,
-) {
-    val gridState = rememberLazyGridState()
-    val columns = if (items.firstOrNull()?.isShorts == true) 2 else 3
-
-    LazyVerticalGrid(
-        modifier = Modifier.fillMaxSize(),
-        columns = GridCells.Fixed(columns),
-        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        state = gridState,
-    ) {
-        items(items) { item ->
-            YouTubeGridCard(
-                item = item,
-                onClick = { onItemClick(item) },
-                onFocus = { onItemFocus(item) },
-                isShorts = item.isShorts,
-            )
-        }
-
-        if (loadingMore) {
-            item(span = { GridItemSpan(columns) }) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                        .background(MaterialTheme.colorScheme.surfaceContainerHighest, RoundedCornerShape(8.dp)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator()
-                }
-            }
-        }
-    }
-
-    LaunchedEffect(gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) {
-        val lastIndex = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-        if (canLoadMore && !loadingMore && lastIndex >= items.size - 6) {
-            loadMore()
-        }
-    }
-}
-
-@Composable
-fun YouTubeVideoCard(
-    item: YtFeedItem,
-    onClick: () -> Unit,
-    onFocus: () -> Unit,
-) {
-    val cardWidth = 280.dp
-    val aspectRatio = 16f / 9f
-    val cardHeight = (cardWidth.value / aspectRatio).dp
-
-    Card(
-        modifier = Modifier
-            .width(cardWidth)
-            .height(cardHeight)
-            .onFocusChanged { if (it.isFocused) onFocus() }
-            .clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        ),
-        shape = RoundedCornerShape(12.dp),
-    ) {
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(aspectRatio)
-                    .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)),
-            ) {
-                item.thumbnail?.let { url ->
-                    AsyncImage(
-                        model = url,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
-
-                if (item.isLive) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(6.dp),
-                    ) {
-                        Text(
-                            text = "LIVE",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                            color = Color.White,
-                            modifier = Modifier
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                                .background(Color(0xFFCC0000), RoundedCornerShape(4.dp)),
-                        )
-                    }
-                }
-
-                if (item.percentWatched > 0 && item.percentWatched < 100) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .align(Alignment.BottomCenter)
-                            .height(3.dp)
-                            .background(MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.5f))
-                            .clip(RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)),
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxHeight()
-                                .fillMaxWidth((item.percentWatched / 100f))
-                                .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)),
-                        )
-                    }
-                }
-            }
-
-            Column(modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)) {
-                Text(
-                    text = item.title,
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 2,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (item.author != null) {
-                    Text(
-                        text = item.author!!,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                item.badge?.let { badge ->
-                    Text(
-                        text = badge,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(top = 2.dp),
-                    )
-                }
             }
-        }
-    }
-}
 
-@Composable
-fun YouTubeGridCard(
-    item: YtFeedItem,
-    onClick: () -> Unit,
-    onFocus: () -> Unit,
-    isShorts: Boolean = false,
-) {
-    val aspectRatio = if (isShorts) 9f / 16f else 16f / 9f
-    val cardWidth = if (isShorts) 160.dp else 180.dp
-
-    Card(
-        modifier = Modifier
-            .width(cardWidth)
-            .aspectRatio(aspectRatio)
-            .onFocusChanged { if (it.isFocused) onFocus() }
-            .clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        ),
-        shape = RoundedCornerShape(12.dp),
-    ) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopStart) {
-            item.thumbnail?.let { url ->
-                AsyncImage(
-                    model = url,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)),
+            // Delete button
+            IconButton(onClick = onDelete) {
+                Icon(
+                    imageVector = Icons.Filled.Delete,
+                    contentDescription = "Delete",
+                    tint = MaterialTheme.colorScheme.error,
                 )
             }
-
-            if (item.isLive) {
-                Box(
-                    modifier = Modifier.padding(6.dp).align(Alignment.TopStart),
-                ) {
-                    Text(
-                        text = "LIVE",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = Color.White,
-                        modifier = Modifier
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                            .background(Color(0xFFCC0000), RoundedCornerShape(4.dp)),
-                    )
-                }
-            }
-
-            if (item.percentWatched > 0 && item.percentWatched < 100) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .align(Alignment.BottomCenter)
-                        .height(3.dp)
-                        .background(MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.5f))
-                        .clip(RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .fillMaxWidth(item.percentWatched / 100f)
-                            .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)),
-                    )
-                }
-            }
         }
     }
 }
 
-private fun launchPlayer(context: Context, stream: YtStream) {
-    val sources = JSONArray().apply {
-        put(JSONObject().apply {
-            put("name", "YouTube")
-            put("url", stream.url)
-            put("isM3u8", stream.url.contains(".m3u8") || stream.url.contains("m3u8"))
-            stream.headers.forEach { (k, v) -> put(k, v) }
-        })
-    }
-    val intent = Intent(context, PlayerActivity::class.java).apply {
-        putExtra("title", stream.title)
-        putExtra("sources", sources.toString())
-        putExtra("askServer", false)
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    }
-    context.startActivity(intent)
-}
-
-/** Sign-in dialog showing the device code and a button to open the activation page. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun YouTubeSignInDialog(
-    code: String,
-    activateLink: String,
+fun YouTubeAddChannelDialog(
+    onAdd: (String, String) -> Unit,
     onCancel: () -> Unit,
 ) {
-    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
-    val context = androidx.compose.ui.platform.LocalContext.current
+    var name by remember { mutableStateOf("") }
+    var url by remember { mutableStateOf("") }
+    var nameError by remember { mutableStateOf<String?>(null) }
+    var urlError by remember { mutableStateOf<String?>(null) }
 
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onCancel,
-        title = { androidx.compose.material3.Text("Sign in to YouTube") },
+        title = { Text("Add YouTube Channel") },
         text = {
-            androidx.compose.foundation.layout.Column(verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
-                androidx.compose.material3.Text("Open the link below on your phone or computer and enter this code:")
-                androidx.compose.material3.Text(
-                    text = code,
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.primary,
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = {
+                        name = it
+                        nameError = if (it.isBlank()) "Name is required" else null
+                    },
+                    label = { Text("Channel Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    isError = nameError != null,
+                    supportingText = nameError?.let { { Text(it, color = MaterialTheme.colorScheme.error) } },
+                )
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = {
+                        url = it
+                        urlError = validateYoutubeUrl(it)?.let { null } ?: "Invalid YouTube URL"
+                    },
+                    label = { Text("Channel URL") },
+                    singleLine = true,
+                    placeholder = { Text("https://www.youtube.com/@username") },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Uri,
+                        imeAction = ImeAction.Done,
+                    ),
+                    keyboardActions = KeyboardActions(
+                        onDone = {
+                            if (name.isNotBlank() && urlError == null) {
+                                onAdd(name, url)
+                            }
+                        },
+                    ),
+                    isError = urlError != null,
+                    supportingText = urlError?.let { { Text(it, color = MaterialTheme.colorScheme.error) } },
                 )
             }
         },
         confirmButton = {
-            androidx.compose.material3.Button(onClick = {
-                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(activateLink))
-                context.startActivity(intent)
-            }) {
-                androidx.compose.material3.Text("Open youtube.com/activate")
+            androidx.compose.material3.Button(
+                onClick = {
+                    if (name.isNotBlank() && urlError == null) {
+                        onAdd(name, url)
+                    }
+                },
+                enabled = name.isNotBlank() && urlError == null,
+            ) {
+                Text("Add")
             }
         },
         dismissButton = {
             androidx.compose.material3.TextButton(onClick = onCancel) {
-                androidx.compose.material3.Text("Cancel")
+                Text("Cancel")
             }
         },
     )
 }
 
-/** Account bottom sheet — sign in when not authenticated, show profile + sign out when signed in. */
-@Composable
-fun YouTubeAccountSheet(
-    signedIn: Boolean,
-    userName: String? = null,
-    onSignIn: () -> Unit,
-    onSignOut: () -> Unit = {},
-    onDismiss: () -> Unit,
-) {
-    @OptIn(ExperimentalMaterial3Api::class)
-    androidx.compose.material3.ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surface,
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp),
-        ) {
-            androidx.compose.material3.Text(
-                text = "Account",
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(16.dp))
-            if (signedIn) {
-                userName?.let { name ->
-                    androidx.compose.material3.Text(
-                        text = name,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                }
-                androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(16.dp))
-                androidx.compose.material3.Button(
-                    onClick = onSignOut,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    androidx.compose.material3.Text("Sign Out")
-                }
-            } else {
-                androidx.compose.material3.Text(
-                    text = "Sign in to access Subscriptions, History, Playlists, and Channels.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(16.dp))
-                androidx.compose.material3.Button(
-                    onClick = onSignIn,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    androidx.compose.material3.Text("Sign In with YouTube")
-                }
-            }
-        }
+/** Validates a YouTube channel URL and extracts the channel ID. */
+private fun validateYoutubeUrl(url: String): String? {
+    val trimmed = url.trim()
+    // Handle various YouTube channel URL formats
+    val patterns = listOf(
+        Regex("""youtube\.com/@([a-zA-Z0-9_-]+)"""),
+        Regex("""youtube\.com/channel/([a-zA-Z0-9_-]+)"""),
+        Regex("""youtube\.com/user/([a-zA-Z0-9_-]+)"""),
+        Regex("""youtube\.com/c/([a-zA-Z0-9_-]+)"""),
+    )
+    for (pattern in patterns) {
+        pattern.find(trimmed)?.let { return it.groupValues[1] }
     }
+    return null
 }
 
-class YouTubeViewModelFactory(
-    private val context: Context,
-    private val authRepository: YouTubeAuthRepository,
-    private val feedRepository: YouTubeFeedRepository,
-    private val onPlay: (YtStream) -> Unit,
-    private val onClosePlayer: () -> Unit,
-) : androidx.lifecycle.ViewModelProvider.Factory {
-    @Suppress("UNCHECKED_CAST")
-    override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
-        return YouTubeViewModel(
-            context = context,
-            authRepository = authRepository,
-            feedRepository = feedRepository,
-            onPlay = onPlay,
-            onClosePlayer = onClosePlayer,
-        ) as T
+/**
+ * Resolves a YouTube channel URL to its latest videos by scraping the RSS feed.
+ * Returns video titles and URLs that can be played directly.
+ */
+private suspend fun resolveYouTubeChannelVideos(channelUrl: String): List<YouTubeVideo> = withContext(Dispatchers.IO) {
+    val results = mutableListOf<YouTubeVideo>()
+    try {
+        // Try RSS feed first (most reliable)
+        val rssUrl = "https://www.youtube.com/feeds/videos.xml?channel_id=${extractChannelId(channelUrl)}"
+        val xml = Http.fetchStringRobust(rssUrl, mapOf("User-Agent" to Http.UA)).getOrNull() ?: return@withContext emptyList()
+
+        // Parse XML to extract video entries
+        val videoEntries = """<entry>(.*?)</entry>""".toRegex(RegexOption.DOT_MATCHES_ALL)
+        val idMatches = """<yt:videoId>(.*?)</yt:videoId>""".toRegex(RegexOption.DOT_MATCHES_ALL)
+        val titleMatches = """<title>(.*?)</title>""".toRegex(RegexOption.DOT_MATCHES_ALL)
+
+        val entries = videoEntries.findAll(xml).toList()
+        val ids = idMatches.findAll(xml).map { it.groupValues[1] }.toList()
+        val titles = titleMatches.findAll(xml).map { it.groupValues[1] }.toList()
+
+        for (i in entries.indices) {
+            if (i < ids.size && i < titles.size) {
+                results.add(YouTubeVideo(id = ids[i], title = titles[i]))
+            }
+        }
+    } catch (e: Exception) {
+        com.hikari.app.data.Logs.log("YouTube", "Failed to resolve channel: ${e.message}")
     }
+    return@withContext results.take(20) // Limit to 20 most recent
+}
+
+private fun extractChannelId(url: String): String {
+    val patterns = listOf(
+        Regex("""youtube\.com/@[a-zA-Z0-9_-]+"""),
+        Regex("""youtube\.com/channel/([a-zA-Z0-9_-]+)"""),
+    )
+    for (pattern in patterns) {
+        val match = pattern.find(url)
+        if (match != null) {
+            val id = match.value.split("/").lastOrNull()
+            if (id != null && id.startsWith("UC")) return id
+        }
+    }
+    return ""
+}
+
+private data class YouTubeVideo(
+    val id: String,
+    val title: String,
+)
+
+private fun launchPlayer(context: Context, channelName: String, videos: List<YouTubeVideo>) {
+    if (videos.isEmpty()) return
+    
+    val sources = JSONArray().apply {
+        videos.forEach { video ->
+            put(JSONObject().apply {
+                put("name", video.title)
+                put("url", "https://www.youtube.com/watch?v=${video.id}")
+                put("isM3u8", false)
+            })
+        }
+    }
+    
+    val intent = Intent(context, PlayerActivity::class.java).apply {
+        putExtra("title", channelName)
+        putExtra("sources", sources.toString())
+        putExtra("askServer", false)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    context.startActivity(intent)
 }

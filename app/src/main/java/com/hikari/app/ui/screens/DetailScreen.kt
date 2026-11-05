@@ -2389,8 +2389,9 @@ fun DetailScreen(
                 // grouped by engine, instead of starting one by itself. The
                 // television always asks: on the big screen a tap shows the
                 // server list (over the title's art, like the desktop client)
-                // instead of playing directly.
-                putExtra("askServer", askServerOnPlay || isTvLayout)
+                // instead of playing directly. IPTV streams bypass this — they
+                // have a direct URL, no server to choose from.
+                putExtra("askServer", (askServerOnPlay && !isIptvPage) || isTvLayout)
                 // NO origin hold, in either playback mode. These two extras used
                 // to carry the window in which the player waited for the
                 // extension the title was opened FROM; the servers that decide

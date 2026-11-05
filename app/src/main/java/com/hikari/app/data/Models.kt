@@ -859,3 +859,15 @@ data class CatalogRow(
     val type: MediaType = MediaType.UNKNOWN,
     val rawType: String = "",
 )
+
+/**
+ * A user-defined YouTube channel. Stored in DataStore and managed through the
+ * YouTube tab — the user can add or delete channels freely. Each entry has a
+ * display name plus a YouTube channel URL that Hikari resolves into playable
+ * streams.
+ */
+data class YouTubeChannel(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val name: String = "",
+    val url: String = "",
+)
