@@ -3333,9 +3333,11 @@ class PlayerActivity : ComponentActivity() {
     /** True when a server list should stop at the chooser instead of starting
      *  on its own. Reads the persisted setting when the launching screen did
      *  not pass it through, so every entry point (downloads, favourites,
-     *  history, a re-open) honours the toggle too. */
+     *  history, a re-open) honours the toggle too. IPTV streams always play
+     *  directly — they have a single known URL, no server to choose from. */
     private suspend fun shouldAskServer(): Boolean {
         if (askServerThisLaunch) return true
+        if (isIptvStream()) return false
         if (!askServerPrefLoaded) {
             askServerOnPlay = runCatching {
                 (applicationContext as HikariApp).store.askServerOnPlay()

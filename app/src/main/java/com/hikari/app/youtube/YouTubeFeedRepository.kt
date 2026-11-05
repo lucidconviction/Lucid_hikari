@@ -2,6 +2,7 @@ package com.hikari.app.youtube
 
 import android.content.Context
 import android.util.Base64
+import android.util.Log
 import com.hikari.app.net.Http
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -12,6 +13,9 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+
+/** Simple 4-tuple for destructuring multiple values. */
+data class Tuple4<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
 
 /** YouTube feed tab identifiers. */
 enum class YtFeedTab(
@@ -95,12 +99,38 @@ class YouTubeFeedRepository(
         const val PLAYER_URL = "$INNER_TUBE_API_URL/player"
         const val MAX_CACHED_STREAMS = 24
         const val MAX_CLIENT_SWITCHES = 8
+        
+        // Android client
         const val ANDROID_CLIENT_VERSION = "21.26.364"
         const val ANDROID_USER_AGENT = "com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip"
         const val ANDROID_CLIENT_NAME = "1"
+        const val ANDROID_INNER_TUBE_NAME = "ANDROID"
+        
+        // TV client (better for streams, supports auth)
         const val TV_CLIENT_VERSION = "7.20231204.0.0"
         const val TV_USER_AGENT = "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/25.lts.30.1034943-gold (unlike Gecko), Unknown_TV_Unknown_0/Unknown (Unknown, Unknown)"
         const val TV_CLIENT_NAME = "85"
+        const val TV_INNER_TUBE_NAME = "TVHTML5"
+        
+        // iOS client (no signature deciphering needed)
+        const val IOS_CLIENT_VERSION = "19.10.3"
+        const val IOS_USER_AGENT = "com.google.ios.youtube/19.10.3 (iPhone14,3; U; CPU iOS 17_0 like Mac OS X)"
+        const val IOS_CLIENT_NAME = "5"
+        const val IOS_INNER_TUBE_NAME = "IOS"
+        
+        // Web embed client (good for restricted content)
+        const val WEB_EMBED_CLIENT_VERSION = "2.20240429.00.00"
+        const val WEB_EMBED_USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+        const val WEB_EMBED_CLIENT_NAME = "56"
+        const val WEB_EMBED_INNER_TUBE_NAME = "WEB_EMBEDDED_PLAYER"
+        
+        // Client types for switching
+        enum class ClientType {
+            ANDROID,
+            TV,
+            IOS,
+            WEB_EMBED
+        }
     }
 
     private val httpClient = OkHttpClient.Builder()
@@ -119,21 +149,24 @@ class YouTubeFeedRepository(
     suspend fun fetchFeed(tab: YtFeedTab, accessToken: String?): Result<Any> {
         return withContext(Dispatchers.IO) {
             ensureApiKey()
-            val useTVClient = tab in setOf(YtFeedTab.MUSIC, YtFeedTab.GAMING, YtFeedTab.NEWS, YtFeedTab.SPORTS)
-            val (payload, endpoint) = when (tab) {
-                YtFeedTab.HOME -> buildBrowsePayload("FEwhat_to_watch", accessToken)
-                YtFeedTab.SUBSCRIPTIONS -> buildBrowsePayload("FEsubscriptions", accessToken)
-                YtFeedTab.HISTORY -> buildBrowsePayload("FEhistory", accessToken)
-                YtFeedTab.PLAYLISTS -> buildBrowsePayload("FEplaylist_aggregation", accessToken)
-                YtFeedTab.LIVE -> buildReelPayload(accessToken)  // Live uses reel endpoint
-                YtFeedTab.MUSIC -> buildBrowsePayloadTV("FEtopics_music", "6gQJRkVleHBsb3Jl", accessToken)
-                YtFeedTab.GAMING -> buildBrowsePayloadTV("FEtopics_gaming", "6gQJRkVleHBsb3Jl", accessToken)
-                YtFeedTab.NEWS -> buildBrowsePayloadTV("FEtopics_news", "6gQJRkVleHBsb3Jl", accessToken)
-                YtFeedTab.SPORTS -> buildBrowsePayloadTV("FEtopics_sports", "6gQJRkVleHBsb3Jl", accessToken)
-                YtFeedTab.SHORTS -> buildShortsPayload(accessToken)
-                YtFeedTab.CHANNELS -> buildBrowsePayload("FEmy_youtube", accessToken) // Channels tab shows subscribed channels
+            val client = when (tab) {
+                YtFeedTab.MUSIC, YtFeedTab.GAMING, YtFeedTab.NEWS, YtFeedTab.SPORTS -> ClientType.TV
+                else -> ClientType.ANDROID
             }
-            val response = postJson(endpoint, payload, accessToken, useTVClient)
+            val (payload, endpoint) = when (tab) {
+                YtFeedTab.HOME -> buildBrowsePayload("FEwhat_to_watch", accessToken, client)
+                YtFeedTab.SUBSCRIPTIONS -> buildBrowsePayload("FEsubscriptions", accessToken, client)
+                YtFeedTab.HISTORY -> buildBrowsePayload("FEhistory", accessToken, client)
+                YtFeedTab.PLAYLISTS -> buildBrowsePayload("FEplaylist_aggregation", accessToken, client)
+                YtFeedTab.LIVE -> buildReelPayload(accessToken, client)
+                YtFeedTab.MUSIC -> buildBrowsePayloadTV("FEtopics_music", "6gQJRkVleHBsb3Jl", accessToken, client)
+                YtFeedTab.GAMING -> buildBrowsePayloadTV("FEtopics_gaming", "6gQJRkVleHBsb3Jl", accessToken, client)
+                YtFeedTab.NEWS -> buildBrowsePayloadTV("FEtopics_news", "6gQJRkVleHBsb3Jl", accessToken, client)
+                YtFeedTab.SPORTS -> buildBrowsePayloadTV("FEtopics_sports", "6gQJRkVleHBsb3Jl", accessToken, client)
+                YtFeedTab.SHORTS -> buildShortsPayload(accessToken, client)
+                YtFeedTab.CHANNELS -> buildBrowsePayload("FEmy_youtube", accessToken, client)
+            }
+            val response = postJson(endpoint, payload, accessToken, client)
             parseFeedResponse(response, tab)
         }
     }
@@ -143,7 +176,7 @@ class YouTubeFeedRepository(
         return withContext(Dispatchers.IO) {
             ensureApiKey()
             val payload = buildContinuationPayload(continuationKey, accessToken)
-            val response = postJson(NEXT_URL, payload, accessToken, useTVClient = false)
+            val response = postJson(NEXT_URL, payload, accessToken, ClientType.ANDROID)
             parseContinuationResponse(response)
         }
     }
@@ -153,7 +186,7 @@ class YouTubeFeedRepository(
         return withContext(Dispatchers.IO) {
             ensureApiKey()
             val payload = buildSearchPayload(query, accessToken)
-            val response = postJson(SEARCH_URL, payload, accessToken, useTVClient = false)
+            val response = postJson(SEARCH_URL, payload, accessToken, ClientType.ANDROID)
             parseSearchResponse(response)
         }
     }
@@ -192,8 +225,8 @@ class YouTubeFeedRepository(
     suspend fun fetchChannel(channelId: String, accessToken: String?): Result<Any> {
         return withContext(Dispatchers.IO) {
             ensureApiKey()
-            val (payload, url) = buildBrowsePayload("channel/$channelId", accessToken)
-            val response = postJson(url, payload, accessToken, useTVClient = false)
+            val (payload, url) = buildBrowsePayload("channel/$channelId", accessToken, ClientType.ANDROID)
+            val response = postJson(url, payload, accessToken, ClientType.ANDROID)
             parseFeedResponse(response, YtFeedTab.HOME)
         }
     }
@@ -202,8 +235,8 @@ class YouTubeFeedRepository(
     suspend fun fetchPlaylist(playlistId: String, accessToken: String?): Result<Any> {
         return withContext(Dispatchers.IO) {
             ensureApiKey()
-            val (payload, url) = buildBrowsePayload("playlist/$playlistId", accessToken)
-            val response = postJson(url, payload, accessToken, useTVClient = false)
+            val (payload, url) = buildBrowsePayload("playlist/$playlistId", accessToken, ClientType.ANDROID)
+            val response = postJson(url, payload, accessToken, ClientType.ANDROID)
             parseFeedResponse(response, YtFeedTab.HOME)
         }
     }
@@ -212,26 +245,40 @@ class YouTubeFeedRepository(
     suspend fun resolveStream(videoId: String, accessToken: String?): Result<YtStream> {
         return withContext(Dispatchers.IO) {
             // Check cache first
-            streamCache[videoId]?.takeIf { it.isFresh }?.let { return@withContext Result.success(it) }
+            streamCache[videoId]?.takeIf { it.isFresh }?.let { 
+                Log.d("YouTubeFeedRepo", "Cache hit for $videoId: ${it.url}")
+                return@withContext Result.success(it) 
+            }
 
             ensureApiKey()
-            var attempts = 0
+            
+            // Try multiple clients like the reference project does
+            val clients = listOf(
+                ClientType.ANDROID,
+                ClientType.TV,
+                ClientType.IOS,
+                ClientType.WEB_EMBED
+            )
+            
             var lastError: String? = null
-
-            while (attempts++ < MAX_CLIENT_SWITCHES) {
-                val payload = buildPlayerPayload(videoId, accessToken)
-                val response = postJson(PLAYER_URL, payload, accessToken, useTVClient = false)
+            
+            for (client in clients) {
+                val payload = buildPlayerPayload(videoId, accessToken, client)
+                val response = postJson(PLAYER_URL, payload, accessToken, client)
                 val stream = extractStreamUrl(response, videoId)
                 
                 if (stream != null) {
                     streamCache[videoId] = stream
                     if (streamCache.size >= MAX_CACHED_STREAMS) streamCache.clear()
+                    Log.d("YouTubeFeedRepo", "Resolved stream for $videoId using $client: ${stream.url}")
                     return@withContext Result.success(stream)
                 }
                 
-                // Switch client and retry
-                lastError = "No playable stream with current client"
+                lastError = "No playable stream with $client client"
+                Log.w("YouTubeFeedRepo", "$lastError for $videoId")
             }
+            
+            Log.e("YouTubeFeedRepo", "Failed to resolve stream for $videoId after trying all clients: $lastError")
             Result.failure(IllegalStateException(lastError ?: "No playable stream found"))
         }
     }
@@ -244,20 +291,20 @@ class YouTubeFeedRepository(
 
     // ── Payload builders ──
 
-    private fun buildBrowsePayload(browseId: String, accessToken: String?): Pair<String, String> {
+    private fun buildBrowsePayload(browseId: String, accessToken: String?, client: ClientType = ClientType.ANDROID): Pair<String, String> {
         val payload = JSONObject().apply {
             put("browseId", browseId)
-            put("context", buildClientContext(accessToken))
+            put("context", buildClientContext(accessToken, client))
         }
         return payload.toString() to BROWSE_URL
     }
 
     /** Builds browse payload for TV client (used for Music, Gaming, News, Sports topics). */
-    private fun buildBrowsePayloadTV(browseId: String, params: String, accessToken: String?): Pair<String, String> {
+    private fun buildBrowsePayloadTV(browseId: String, params: String, accessToken: String?, client: ClientType = ClientType.TV): Pair<String, String> {
         val payload = JSONObject().apply {
             put("browseId", browseId)
             put("params", params)
-            put("context", buildClientContext(accessToken, useTVClient = true))
+            put("context", buildClientContext(accessToken, client))
         }
         return payload.toString() to BROWSE_URL
     }
@@ -277,12 +324,12 @@ class YouTubeFeedRepository(
         }.toString()
     }
 
-    private fun buildPlayerPayload(videoId: String, accessToken: String?): String {
+    private fun buildPlayerPayload(videoId: String, accessToken: String?, client: ClientType = ClientType.ANDROID): String {
         return JSONObject().apply {
             put("videoId", videoId)
             put("contentCheckOk", true)
             put("racyCheckOk", true)
-            put("context", buildClientContext(accessToken))
+            put("context", buildClientContext(accessToken, client))
             put("playbackContext", JSONObject().apply {
                 put("contentPlaybackContext", JSONObject().apply {
                     put("html5Preference", "HTML5_PREF_WANTS")
@@ -292,52 +339,79 @@ class YouTubeFeedRepository(
     }
 
     /** Builds payload for Shorts feed using REEL_WATCH_INPUT_TYPE_SEEDLESS. */
-    private fun buildShortsPayload(accessToken: String?): Pair<String, String> {
+    private fun buildShortsPayload(accessToken: String?, client: ClientType = ClientType.ANDROID): Pair<String, String> {
         val payload = JSONObject().apply {
             put("disablePlayerResponse", true)
             put("inputType", "REEL_WATCH_INPUT_TYPE_SEEDLESS")
             put("params", "CA8%3D")
-            put("context", buildClientContext(accessToken))
+            put("context", buildClientContext(accessToken, client))
         }
         return payload.toString() to "$INNER_TUBE_API_URL/browse"
     }
 
     /** Builds payload for Live feed using reel endpoint. */
-    private fun buildReelPayload(accessToken: String?): Pair<String, String> {
+    private fun buildReelPayload(accessToken: String?, client: ClientType = ClientType.ANDROID): Pair<String, String> {
         val payload = JSONObject().apply {
             put("disablePlayerResponse", true)
             put("inputType", "REEL_WATCH_INPUT_TYPE_SEEDLESS")
             put("params", "CA8%3D")
-            put("context", buildClientContext(accessToken))
+            put("context", buildClientContext(accessToken, client))
         }
         return payload.toString() to "$INNER_TUBE_API_URL/reel/reel_watch_sequence"
     }
 
-    private fun buildClientContext(accessToken: String?, useTVClient: Boolean = false): JSONObject {
+    private fun buildClientContext(accessToken: String?, client: ClientType = ClientType.ANDROID): JSONObject {
         return JSONObject().apply {
-            if (useTVClient) {
-                put("client", JSONObject().apply {
-                    put("clientName", "TVHTML5")
-                    put("clientVersion", TV_CLIENT_VERSION)
-                    put("osName", "Android")
-                    put("osVersion", "13")
-                    put("platform", "TV")
-                    put("hl", "en")
-                    put("gl", "US")
-                    put("userInterfaceTheme", "USER_INTERFACE_THEME_DARK")
-                })
-            } else {
-                put("client", JSONObject().apply {
-                    put("clientName", "ANDROID")
-                    put("clientVersion", ANDROID_CLIENT_VERSION)
-                    put("osName", "Android")
-                    put("osVersion", "11")
-                    put("platform", "MOBILE")
-                    put("androidSdkVersion", 30)
-                    put("hl", "en")
-                    put("gl", "US")
-                    put("userInterfaceTheme", "USER_INTERFACE_THEME_DARK")
-                })
+            when (client) {
+                ClientType.ANDROID -> {
+                    put("client", JSONObject().apply {
+                        put("clientName", "ANDROID")
+                        put("clientVersion", ANDROID_CLIENT_VERSION)
+                        put("osName", "Android")
+                        put("osVersion", "11")
+                        put("platform", "MOBILE")
+                        put("androidSdkVersion", 30)
+                        put("hl", "en")
+                        put("gl", "US")
+                        put("userInterfaceTheme", "USER_INTERFACE_THEME_DARK")
+                    })
+                }
+                ClientType.TV -> {
+                    put("client", JSONObject().apply {
+                        put("clientName", "TVHTML5")
+                        put("clientVersion", TV_CLIENT_VERSION)
+                        put("osName", "Android")
+                        put("osVersion", "13")
+                        put("platform", "TV")
+                        put("hl", "en")
+                        put("gl", "US")
+                        put("userInterfaceTheme", "USER_INTERFACE_THEME_DARK")
+                    })
+                }
+                ClientType.IOS -> {
+                    put("client", JSONObject().apply {
+                        put("clientName", "IOS")
+                        put("clientVersion", IOS_CLIENT_VERSION)
+                        put("osName", "iOS")
+                        put("osVersion", "17.0")
+                        put("platform", "MOBILE")
+                        put("hl", "en")
+                        put("gl", "US")
+                        put("userInterfaceTheme", "USER_INTERFACE_THEME_DARK")
+                    })
+                }
+                ClientType.WEB_EMBED -> {
+                    put("client", JSONObject().apply {
+                        put("clientName", "WEB_EMBEDDED_PLAYER")
+                        put("clientVersion", WEB_EMBED_CLIENT_VERSION)
+                        put("osName", "Linux")
+                        put("osVersion", "10")
+                        put("platform", "DESKTOP")
+                        put("hl", "en")
+                        put("gl", "US")
+                        put("userInterfaceTheme", "USER_INTERFACE_THEME_DARK")
+                    })
+                }
             }
             accessToken?.let { put("auth", it) }
             visitorDataCache?.let { put("visitorData", it) }
@@ -346,10 +420,18 @@ class YouTubeFeedRepository(
 
     // ── HTTP ──
 
-    private fun postJson(url: String, payload: String, accessToken: String?, useTVClient: Boolean = false): String {
-        val userAgent = if (useTVClient) TV_USER_AGENT else ANDROID_USER_AGENT
-        val clientName = if (useTVClient) TV_CLIENT_NAME else ANDROID_CLIENT_NAME
-        val clientVersion = if (useTVClient) TV_CLIENT_VERSION else ANDROID_CLIENT_VERSION
+    private fun postJson(url: String, payload: String, accessToken: String?, client: ClientType = ClientType.ANDROID): String {
+        val clientInfo: Tuple4<String, String, String, String> = when (client) {
+            ClientType.ANDROID -> Tuple4(ANDROID_USER_AGENT, ANDROID_CLIENT_NAME, ANDROID_CLIENT_VERSION, ANDROID_INNER_TUBE_NAME)
+            ClientType.TV -> Tuple4(TV_USER_AGENT, TV_CLIENT_NAME, TV_CLIENT_VERSION, TV_INNER_TUBE_NAME)
+            ClientType.IOS -> Tuple4(IOS_USER_AGENT, IOS_CLIENT_NAME, IOS_CLIENT_VERSION, IOS_INNER_TUBE_NAME)
+            ClientType.WEB_EMBED -> Tuple4(WEB_EMBED_USER_AGENT, WEB_EMBED_CLIENT_NAME, WEB_EMBED_CLIENT_VERSION, WEB_EMBED_INNER_TUBE_NAME)
+        }
+
+        val userAgent = clientInfo.first
+        val clientName = clientInfo.second
+        val clientVersion = clientInfo.third
+        val innerTubeName = clientInfo.fourth
 
         val requestBuilder = Request.Builder()
             .url("$url?key=${apiKeyCache ?: ""}")
@@ -697,11 +779,29 @@ class YouTubeFeedRepository(
     private fun extractStreamUrl(playerJson: String, videoId: String): YtStream? {
         try {
             val root = JSONObject(playerJson)
-            val streaming = root.optJSONObject("streamingData") ?: return null
+            
+            // Log the raw response for debugging
+            if (root.has("playabilityStatus")) {
+                val playability = root.optJSONObject("playabilityStatus")
+                val status = playability?.optString("status", "UNKNOWN")
+                val reason = playability?.optString("reason", "none")
+                Log.d("YouTubeFeedRepo", "Playability for $videoId: $status - $reason")
+            }
+            
+            val streaming = root.optJSONObject("streamingData")
+            if (streaming == null) {
+                Log.w("YouTubeFeedRepo", "No streamingData in response for $videoId")
+                // Check if it's a playability error
+                val playability = root.optJSONObject("playabilityStatus")
+                val reason = playability?.optString("reason", "unknown")
+                Log.w("YouTubeFeedRepo", "Playability reason: $reason")
+                return null
+            }
 
             // Try HLS manifest first (for live)
             val hlsManifestUrl = streaming.optString("hlsManifestUrl", "")
             if (hlsManifestUrl.isNotBlank()) {
+                Log.d("YouTubeFeedRepo", "Found HLS manifest for $videoId: $hlsManifestUrl")
                 // Quick HEAD to verify it's valid
                 try {
                     val headRequest = Request.Builder().url(hlsManifestUrl).method("HEAD", null).header("User-Agent", Http.UA).build()
@@ -717,33 +817,62 @@ class YouTubeFeedRepository(
                         )
                     }
                     headResp.close()
+                    Log.w("YouTubeFeedRepo", "HLS manifest HEAD failed for $videoId")
                 } catch (e: Exception) {
-                    // Ignore, fall through
+                    Log.w("YouTubeFeedRepo", "HLS manifest check failed for $videoId: ${e.message}")
                 }
             }
 
             // Fall back to best progressive format
             val formats = streaming.optJSONArray("formats")
+            val adaptiveFormats = streaming.optJSONArray("adaptiveFormats")
             var bestFormat: JSONObject? = null
             var bestScore = 0L
             
-            if (formats != null) {
-                for (i in 0 until formats.length()) {
-                    val fmt = formats.optJSONObject(i)
-                    val mimeType = fmt?.optString("mimeType", "") ?: ""
-                    if (!mimeType.startsWith("video/")) continue
-                    
-                    val height = fmt?.optInt("height", 0) ?: 0
-                    val qualityLabel = fmt?.optString("qualityLabel", "") ?: ""
-                    val parsedHeight = if (height > 0) height else parseQualityLabel(qualityLabel)
-                    val fps = fmt?.optInt("fps", 0) ?: 0
-                    val bitrate = fmt?.optLong("bitrate", 0L) ?: fmt?.optLong("averageBitrate", 0L) ?: 0L
-                    
-                    val score = parsedHeight.toLong() * 1_000_000_000L + fps.toLong() * 1_000_000L + bitrate
-                    if (score > bestScore) {
-                        bestScore = score
-                        bestFormat = fmt
-                    }
+            val allFormats = mutableListOf<JSONObject>()
+            formats?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    arr.optJSONObject(i)?.let { allFormats.add(it) }
+                }
+            }
+            adaptiveFormats?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    arr.optJSONObject(i)?.let { allFormats.add(it) }
+                }
+            }
+            
+            Log.d("YouTubeFeedRepo", "Found ${allFormats.size} formats for $videoId")
+            
+            for (fmt in allFormats) {
+                val mimeType = fmt.optString("mimeType", "")
+                if (!mimeType.startsWith("video/")) continue
+
+                val url = fmt.optString("url", "")
+                // Skip formats without a direct URL (need signature deciphering or DASH manifest)
+                if (url.isBlank()) {
+                    Log.d("YouTubeFeedRepo", "Skipping format ${fmt.optInt("itag")} - no direct URL (mime: $mimeType, height: ${fmt.optInt("height")})")
+                    continue
+                }
+
+                val hasSignature = url.contains("signature=", ignoreCase = true) || url.contains("sig=", ignoreCase = true)
+                val hasSParam = url.contains("&s=", ignoreCase = true) || url.contains("?s=", ignoreCase = true)
+
+                if (hasSParam && !hasSignature) {
+                    Log.w("YouTubeFeedRepo", "Format has 's' param but no signature (needs deciphering): ${url.take(200)}")
+                    // Skip formats that need signature deciphering
+                    continue
+                }
+
+                val height = fmt.optInt("height", 0)
+                val qualityLabel = fmt.optString("qualityLabel", "")
+                val parsedHeight = if (height > 0) height else parseQualityLabel(qualityLabel)
+                val fps = fmt.optInt("fps", 0)
+                val bitrate = fmt.optLong("bitrate", 0L).takeIf { it > 0 } ?: fmt.optLong("averageBitrate", 0L)
+                
+                val score = parsedHeight.toLong() * 1_000_000_000L + fps.toLong() * 1_000_000L + bitrate
+                if (score > bestScore) {
+                    bestScore = score
+                    bestFormat = fmt
                 }
             }
             
@@ -756,6 +885,7 @@ class YouTubeFeedRepository(
             val userAgent = clientInfo?.optString("userAgent", "") ?: ""
             
             return url?.let {
+                Log.d("YouTubeFeedRepo", "Selected format for $videoId: ${it.take(200)}")
                 YtStream(
                     url = it,
                     title = title,
@@ -765,6 +895,7 @@ class YouTubeFeedRepository(
                 )
             }
         } catch (e: Exception) {
+            Log.e("YouTubeFeedRepo", "extractStreamUrl failed for $videoId: ${e.message}")
             return null
         }
     }

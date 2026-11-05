@@ -177,6 +177,7 @@ import com.hikari.app.ui.Artwork
 import com.hikari.app.ui.LoadingStyles
 import com.hikari.app.ui.PosterArt
 import com.hikari.app.ui.PosterLoader
+import com.hikari.app.cs3.YouTubePlayables
 import com.hikari.app.ui.openUrl
 import com.hikari.app.ui.openYouTubeVideo
 import com.hikari.app.ui.rememberPosterScore
@@ -2391,7 +2392,7 @@ fun DetailScreen(
                 // server list (over the title's art, like the desktop client)
                 // instead of playing directly. IPTV streams bypass this — they
                 // have a direct URL, no server to choose from.
-                putExtra("askServer", (askServerOnPlay && !isIptvPage) || isTvLayout)
+                putExtra("askServer", isTvLayout)
                 // NO origin hold, in either playback mode. These two extras used
                 // to carry the window in which the player waited for the
                 // extension the title was opened FROM; the servers that decide
@@ -2542,12 +2543,51 @@ fun DetailScreen(
         // player's are deliberately identical, so it reads as the same page
         // loading two or three times), every time, for every title.
         val launched = java.util.concurrent.atomic.AtomicBoolean(false)
-        // Launch the player NOW with an empty source list — it shows its own
-        // title card and waits for the first servers on [sessionId]. If the
-        // launch itself fails (the activity can't be resolved), the coroutine
-        // below falls back to the old "resolve here, then open the player" path
-        // and the source sheet.
-        if (launchPlayer(emptyList<StreamSource>(), ep, sid, startPos, wantsDownload)) {
+        // For IPTV direct streams (not torrents, terabox, embed, or network streams
+        // which need resolution): the channel's stream URL is already known in
+        // iptvAllChannels. Pass it directly to the player so playback starts
+        // IMMEDIATELY on tap, instead of launching with an empty list and waiting
+        // for the background search coroutine to resolve it.
+        val iptvStream = if (isIptvPage && iptvAllChannels.isNotEmpty()) {
+            iptvAllChannels.firstOrNull { it.url == mediaId }
+        } else null
+
+        // Only bypass the empty-list launch for DIRECT IPTV channels.
+        // Torrents, terabox shares, embed pages, and network streams all need
+        // resolution (via NetworkStream.resolve or embed resolver) before the
+        // player can play them — the background search path handles those.
+        val isDirectIptv = iptvStream != null &&
+            iptvStream.kind != com.hikari.app.data.IptvChannel.KIND_TERABOX &&
+            iptvStream.kind != com.hikari.app.data.IptvChannel.KIND_EMBED &&
+            !com.hikari.app.data.NetworkStream.isTorrentLink(iptvStream.url) &&
+            !com.hikari.app.data.NetworkStream.isBoxShare(iptvStream.url)
+
+        // Launch the player NOW. For direct IPTV, hand it the direct stream so
+        // it plays instantly; for other sources, open with an empty list and let
+        // the background search populate it (Nuvio/Stremio style).
+        val initialStreams = if (isDirectIptv) {
+            listOf(
+                StreamSource(
+                    name = iptvStream.name,
+                    url = iptvStream.url,
+                    headers = iptvStream.headers,
+                    isM3u8 = iptvStream.url.substringBefore('?').lowercase().contains(".m3u8") ||
+                        iptvStream.url.substringBefore('?').lowercase().endsWith(".ts") ||
+                        iptvStream.url.substringBefore('?').lowercase().endsWith(".m3u"),
+                    isMpd = iptvStream.url.substringBefore('?').contains(".mpd", ignoreCase = true),
+                    drm = if (!iptvStream.drmKid.isNullOrBlank() && !iptvStream.drmKey.isNullOrBlank()) {
+                        com.hikari.app.data.DrmSpec(kid = iptvStream.drmKid, key = iptvStream.drmKey)
+                    } else null,
+                    provider = com.hikari.app.data.ProviderType.IPTV.groupLabel,
+                    providerId = iptvStream.providerId.ifBlank { livePid },
+                    providerName = providers.firstOrNull { it.config.id == livePid }?.config?.name.orEmpty() ?: "IPTV",
+                    thumbnail = iptvStream.logo,
+                )
+            )
+        } else {
+            emptyList<StreamSource>()
+        }
+        if (launchPlayer(initialStreams, ep, sid, startPos, wantsDownload)) {
             launched.set(true)
         }
         // Warm-start from the persisted last successful server. This removes the
@@ -6751,11 +6791,17 @@ fun DetailScreen(
         }
     }
 
-    // YouTube trailer — opens the YouTube app so the video plays properly
-    // (the in-app WebView can't handle YouTube's m.youtube.com redirect).
+    // YouTube trailer — resolves via NewPipeExtractor and plays in Hikari's
+    // player. Falls back to opening the YouTube app only when resolution
+    // returns no streams (rare — most videos have a muxed format).
     activeTrailerKey?.let { (ytKey, ytTitle) ->
         LaunchedEffect(ytKey) {
-            openYouTubeVideo(context, ytKey, ytTitle)
+            val sources = YouTubePlayables.resolve(ytKey)
+            if (sources.isNotEmpty()) {
+                launchPlayer(sources, null, "trailer:$ytKey", 0L, false)
+            } else {
+                openYouTubeVideo(context, ytKey, ytTitle)
+            }
             activeTrailerKey = null
         }
     }

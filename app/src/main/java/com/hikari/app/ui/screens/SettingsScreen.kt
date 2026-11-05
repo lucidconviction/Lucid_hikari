@@ -3479,10 +3479,8 @@ private fun CustomBackgroundCard(app: HikariApp) {
     val scope = rememberCoroutineScope()
     val img = com.hikari.app.ui.CustomBackground.image
     val dim = com.hikari.app.ui.CustomBackground.dim
-    var pickerOpen by remember { mutableStateOf(false) }
     var dimSlider by remember { mutableFloatStateOf(dim) }
     LaunchedEffect(dim) { dimSlider = dim }
-
     val importer = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
@@ -3507,7 +3505,7 @@ private fun CustomBackgroundCard(app: HikariApp) {
             )
             Spacer(Modifier.height(8.dp))
             OutlinedButton(
-                onClick = { pickerOpen = true },
+                onClick = { importer.launch(arrayOf("image/*")) },
                 modifier = Modifier.fillMaxWidth(),
                 shape = GlassShape,
             ) {
@@ -3555,7 +3553,7 @@ private fun CustomBackgroundCard(app: HikariApp) {
             )
             Spacer(Modifier.height(8.dp))
             OutlinedButton(
-                onClick = { pickerOpen = true },
+                onClick = { importer.launch(arrayOf("image/*")) },
                 modifier = Modifier.fillMaxWidth(),
                 shape = GlassShape,
             ) {

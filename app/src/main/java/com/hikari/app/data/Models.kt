@@ -866,6 +866,7 @@ data class CatalogRow(
  * items freely. Each entry has a display name, a type (channel or video), and
  * a YouTube URL that Hikari resolves into playable streams.
  */
+@Serializable
 data class YouTubeChannel(
     val id: String = java.util.UUID.randomUUID().toString(),
     val name: String = "",

@@ -31,7 +31,7 @@ class YouTubeChannelStore(private val ctx: Context) {
     val channelsFlow: Flow<List<YouTubeChannel>> = store.data
         .map { prefs ->
             val jsonStr = prefs[KEY_CHANNELS] ?: "[]"
-            runCatching { Json.decodeFromString<List<YouTubeChannel>>(jsonStr) }.getOrDefault(emptyList())
+            runCatching { json.decodeFromString<List<YouTubeChannel>>(jsonStr) }.getOrDefault(emptyList())
         }
         .distinctUntilChanged()
 
@@ -44,6 +44,16 @@ class YouTubeChannelStore(private val ctx: Context) {
             val current = prefs[KEY_CHANNELS] ?: "[]"
             val currentList = runCatching { json.decodeFromString<List<YouTubeChannel>>(current) }.getOrDefault(emptyList())
             prefs[KEY_CHANNELS] = json.encodeToString(currentList + channel)
+        }
+    }
+
+    /** Update a channel */
+    suspend fun updateChannel(channel: YouTubeChannel) {
+        store.edit { prefs ->
+            val current = prefs[KEY_CHANNELS] ?: "[]"
+            val currentList = runCatching { json.decodeFromString<List<YouTubeChannel>>(current) }.getOrDefault(emptyList())
+            val updated = currentList.map { if (it.id == channel.id) channel else it }
+            prefs[KEY_CHANNELS] = json.encodeToString(updated)
         }
     }
 

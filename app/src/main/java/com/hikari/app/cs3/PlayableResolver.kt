@@ -59,7 +59,7 @@ object YouTubePlayables {
      * resolution pass can run on several providers' coroutines at once, and
      * calling [org.schabi.newpipe.extractor.NewPipe.init] twice throws.
      */
-    private fun ensureReady(): Boolean {
+    internal fun ensureReady(): Boolean {
         if (state != 0) return state == 1
         return synchronized(initLock) {
             if (state != 0) return@synchronized state == 1
@@ -145,10 +145,10 @@ object YouTubePlayables {
                 }.distinctBy { it.url }
 
                 val headers = mapOf("User-Agent" to Http.UA)
-                val out = mutableListOf<StreamSource>()
-                // `videoStreams` is the MUXED list: each entry already carries
-                // its audio, which is the only kind this player can play.
-                for (v in info.videoStreams.orEmpty()) {
+
+                // Collect all muxed (progressive) streams, sort by height desc so
+                // highest quality comes first — NewPipe returns them in no guaranteed order.
+                val allStreams = info.videoStreams.orEmpty().mapNotNull { v ->
                     val delivery = v.deliveryMethod
                     val u = when (delivery) {
                         org.schabi.newpipe.extractor.stream.DeliveryMethod.PROGRESSIVE_HTTP ->
@@ -156,18 +156,23 @@ object YouTubePlayables {
                         org.schabi.newpipe.extractor.stream.DeliveryMethod.HLS ->
                             v.url ?: v.manifestUrl
                         else -> null
-                    }
-                    if (u.isNullOrBlank()) continue
-                    val res = v.resolution.orEmpty()
-                        .ifBlank { if (v.height > 0) "${v.height}p" else "" }
+                    } ?: return@mapNotNull null
+                    val height = v.height
+                    Triple(u, height, delivery)
+                }.sortedByDescending { it.second }
+
+                val out = mutableListOf<StreamSource>()
+                for ((url, height, delivery) in allStreams) {
+                    val res = if (height > 0) "$height p"
+                        else info.videoStreams.firstOrNull { it.height == height }?.resolution?.takeIf { it.isNotBlank() } ?: ""
                     val resLabel = if (res.isBlank()) "" else " $res"
                     out += StreamSource(
                         name = "YouTube$resLabel",
-                        url = u,
+                        url = url,
                         headers = headers,
                         subtitles = subs,
                         isM3u8 = delivery == org.schabi.newpipe.extractor.stream.DeliveryMethod.HLS ||
-                            u.contains(".m3u8", true),
+                            url.contains(".m3u8", true),
                     )
                 }
                 // A live stream has no progressive rendition at all — its one
