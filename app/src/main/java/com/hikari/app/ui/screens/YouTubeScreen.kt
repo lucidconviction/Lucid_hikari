@@ -49,11 +49,13 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.hikari.app.cs3.YouTubePlayables
+import com.hikari.app.data.StreamSource
 import com.hikari.app.data.YouTubeChannel
 import com.hikari.app.data.stores.YouTubeChannelStore
 import com.hikari.app.net.Http
 import com.hikari.app.player.PlayerActivity
+import com.hikari.app.youtube.YouTubeAuthRepository
+import com.hikari.app.youtube.YouTubeFeedRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -63,7 +65,8 @@ import org.json.JSONObject
 
 /**
  * YouTube tab — simple channel and video management.
- * Videos are shown first, then channels. Users can add/delete freely.
+ * Videos are shown first, then channels. Uses Hikari's innerTube-based
+ * [YouTubeFeedRepository] for stream resolution (not NewPipeExtractor).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -73,6 +76,10 @@ fun YouTubeScreen(nav: androidx.navigation.NavHostController) {
     val items by store.channelsFlow.collectAsState(initial = emptyList())
     var showAddDialog by remember { mutableStateOf(false) }
     var showError by remember { mutableStateOf<String?>(null) }
+
+    // One auth repo and one feed repo per screen lifetime.
+    val authRepo = remember { YouTubeAuthRepository(context) }
+    val feedRepo = remember { YouTubeFeedRepository(context, authRepo) }
 
     val videos = items.filter { it.itemType == "video" }
     val channels = items.filter { it.itemType == "channel" }
@@ -170,7 +177,17 @@ fun YouTubeScreen(nav: androidx.navigation.NavHostController) {
                                 val videoId = extractVideoId(item.url)
                                 if (videoId != null) {
                                     CoroutineScope(Dispatchers.IO).launch {
-                                        val sources = YouTubePlayables.resolve(videoId)
+                                        val accessToken = authRepo.getAccessToken()
+                                        val result = feedRepo.resolveStream(videoId, accessToken)
+                                        val sources = runCatching {
+                                            val ytStream = feedRepo.resolveStream(videoId, accessToken).getOrThrow()
+                                            listOf(StreamSource(
+                                                name = ytStream.title.ifBlank { "YouTube" },
+                                                url = ytStream.url,
+                                                headers = ytStream.headers,
+                                                isM3u8 = ytStream.url.contains(".m3u8", ignoreCase = true),
+                                            ))
+                                        }.getOrDefault(emptyList())
                                         withContext(Dispatchers.Main) {
                                             if (sources.isEmpty()) {
                                                 showError = "Could not play this YouTube video"
@@ -206,10 +223,19 @@ fun YouTubeScreen(nav: androidx.navigation.NavHostController) {
                                             showError = "Could not fetch videos for this channel"
                                         }
                                     } else {
+                                        val accessToken = authRepo.getAccessToken()
                                         // Resolve all channel videos to actual streams
-                                        val allSources = mutableListOf<com.hikari.app.data.StreamSource>()
+                                        val allSources = mutableListOf<StreamSource>()
                                         for (vid in videoIds) {
-                                            allSources.addAll(YouTubePlayables.resolve(vid))
+                                            val result = feedRepo.resolveStream(vid, accessToken)
+                                            result.getOrNull()?.let { stream ->
+                                                allSources += StreamSource(
+                                                    name = stream.title.ifBlank { "YouTube" },
+                                                    url = stream.url,
+                                                    headers = stream.headers,
+                                                    isM3u8 = stream.url.contains(".m3u8", ignoreCase = true),
+                                                )
+                                            }
                                         }
                                         withContext(Dispatchers.Main) {
                                             if (allSources.isEmpty()) {
@@ -489,13 +515,19 @@ private fun extractChannelId(url: String): String {
     return pattern.find(cleanUrl)?.groupValues?.get(1) ?: ""
 }
 
-private fun launchPlayer(context: Context, sources: List<com.hikari.app.data.StreamSource>) {
+private fun launchPlayer(context: Context, sources: List<StreamSource>) {
     if (sources.isEmpty()) return
     val sourcesJson = JSONArray().apply {
         sources.forEach { source ->
+            val headersObj = if (source.headers.isNotEmpty()) {
+                JSONObject(source.headers.mapValues { it.value.toString() })
+            } else {
+                JSONObject()
+            }
             put(JSONObject().apply {
                 put("name", source.name)
                 put("url", source.url)
+                put("headers", headersObj)
                 put("isM3u8", source.isM3u8)
                 put("isMpd", source.isMpd)
                 put("provider", "YouTube")
