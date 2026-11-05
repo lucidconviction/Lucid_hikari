@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Send
@@ -122,6 +123,7 @@ import com.hikari.app.ui.screens.ScraperReaderScreen
 import com.hikari.app.ui.screens.MangaScreen
 import com.hikari.app.ui.screens.MyStuff
 import com.hikari.app.ui.screens.MyStuffScreen
+import com.hikari.app.ui.screens.YouTubeScreen
 import com.hikari.app.ui.screens.SearchScreen
 import com.hikari.app.ui.screens.SettingsScreen
 import com.hikari.app.ui.screens.StatsScreen
@@ -146,6 +148,9 @@ object Routes {
     const val DOWNLOADS = "downloads"
     /** Titles saved with the player's heart (the favourites store). */
     const val LIBRARY = "library"
+    /** YouTube — a tab where the user pastes a YouTube URL and Hikari resolves
+     *  it to a playable stream via the innerTube API (same technique as Nuvio). */
+    const val YOUTUBE = "youtube"
     /**
      * The IPTV tab. Hidden by default — it appears in the taskbar only once the
      * user switches it on in Settings → Taskbar buttons (see
@@ -1037,6 +1042,7 @@ val BottomTabs = listOf(
     // at the top of this page (see [com.hikari.app.ui.screens.MyStuffScreen]),
     // and each keeps its own route so every existing link still lands right.
     BottomTab(Routes.LIBRARY, "My Stuff", Icons.Filled.VideoLibrary),
+    BottomTab(Routes.YOUTUBE, "YouTube", Icons.Filled.PlayArrow),
     // Manga sits beside it as its own tab, ON by default (Settings → Taskbar
     // buttons switches it off). It is a whole reading surface (browse, follow,
     // read) rather than "something to watch", so it does not belong in the
@@ -1479,6 +1485,7 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
             composable(Routes.LIBRARY) { MyStuffScreen(nav, MyStuff.LIBRARY) }
             composable(Routes.HISTORY) { MyStuffScreen(nav, MyStuff.HISTORY) }
             composable(Routes.DOWNLOADS) { MyStuffScreen(nav, MyStuff.DOWNLOADS) }
+            composable(Routes.YOUTUBE) { YouTubeScreen(nav) }
             composable(Routes.IPTV) { IptvScreen(nav) }
             composable(
                 route = Routes.IPTV_PLAYLIST,
