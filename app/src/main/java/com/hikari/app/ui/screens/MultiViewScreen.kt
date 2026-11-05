@@ -1712,7 +1712,7 @@ fun SlotPickerBottomSheet(
     onSlotSelected: (Int) -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val maxSlots = if (LocalConfiguration.current.screenWidthDp >= 600) 9 else 6
+    val maxSlots = 9
     var selectedSlot by remember { mutableStateOf<Int?>(null) }
 
     ModalBottomSheet(
