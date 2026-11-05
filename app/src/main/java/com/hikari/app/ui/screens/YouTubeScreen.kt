@@ -1,446 +1,631 @@
 package com.hikari.app.ui.screens
 
+import android.content.Context
 import android.content.Intent
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
-import com.hikari.app.net.Http
+import coil.compose.AsyncImage
 import com.hikari.app.player.PlayerActivity
-import kotlinx.coroutines.Dispatchers
+import com.hikari.app.youtube.YouTubeAuthRepository
+import com.hikari.app.youtube.YouTubeFeedRepository
+import com.hikari.app.youtube.YouTubeViewModel
+import com.hikari.app.youtube.YtFeedItem
+import com.hikari.app.youtube.YtFeedRow
+import com.hikari.app.youtube.YtFeedTab
+import com.hikari.app.youtube.YtStream
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.longOrNull
-import kotlinx.serialization.json.put
-import kotlinx.serialization.json.putJsonObject
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.URLEncoder
-import java.util.concurrent.TimeUnit
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.OkHttpClient
-import okhttp3.Request
 
-private val JSON = Json { ignoreUnknownKeys = true }
-
-/** YouTube video ID: exactly 11 base64-like characters. */
-private val VIDEO_ID_REGEX = Regex("^[a-zA-Z0-9_-]{11}$")
-
-/** Patterns pulled from the YouTube watch page. */
-private val API_KEY_REGEX = Regex("\"INNERTUBE_API_KEY\":\"([^\"]+)\"")
-private val VISITOR_DATA_REGEX = Regex("\"VISITOR_DATA\":\"([^\"]+)\"")
-private val QUALITY_LABEL_REGEX = Regex("(\\d{2,4})p")
-
-/**
- * YouTube tab. The user pastes a YouTube URL (watch, youtu.be, /shorts/, etc.)
- * and Hikari resolves it to a direct stream URL via YouTube's innerTube API —
- * the same technique Nuvio uses internally. The resolved URL is then launched
- * in [PlayerActivity] so it plays inside Hikari's player.
- */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun YouTubeScreen(nav: NavHostController) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var urlInput by remember { mutableStateOf("") }
-    var resolutionState by remember { mutableStateOf<ResolutionState>(ResolutionState.Idle) }
 
-    fun resolveAndPlay(rawUrl: String) {
-        val trimmed = rawUrl.trim()
-        if (trimmed.isBlank()) return
-        resolutionState = ResolutionState.Loading
-        val videoId = extractVideoId(trimmed)
-        if (videoId == null) {
-            resolutionState = ResolutionState.Error("Invalid YouTube URL")
-            return
-        }
+    val authRepository = remember { YouTubeAuthRepository(context) }
+    val feedRepository = remember { YouTubeFeedRepository(context, authRepository) }
 
-        scope.launch(Dispatchers.IO) {
-            val result = try {
-                resolveYouTubeUrl(trimmed, videoId)
-            } catch (e: Exception) {
-                ResolutionState.Error("Failed to resolve: ${e.message}")
-            }
+    val viewModel: YouTubeViewModel = viewModel(
+        factory = YouTubeViewModelFactory(
+            context = context,
+            authRepository = authRepository,
+            feedRepository = feedRepository,
+            onPlay = { stream -> launchPlayer(context, stream) },
+            onClosePlayer = {},
+        )
+    )
 
-            withContext(Dispatchers.Main) {
-                when (result) {
-                    is ResolutionState.Success -> {
-                        resolutionState = result
-                        launchPlayer(context, result.url, "YouTube: $videoId")
-                    }
-                    else -> resolutionState = result
-                }
-            }
-        }
+    val uiState by viewModel.uiState.collectAsState()
+
+    BackHandler(enabled = viewModel.canGoBack) {
+        viewModel.goBack()
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.Top,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        // Header
-        Icon(
-            imageVector = Icons.Filled.VideoLibrary,
-            contentDescription = null,
-            modifier = Modifier.size(56.dp),
-            tint = Color(0xFFCC0000),
-        )
-        Text(
-            text = "YouTube",
-            style = MaterialTheme.typography.headlineSmall,
-            modifier = Modifier.padding(bottom = 4.dp),
-        )
-        Text(
-            text = "Paste a YouTube URL to play in Hikari",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(bottom = 20.dp),
-            textAlign = TextAlign.Center,
+    Column(modifier = Modifier.fillMaxSize()) {
+        YouTubeTopAppBar(uiState = uiState, viewModel = viewModel)
+
+        if (uiState.showSearch) {
+            YouTubeSearchOverlay(
+                uiState = uiState,
+                viewModel = viewModel,
+                onClose = { viewModel.onSearchQueryChange("") },
+            )
+        }
+
+        YouTubeFeedTabs(
+            currentTab = uiState.currentTab,
+            signedIn = uiState.signedIn,
+            onTabClick = { tab -> viewModel.selectTab(tab) },
         )
 
-        // URL input
-        OutlinedTextField(
-            value = urlInput,
-            onValueChange = { urlInput = it },
-            placeholder = { Text("https://www.youtube.com/watch?v=...") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Uri,
-                imeAction = ImeAction.Send,
-            ),
-            keyboardActions = KeyboardActions(
-                onSend = { resolveAndPlay(urlInput) },
-            ),
-            shape = RoundedCornerShape(12.dp),
-        )
+        uiState.error?.let { error ->
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .background(MaterialTheme.colorScheme.errorContainer, RoundedCornerShape(8.dp))
+                    .padding(12.dp),
+            ) {
+                Text(
+                    text = error,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
 
-        TextButton(
-            onClick = { resolveAndPlay(urlInput) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 8.dp),
-            enabled = resolutionState !is ResolutionState.Loading,
-        ) {
-            if (resolutionState is ResolutionState.Loading) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(20.dp),
-                    strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.onPrimary,
+        Box(modifier = Modifier.fillMaxSize()) {
+            if (uiState.loading) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+            } else if (uiState.currentTab.isGrid) {
+                YouTubeGridFeed(
+                    items = uiState.grid,
+                    onItemClick = { item -> viewModel.openItem(item) },
+                    onItemFocus = { item -> viewModel.prefetch(item) },
+                    loadMore = { viewModel.loadMore() },
+                    loadingMore = uiState.loadingMore,
+                    canLoadMore = uiState.canLoadMore,
                 )
             } else {
-                Icon(
-                    Icons.Filled.PlayArrow,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
+                YouTubeRowFeed(
+                    rows = uiState.rows,
+                    onItemClick = { item -> viewModel.openItem(item) },
+                    onItemFocus = { item -> viewModel.prefetch(item) },
                 )
-                Text(" Play", modifier = Modifier.padding(start = 4.dp))
             }
         }
+    }
+}
 
-        // Status
-        when (val state = resolutionState) {
-            is ResolutionState.Error -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 16.dp)
-                        .background(
-                            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f),
-                            RoundedCornerShape(8.dp),
-                        )
-                        .padding(12.dp),
+@Composable
+fun YouTubeTopAppBar(
+    uiState: YouTubeViewModel.UiState,
+    viewModel: YouTubeViewModel,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 4.dp)
+            .background(MaterialTheme.colorScheme.surfaceContainerLow),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (uiState.subTitle != null || uiState.showSearch) {
+                IconButton(
+                    onClick = { if (uiState.subTitle != null) viewModel.goBack() else viewModel.onSearchQueryChange("") },
                 ) {
+                    Icon(Icons.Filled.ChevronLeft, contentDescription = "Back", tint = MaterialTheme.colorScheme.onSurface)
+                }
+            }
+
+            if (uiState.subTitle == null && !uiState.showSearch) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Filled.VideoLibrary,
+                        contentDescription = null,
+                        tint = Color(0xFFCC0000),
+                        modifier = Modifier.size(28.dp),
+                    )
                     Text(
-                        text = state.message,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                        style = MaterialTheme.typography.bodySmall,
+                        text = "YouTube",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(start = 8.dp),
                     )
                 }
             }
 
-            is ResolutionState.Success -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 16.dp)
-                        .background(
-                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
-                            RoundedCornerShape(8.dp),
+            if (uiState.subTitle != null) {
+                Text(
+                    text = uiState.subTitle!!,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                )
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                IconButton(onClick = { viewModel.onSearchQueryChange("") }) {
+                    Icon(Icons.Filled.Search, contentDescription = "Search", tint = MaterialTheme.colorScheme.onSurface)
+                }
+                IconButton(onClick = { viewModel.toggleAccountSheet() }) {
+                    uiState.userAvatar?.let { avatar ->
+                        AsyncImage(
+                            model = avatar,
+                            contentDescription = "",
+                            modifier = Modifier.size(28.dp).clip(CircleShape),
                         )
-                        .padding(12.dp),
-                ) {
-                    Text(
-                        text = "Opening in player…",
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
+                    } ?: Icon(Icons.Filled.AccountCircle, contentDescription = "Account", tint = MaterialTheme.colorScheme.onSurface)
                 }
             }
-
-            else -> {}
         }
-
-        Spacer(modifier = Modifier.size(24.dp))
-
-        // Hint
-        Text(
-            text = "Supports: youtube.com/watch, youtu.be, /shorts/, /embed/, /live/",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
     }
 }
 
-// ── YouTube extraction helpers (adapted from Nuvio) ─────────────────────────
-
-private sealed interface ResolutionState {
-    data object Idle : ResolutionState
-    data object Loading : ResolutionState
-    data class Success(val url: String) : ResolutionState
-    data class Error(val message: String) : ResolutionState
-}
-
-private suspend fun resolveYouTubeUrl(rawUrl: String, videoId: String): ResolutionState {
-    val watchUrl = "https://www.youtube.com/watch?v=$videoId&hl=en"
-
-    // Use a dedicated OkHttp client (no Cloudflare interceptor — YouTube
-    // does not need it and the interceptor adds latency).
-    val httpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .followSslRedirects(true)
-        .build()
-
-    val watchResponse = runCatching {
-        httpClient.newCall(
-            Request.Builder().url(watchUrl)
-                .header("User-Agent", Http.UA)
-                .header("Accept-Language", "en-US,en;q=0.9")
-                .build()
-        ).execute().use { resp ->
-            if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code}")
-            resp.body?.string().orEmpty()
-        }
-    }
-
-    if (watchResponse.isFailure) return ResolutionState.Error("Failed to load YouTube page")
-
-    val html = watchResponse.getOrNull() ?: return ResolutionState.Error("Empty watch page")
-    val apiKey = API_KEY_REGEX.find(html)?.groupValues?.getOrNull(1)
-    val visitorData = VISITOR_DATA_REGEX.find(html)?.groupValues?.getOrNull(1)
-
-    if (apiKey.isNullOrBlank()) return ResolutionState.Error("Could not extract YouTube API key")
-
-    val payload = buildJsonObject {
-        put("videoId", videoId)
-        put("contentCheckOk", true)
-        put("racyCheckOk", true)
-        putJsonObject("context") {
-            putJsonObject("client") {
-                put("clientName", "ANDROID")
-                put("clientVersion", "20.10.35")
-                put("osName", "Android")
-                put("osVersion", "14")
-                put("platform", "MOBILE")
-                put("androidSdkVersion", 34)
-                put("hl", "en")
-                put("gl", "US")
-            }
-        }
-        putJsonObject("playbackContext") {
-            putJsonObject("contentPlaybackContext") {
-                put("html5Preference", "HTML5_PREF_WANTS")
-            }
-        }
-    }
-
-    val playerResponse = runCatching {
-        httpClient.newCall(
-            Request.Builder()
-                .url("https://www.youtube.com/youtubei/v1/player?key=${URLEncoder.encode(apiKey, "UTF-8")}")
-                .header("User-Agent", Http.UA)
-                .header("Content-Type", "application/json")
-                .header("Origin", "https://www.youtube.com")
-                .header("X-Youtube-Client-Name", "3")
-                .header("X-Youtube-Client-Version", "20.10.35")
-                .apply { visitorData?.let { vd -> header("X-Goog-Visitor-Id", vd) } }
-                .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
-                .build()
-        ).execute().use { resp ->
-            if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code}")
-            resp.body?.string().orEmpty()
-        }
-    }
-
-    if (playerResponse.isFailure) return ResolutionState.Error("Player API request failed")
-
-    val streamingUrl = withContext(Dispatchers.Default) {
-        extractStreamUrl(playerResponse.getOrNull() ?: "", httpClient)
-    }
-
-    return streamingUrl?.let { ResolutionState.Success(it) }
-        ?: ResolutionState.Error("No playable stream found for this video")
-}
-
-private fun extractVideoId(input: String): String? {
-    val trimmed = input.trim()
-    if (VIDEO_ID_REGEX.matches(trimmed)) return trimmed
-
-    val parsed = parseUrl(trimmed) ?: return null
-    if (parsed.host.endsWith("youtu.be")) {
-        parsed.pathSegments.firstOrNull()?.let { id ->
-            if (VIDEO_ID_REGEX.matches(id)) return id
-        }
-    }
-    parsed.query["v"]?.firstOrNull()?.let { id ->
-        if (VIDEO_ID_REGEX.matches(id)) return id
-    }
-    if (parsed.pathSegments.size >= 2) {
-        val (first, second) = parsed.pathSegments[0] to parsed.pathSegments[1]
-        if ((first == "embed" || first == "shorts" || first == "live") && VIDEO_ID_REGEX.matches(second)) {
-            return second
-        }
-    }
-    return null
-}
-
-private data class ParsedUrl(
-    val host: String,
-    val pathSegments: List<String>,
-    val query: Map<String, List<String>>,
-)
-
-private fun parseUrl(input: String): ParsedUrl? {
-    val trimmed = input.trim()
-    if (trimmed.isBlank()) return null
-    val normalized = if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) trimmed else "https://$trimmed"
-    val withoutFragment = normalized.substringBefore('#')
-    val withoutScheme = withoutFragment.substringAfter("://", withoutFragment)
-    val host = withoutScheme.substringBefore('/').substringBefore('?').lowercase()
-    if (host.isBlank()) return null
-    val pathAndQuery = withoutScheme.removePrefix(host)
-    val path = when {
-        pathAndQuery.startsWith("/") -> pathAndQuery.substringBefore('?')
-        pathAndQuery.startsWith("?") || pathAndQuery.isBlank() -> "/"
-        else -> "/${pathAndQuery.substringBefore('?')}"
-    }
-    val queryString = withoutFragment.substringAfter('?', "")
-    val query = mutableMapOf<String, MutableList<String>>()
-    queryString.split('&').filter { it.isNotBlank() }.forEach { pair ->
-        val key = pair.substringBefore('=').trim()
-        if (key.isBlank()) return@forEach
-        query.getOrPut(key) { mutableListOf() }.add(pair.substringAfter('=', ""))
-    }
-    return ParsedUrl(
-        host = host,
-        pathSegments = path.trim('/').split('/').filter { it.isNotBlank() },
-        query = query,
-    )
-}
-
-/**
- * Extracts a single directly playable URL from the player API response.
- * Prefers HLS master playlist (carries audio as a rendition), then falls back
- * to the best progressive format.
- */
-private fun extractStreamUrl(playerJson: String, httpClient: OkHttpClient): String? {
-    val root = runCatching { JSON.parseToJsonElement(playerJson) }.getOrNull()?.jsonObject ?: return null
-    val streaming = root["streamingData"]?.jsonObject ?: return null
-
-    // Try HLS manifest first.
-    streaming["hlsManifestUrl"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-        ?.let { manifestUrl ->
-            val manifestBody = runCatching {
-                httpClient.newCall(Request.Builder().url(manifestUrl).header("User-Agent", Http.UA).build())
-                    .execute().use { resp ->
-                        if (!resp.isSuccessful) return@runCatching null
-                        resp.body?.string()
+@Composable
+fun YouTubeSearchOverlay(
+    uiState: YouTubeViewModel.UiState,
+    viewModel: YouTubeViewModel,
+    onClose: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xCC000000))
+            .clickable { onClose() },
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                .padding(top = 16.dp),
+        ) {
+            OutlinedTextField(
+                value = uiState.searchQuery,
+                onValueChange = { viewModel.onSearchQueryChange(it) },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Search YouTube") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Text,
+                    imeAction = ImeAction.Search,
+                ),
+                keyboardActions = KeyboardActions(onSearch = { viewModel.startSearch() }),
+                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                trailingIcon = {
+                    if (uiState.searchQuery.isNotBlank()) {
+                        IconButton(onClick = { viewModel.onSearchQueryChange("") }) {
+                            Icon(Icons.Filled.Close, contentDescription = "Clear")
+                        }
                     }
-            }.getOrNull()
-            if (manifestBody?.contains("#EXTM3U") == true) return manifestUrl
-        }
+                },
+            )
 
-    // Fall back to best progressive format.
-    val best = streaming["formats"]?.jsonArray
-        ?.mapNotNull { it.jsonObject }
-        ?.filter { fmt -> fmt["mimeType"]?.jsonPrimitive?.content?.contains("video/") == true }
-        ?.maxByOrNull { fmt ->
-            val height = fmt["height"]?.jsonPrimitive?.intOrNull
-                ?: parseQualityLabel(fmt["qualityLabel"]?.jsonPrimitive?.content)
-                ?: 0
-            val fps = fmt["fps"]?.jsonPrimitive?.intOrNull ?: 0
-            val bitrate = fmt["bitrate"]?.jsonPrimitive?.longOrNull
-                ?: fmt["averageBitrate"]?.jsonPrimitive?.longOrNull ?: 0L
-            height * 1_000_000_000L + fps * 1_000_000L + bitrate
+            if (uiState.searchSuggestions.isNotEmpty()) {
+                Text(
+                    text = "Suggestions",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                )
+                uiState.searchSuggestions.forEach { suggestion ->
+                    Text(
+                        text = suggestion.text,
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 12.dp, horizontal = 4.dp)
+                            .clickable {
+                                viewModel.onSearchQueryChange(suggestion.text)
+                                viewModel.startSearch()
+                            }
+                            .background(MaterialTheme.colorScheme.surface),
+                    )
+                }
+            }
         }
-    return best?.let { it["url"]?.jsonPrimitive?.content?.takeIf { u -> u.isNotBlank() } }
+    }
 }
 
-private fun parseQualityLabel(label: String?): Int? {
-    if (label.isNullOrBlank()) return null
-    return QUALITY_LABEL_REGEX.find(label)?.groupValues?.getOrNull(1)?.toIntOrNull()
+@Composable
+fun YouTubeFeedTabs(
+    currentTab: YtFeedTab,
+    signedIn: Boolean,
+    onTabClick: (YtFeedTab) -> Unit,
+) {
+    val tabs = remember { YtFeedTab.values() }
+    val scrollState = rememberScrollState()
+
+    Row(
+        modifier = Modifier
+            .horizontalScroll(scrollState)
+            .padding(horizontal = 8.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        tabs.filter { if (it.needsSignIn) signedIn else true }.forEach { tab ->
+            val selected = currentTab == tab
+            Text(
+                text = tab.title,
+                style = MaterialTheme.typography.labelLarge.copy(
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+                ),
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .background(
+                        if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHighest,
+                        RoundedCornerShape(20.dp),
+                    )
+                    .clickable { onTabClick(tab) },
+            )
+        }
+    }
 }
 
-// ── Player launch ────────────────────────────────────────────────────────────
+@Composable
+fun YouTubeRowFeed(
+    rows: List<YtFeedRow>,
+    onItemClick: (YtFeedItem) -> Unit,
+    onItemFocus: (YtFeedItem) -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        items(rows) { row ->
+            if (row.items.isNotEmpty()) {
+                Text(
+                    text = row.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 8.dp),
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    row.items.forEach { item ->
+                        YouTubeVideoCard(
+                            item = item,
+                            onClick = { onItemClick(item) },
+                            onFocus = { onItemFocus(item) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
 
-private fun launchPlayer(context: android.content.Context, url: String, title: String) {
+@Composable
+fun YouTubeGridFeed(
+    items: List<YtFeedItem>,
+    onItemClick: (YtFeedItem) -> Unit,
+    onItemFocus: (YtFeedItem) -> Unit,
+    loadMore: () -> Unit,
+    loadingMore: Boolean,
+    canLoadMore: Boolean,
+) {
+    val gridState = rememberLazyGridState()
+    val columns = if (items.firstOrNull()?.isShorts == true) 2 else 3
+
+    LazyVerticalGrid(
+        modifier = Modifier.fillMaxSize(),
+        columns = GridCells.Fixed(columns),
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        state = gridState,
+    ) {
+        items(items) { item ->
+            YouTubeGridCard(
+                item = item,
+                onClick = { onItemClick(item) },
+                onFocus = { onItemFocus(item) },
+                isShorts = item.isShorts,
+            )
+        }
+
+        if (loadingMore) {
+            item(span = { GridItemSpan(columns) }) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                        .background(MaterialTheme.colorScheme.surfaceContainerHighest, RoundedCornerShape(8.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator()
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) {
+        val lastIndex = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+        if (canLoadMore && !loadingMore && lastIndex >= items.size - 6) {
+            loadMore()
+        }
+    }
+}
+
+@Composable
+fun YouTubeVideoCard(
+    item: YtFeedItem,
+    onClick: () -> Unit,
+    onFocus: () -> Unit,
+) {
+    val cardWidth = 280.dp
+    val aspectRatio = 16f / 9f
+    val cardHeight = (cardWidth.value / aspectRatio).dp
+
+    Card(
+        modifier = Modifier
+            .width(cardWidth)
+            .height(cardHeight)
+            .onFocusChanged { if (it.isFocused) onFocus() }
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ),
+        shape = RoundedCornerShape(12.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(aspectRatio)
+                    .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)),
+            ) {
+                item.thumbnail?.let { url ->
+                    AsyncImage(
+                        model = url,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+
+                if (item.isLive) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(6.dp),
+                    ) {
+                        Text(
+                            text = "LIVE",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = Color.White,
+                            modifier = Modifier
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                .background(Color(0xFFCC0000), RoundedCornerShape(4.dp)),
+                        )
+                    }
+                }
+
+                if (item.percentWatched > 0 && item.percentWatched < 100) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.BottomCenter)
+                            .height(3.dp)
+                            .background(MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.5f))
+                            .clip(RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .fillMaxWidth((item.percentWatched / 100f))
+                                .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)),
+                        )
+                    }
+                }
+            }
+
+            Column(modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)) {
+                Text(
+                    text = item.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (item.author != null) {
+                    Text(
+                        text = item.author!!,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                item.badge?.let { badge ->
+                    Text(
+                        text = badge,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun YouTubeGridCard(
+    item: YtFeedItem,
+    onClick: () -> Unit,
+    onFocus: () -> Unit,
+    isShorts: Boolean = false,
+) {
+    val aspectRatio = if (isShorts) 9f / 16f else 16f / 9f
+    val cardWidth = if (isShorts) 160.dp else 180.dp
+
+    Card(
+        modifier = Modifier
+            .width(cardWidth)
+            .aspectRatio(aspectRatio)
+            .onFocusChanged { if (it.isFocused) onFocus() }
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ),
+        shape = RoundedCornerShape(12.dp),
+    ) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopStart) {
+            item.thumbnail?.let { url ->
+                AsyncImage(
+                    model = url,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)),
+                )
+            }
+
+            if (item.isLive) {
+                Box(
+                    modifier = Modifier.padding(6.dp).align(Alignment.TopStart),
+                ) {
+                    Text(
+                        text = "LIVE",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = Color.White,
+                        modifier = Modifier
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                            .background(Color(0xFFCC0000), RoundedCornerShape(4.dp)),
+                    )
+                }
+            }
+
+            if (item.percentWatched > 0 && item.percentWatched < 100) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.BottomCenter)
+                        .height(3.dp)
+                        .background(MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.5f))
+                        .clip(RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth(item.percentWatched / 100f)
+                            .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)),
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun launchPlayer(context: Context, stream: YtStream) {
     val sources = JSONArray().apply {
         put(JSONObject().apply {
             put("name", "YouTube")
-            put("url", url)
-            put("isM3u8", url.contains(".m3u8"))
+            put("url", stream.url)
+            put("isM3u8", stream.url.contains(".m3u8") || stream.url.contains("m3u8"))
+            stream.headers.forEach { (k, v) -> put(k, v) }
         })
     }
     val intent = Intent(context, PlayerActivity::class.java).apply {
-        putExtra("title", title)
+        putExtra("title", stream.title)
         putExtra("sources", sources.toString())
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
     context.startActivity(intent)
+}
+
+class YouTubeViewModelFactory(
+    private val context: Context,
+    private val authRepository: YouTubeAuthRepository,
+    private val feedRepository: YouTubeFeedRepository,
+    private val onPlay: (YtStream) -> Unit,
+    private val onClosePlayer: () -> Unit,
+) : androidx.lifecycle.ViewModelProvider.Factory {
+    @Suppress("UNCHECKED_CAST")
+    override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+        return YouTubeViewModel(
+            context = context,
+            authRepository = authRepository,
+            feedRepository = feedRepository,
+            onPlay = onPlay,
+            onClosePlayer = onClosePlayer,
+        ) as T
+    }
 }
