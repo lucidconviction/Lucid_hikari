@@ -95,6 +95,12 @@ class YouTubeFeedRepository(
         const val PLAYER_URL = "$INNER_TUBE_API_URL/player"
         const val MAX_CACHED_STREAMS = 24
         const val MAX_CLIENT_SWITCHES = 8
+        const val ANDROID_CLIENT_VERSION = "21.26.364"
+        const val ANDROID_USER_AGENT = "com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip"
+        const val ANDROID_CLIENT_NAME = "1"
+        const val TV_CLIENT_VERSION = "7.20231204.0.0"
+        const val TV_USER_AGENT = "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/25.lts.30.1034943-gold (unlike Gecko), Unknown_TV_Unknown_0/Unknown (Unknown, Unknown)"
+        const val TV_CLIENT_NAME = "85"
     }
 
     private val httpClient = OkHttpClient.Builder()
@@ -113,20 +119,21 @@ class YouTubeFeedRepository(
     suspend fun fetchFeed(tab: YtFeedTab, accessToken: String?): Result<Any> {
         return withContext(Dispatchers.IO) {
             ensureApiKey()
+            val useTVClient = tab in setOf(YtFeedTab.MUSIC, YtFeedTab.GAMING, YtFeedTab.NEWS, YtFeedTab.SPORTS)
             val (payload, endpoint) = when (tab) {
-                YtFeedTab.HOME -> buildBrowsePayload("home", accessToken)
-                YtFeedTab.SUBSCRIPTIONS -> buildBrowsePayload("subscriptions", accessToken)
-                YtFeedTab.HISTORY -> buildBrowsePayload("history", accessToken)
-                YtFeedTab.PLAYLISTS -> buildBrowsePayload("playlists", accessToken)
-                YtFeedTab.LIVE -> buildBrowsePayload("live", accessToken)
-                YtFeedTab.MUSIC -> buildBrowsePayload("music", accessToken)
-                YtFeedTab.GAMING -> buildBrowsePayload("gaming", accessToken)
-                YtFeedTab.NEWS -> buildBrowsePayload("news", accessToken)
-                YtFeedTab.SPORTS -> buildBrowsePayload("sports", accessToken)
-                YtFeedTab.SHORTS -> buildBrowsePayload("shorts", accessToken)
-                YtFeedTab.CHANNELS -> buildBrowsePayload("channels", accessToken)
+                YtFeedTab.HOME -> buildBrowsePayload("FEwhat_to_watch", accessToken)
+                YtFeedTab.SUBSCRIPTIONS -> buildBrowsePayload("FEsubscriptions", accessToken)
+                YtFeedTab.HISTORY -> buildBrowsePayload("FEhistory", accessToken)
+                YtFeedTab.PLAYLISTS -> buildBrowsePayload("FEplaylist_aggregation", accessToken)
+                YtFeedTab.LIVE -> buildReelPayload(accessToken)  // Live uses reel endpoint
+                YtFeedTab.MUSIC -> buildBrowsePayloadTV("FEtopics_music", "6gQJRkVleHBsb3Jl", accessToken)
+                YtFeedTab.GAMING -> buildBrowsePayloadTV("FEtopics_gaming", "6gQJRkVleHBsb3Jl", accessToken)
+                YtFeedTab.NEWS -> buildBrowsePayloadTV("FEtopics_news", "6gQJRkVleHBsb3Jl", accessToken)
+                YtFeedTab.SPORTS -> buildBrowsePayloadTV("FEtopics_sports", "6gQJRkVleHBsb3Jl", accessToken)
+                YtFeedTab.SHORTS -> buildShortsPayload(accessToken)
+                YtFeedTab.CHANNELS -> buildBrowsePayload("FEmy_youtube", accessToken) // Channels tab shows subscribed channels
             }
-            val response = postJson(endpoint, payload, accessToken)
+            val response = postJson(endpoint, payload, accessToken, useTVClient)
             parseFeedResponse(response, tab)
         }
     }
@@ -136,7 +143,7 @@ class YouTubeFeedRepository(
         return withContext(Dispatchers.IO) {
             ensureApiKey()
             val payload = buildContinuationPayload(continuationKey, accessToken)
-            val response = postJson(NEXT_URL, payload, accessToken)
+            val response = postJson(NEXT_URL, payload, accessToken, useTVClient = false)
             parseContinuationResponse(response)
         }
     }
@@ -146,7 +153,7 @@ class YouTubeFeedRepository(
         return withContext(Dispatchers.IO) {
             ensureApiKey()
             val payload = buildSearchPayload(query, accessToken)
-            val response = postJson(SEARCH_URL, payload, accessToken)
+            val response = postJson(SEARCH_URL, payload, accessToken, useTVClient = false)
             parseSearchResponse(response)
         }
     }
@@ -186,7 +193,7 @@ class YouTubeFeedRepository(
         return withContext(Dispatchers.IO) {
             ensureApiKey()
             val (payload, url) = buildBrowsePayload("channel/$channelId", accessToken)
-            val response = postJson(url, payload, accessToken)
+            val response = postJson(url, payload, accessToken, useTVClient = false)
             parseFeedResponse(response, YtFeedTab.HOME)
         }
     }
@@ -196,7 +203,7 @@ class YouTubeFeedRepository(
         return withContext(Dispatchers.IO) {
             ensureApiKey()
             val (payload, url) = buildBrowsePayload("playlist/$playlistId", accessToken)
-            val response = postJson(url, payload, accessToken)
+            val response = postJson(url, payload, accessToken, useTVClient = false)
             parseFeedResponse(response, YtFeedTab.HOME)
         }
     }
@@ -213,7 +220,7 @@ class YouTubeFeedRepository(
 
             while (attempts++ < MAX_CLIENT_SWITCHES) {
                 val payload = buildPlayerPayload(videoId, accessToken)
-                val response = postJson(PLAYER_URL, payload, accessToken)
+                val response = postJson(PLAYER_URL, payload, accessToken, useTVClient = false)
                 val stream = extractStreamUrl(response, videoId)
                 
                 if (stream != null) {
@@ -241,6 +248,16 @@ class YouTubeFeedRepository(
         val payload = JSONObject().apply {
             put("browseId", browseId)
             put("context", buildClientContext(accessToken))
+        }
+        return payload.toString() to BROWSE_URL
+    }
+
+    /** Builds browse payload for TV client (used for Music, Gaming, News, Sports topics). */
+    private fun buildBrowsePayloadTV(browseId: String, params: String, accessToken: String?): Pair<String, String> {
+        val payload = JSONObject().apply {
+            put("browseId", browseId)
+            put("params", params)
+            put("context", buildClientContext(accessToken, useTVClient = true))
         }
         return payload.toString() to BROWSE_URL
     }
@@ -274,19 +291,54 @@ class YouTubeFeedRepository(
         }.toString()
     }
 
-    private fun buildClientContext(accessToken: String?): JSONObject {
+    /** Builds payload for Shorts feed using REEL_WATCH_INPUT_TYPE_SEEDLESS. */
+    private fun buildShortsPayload(accessToken: String?): Pair<String, String> {
+        val payload = JSONObject().apply {
+            put("disablePlayerResponse", true)
+            put("inputType", "REEL_WATCH_INPUT_TYPE_SEEDLESS")
+            put("params", "CA8%3D")
+            put("context", buildClientContext(accessToken))
+        }
+        return payload.toString() to "$INNER_TUBE_API_URL/browse"
+    }
+
+    /** Builds payload for Live feed using reel endpoint. */
+    private fun buildReelPayload(accessToken: String?): Pair<String, String> {
+        val payload = JSONObject().apply {
+            put("disablePlayerResponse", true)
+            put("inputType", "REEL_WATCH_INPUT_TYPE_SEEDLESS")
+            put("params", "CA8%3D")
+            put("context", buildClientContext(accessToken))
+        }
+        return payload.toString() to "$INNER_TUBE_API_URL/reel/reel_watch_sequence"
+    }
+
+    private fun buildClientContext(accessToken: String?, useTVClient: Boolean = false): JSONObject {
         return JSONObject().apply {
-            put("client", JSONObject().apply {
-                put("clientName", "ANDROID")
-                put("clientVersion", "20.10.35")
-                put("osName", "Android")
-                put("osVersion", "14")
-                put("platform", "MOBILE")
-                put("androidSdkVersion", 34)
-                put("hl", "en")
-                put("gl", "US")
-                put("userInterfaceTheme", "USER_INTERFACE_THEME_DARK")
-            })
+            if (useTVClient) {
+                put("client", JSONObject().apply {
+                    put("clientName", "TVHTML5")
+                    put("clientVersion", TV_CLIENT_VERSION)
+                    put("osName", "Android")
+                    put("osVersion", "13")
+                    put("platform", "TV")
+                    put("hl", "en")
+                    put("gl", "US")
+                    put("userInterfaceTheme", "USER_INTERFACE_THEME_DARK")
+                })
+            } else {
+                put("client", JSONObject().apply {
+                    put("clientName", "ANDROID")
+                    put("clientVersion", ANDROID_CLIENT_VERSION)
+                    put("osName", "Android")
+                    put("osVersion", "11")
+                    put("platform", "MOBILE")
+                    put("androidSdkVersion", 30)
+                    put("hl", "en")
+                    put("gl", "US")
+                    put("userInterfaceTheme", "USER_INTERFACE_THEME_DARK")
+                })
+            }
             accessToken?.let { put("auth", it) }
             visitorDataCache?.let { put("visitorData", it) }
         }
@@ -294,14 +346,18 @@ class YouTubeFeedRepository(
 
     // ── HTTP ──
 
-    private fun postJson(url: String, payload: String, accessToken: String?): String {
+    private fun postJson(url: String, payload: String, accessToken: String?, useTVClient: Boolean = false): String {
+        val userAgent = if (useTVClient) TV_USER_AGENT else ANDROID_USER_AGENT
+        val clientName = if (useTVClient) TV_CLIENT_NAME else ANDROID_CLIENT_NAME
+        val clientVersion = if (useTVClient) TV_CLIENT_VERSION else ANDROID_CLIENT_VERSION
+
         val requestBuilder = Request.Builder()
             .url("$url?key=${apiKeyCache ?: ""}")
-            .header("User-Agent", Http.UA)
+            .header("User-Agent", userAgent)
             .header("Content-Type", "application/json")
-            .header("Origin", "https://www.youtube.com")
-            .header("X-Youtube-Client-Name", "3")
-            .header("X-Youtube-Client-Version", "20.10.35")
+            .header("X-Youtube-Client-Name", clientName)
+            .header("X-Youtube-Client-Version", clientVersion)
+            .header("X-GOOG-API-FORMAT-VERSION", "2")
             .post(payload.toRequestBody("application/json; charset=utf-8".toMediaType()))
 
         accessToken?.let { requestBuilder.header("Authorization", "Bearer $it") }
