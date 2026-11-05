@@ -39,6 +39,9 @@ data class IptvChannel(
      *  taps "Validate" on a group header in the IPTV tab; memoised per-playlist
      *  with a 5-minute TTL so re-opening the app does not hammer the panel. */
     val probeResult: com.hikari.app.net.StreamProbe.ProbeResult? = null,
+    /** The IPTV provider ID this channel came from. Used for HLS stream resolution
+     *  when playing from the IPTV tab or channel surf dialog. */
+    val providerId: String = "",
 ) {
     companion object {
         const val KIND_DIRECT = "direct"

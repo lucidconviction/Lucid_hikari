@@ -480,11 +480,13 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
             iptvErrors[config.id] = "No channels found in this playlist."
             return@withLock cached ?: emptyList()
         }
+        // Tag each channel with this provider's ID so the player can resolve HLS streams
+        val tagged = resolved.map { ch -> ch.copy(providerId = config.id) }
         iptvErrors.remove(config.id)
-        channelsCache = resolved
+        channelsCache = tagged
         loadedAt[config.id] = System.currentTimeMillis()
-        channelCounts[config.id] = resolved.size
-        resolved
+        channelCounts[config.id] = tagged.size
+        tagged
     }
 
     /** The channels already in memory, without touching the network. Null when
@@ -520,6 +522,7 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
                 name = config.name.ifBlank { torrentName(config.url) },
                 url = config.url,
                 group = "",
+                providerId = config.id,
             )
         }
         val u = selfCheckUrl
@@ -528,7 +531,7 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
             u.substringBefore('?').trimEnd('/').substringAfterLast('/').substringBeforeLast('.')
                 .ifBlank { u.substringAfter("://").substringBefore('/') }
         }
-        return IptvChannel(name = name, url = u, group = "")
+        return IptvChannel(name = name, url = u, group = "", providerId = config.id)
     }
 
     /** Channels inside one catalog ref, shared by catalogs and scoped search. */
@@ -633,6 +636,7 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
                     url = item.id,
                     logo = item.posterUrl,
                     group = item.overview.orEmpty(),
+                    providerId = item.providerId,
                 )
             } else {
                 null

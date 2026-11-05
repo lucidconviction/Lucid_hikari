@@ -3383,6 +3383,7 @@ private suspend fun validateChannelStatuses(
  * by the caller after computing it (channels() is suspend so it must be
  * pre-fetched off the main thread). This is what the player's "Channels"
  * button shows and what CH+/CH- steps through.
+ * The providerId is extracted from the channel itself (set by IptvProvider.channels()).
  */
 private fun playChannel(
     ctx: android.content.Context,
@@ -3390,24 +3391,29 @@ private fun playChannel(
     nav: NavHostController,
     allChannels: List<IptvChannel>,
 ) {
+    val providerId = channel.providerId
     val isM3u8 = channel.url.endsWith(".m3u8", ignoreCase = true)
+    val isMpd = channel.url.substringBefore('?').contains(".mpd", ignoreCase = true)
     val sources = org.json.JSONArray().apply {
         put(org.json.JSONObject()
             .put("name", channel.name)
             .put("url", channel.url)
             .put("isM3u8", isM3u8)
-            .put("provider", "")
-            .put("providerId", "")
+            .put("isMpd", isMpd)
+            .put("provider", "IPTV")
+            .put("providerId", providerId)
             .put("providerName", "")
             .put("details", "")
             .put("ytId", "")
             .put("isTorrent", false)
-            .put("isMpd", false)
         )
     }
     val intent = android.content.Intent(ctx, com.hikari.app.player.PlayerActivity::class.java).apply {
         putExtra("title", channel.name)
         putExtra("sources", sources.toString())
+        // Pass providerId as histProviderId so PlayerActivity.originProviderId is set
+        // This allows fetchChannelStreams() to find the provider and resolve HLS streams
+        putExtra("histProviderId", providerId)
         if (allChannels.isNotEmpty()) {
             val arr = org.json.JSONArray()
             allChannels.forEach { ch ->
@@ -3416,7 +3422,8 @@ private fun playChannel(
                         .put("name", ch.name)
                         .put("url", ch.url)
                         .put("logo", ch.logo ?: "")
-                        .put("group", ch.group ?: "")
+                        .put("group", ch.group)
+                        .put("providerId", ch.providerId)
                 )
             }
             putExtra("channelSurfChannels", arr.toString())

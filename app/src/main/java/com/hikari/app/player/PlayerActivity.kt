@@ -7771,6 +7771,7 @@ class PlayerActivity : ComponentActivity() {
                         cookie = null,
                         kind = "",
                         probeResult = null,
+                        providerId = o.optString("providerId").ifBlank { originProviderId },
                     )
                 }.getOrNull()
             }
@@ -13923,8 +13924,9 @@ private fun updateTitleForChannel(channel: com.hikari.app.data.IptvChannel) {
 }
 
 private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel): List<PlayerSource> {
+        val targetProviderId = channel.providerId.ifBlank { originProviderId }
         val cfg = runCatching { (applicationContext as HikariApp).store.providers() }
-            .getOrDefault(emptyList()).firstOrNull { it.id == originProviderId } ?: return emptyList()
+            .getOrDefault(emptyList()).firstOrNull { it.id == targetProviderId } ?: return emptyList()
         val item = AppMediaItem(
             providerId = cfg.id,
             id = channel.url,

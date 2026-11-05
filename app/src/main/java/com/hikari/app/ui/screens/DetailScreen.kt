@@ -2432,6 +2432,7 @@ fun DetailScreen(
                                 .put("url", ch.url)
                                 .put("logo", ch.logo ?: "")
                                 .put("group", ch.group)
+                                .put("providerId", ch.providerId.ifBlank { livePid })
                         )
                     }
                     putExtra("channelSurfChannels", arr.toString())
