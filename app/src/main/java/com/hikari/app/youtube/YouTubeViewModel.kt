@@ -42,6 +42,10 @@ class YouTubeViewModel(
         val showSearch: Boolean = false,
         val showAccountSheet: Boolean = false,
         val upNext: YtFeedItem? = null,
+        // Sign-in device-code fields
+        val signInActive: Boolean = false,
+        val signInCode: String? = null,
+        val signInActivateLink: String? = null,
     )
 
     private val _uiState = MutableStateFlow(UiState())
@@ -420,30 +424,53 @@ class YouTubeViewModel(
     fun startSignIn() {
         viewModelScope.launch {
             val deviceCodeResponse = authRepository.startSignIn()
-            deviceCodeResponse?.let { response ->
-                updateState { it.copy(showAccountSheet = false) }
-                showDeviceCodeFlow(response)
+            if (deviceCodeResponse == null) {
+                updateState { it.copy(error = "Failed to start sign-in. Check your connection.") }
+                return@launch
             }
+            updateState {
+                it.copy(
+                    signInActive = true,
+                    signInCode = deviceCodeResponse.user_code,
+                    signInActivateLink = deviceCodeResponse.verification_url,
+                    showAccountSheet = false,
+                )
+            }
+            // Start foreground keep-alive service
+            YouTubeSignInKeepAliveService.start(context)
+            // Poll for token in background
+            pollForSignInToken(deviceCodeResponse)
         }
     }
 
-    private fun showDeviceCodeFlow(response: DeviceCodeResponse) {
+    private fun pollForSignInToken(response: DeviceCodeResponse) {
         viewModelScope.launch {
             var interval = response.interval
             val expiresAt = System.currentTimeMillis() + response.expires_in * 1000L
-            
-            while (System.currentTimeMillis() < expiresAt) {
+
+            while (System.currentTimeMillis() < expiresAt && _uiState.value.signInActive) {
                 val success = authRepository.pollForToken(response.device_code, interval)
                 if (success) {
-                    // Signed in!
-                    updateState { it.copy(signedIn = true) }
+                    YouTubeSignInKeepAliveService.stop(context)
+                    updateState { it.copy(signInActive = false, signInCode = null, signInActivateLink = null) }
                     fetchUserInfo()
-                    loadCurrentTab() // Reload current tab with auth
+                    loadCurrentTab()
                     return@launch
                 }
                 kotlinx.coroutines.delay(interval * 1000L)
             }
+
+            // Timeout or cancelled — stop service and clear sign-in state
+            if (_uiState.value.signInActive) {
+                YouTubeSignInKeepAliveService.stop(context)
+                updateState { it.copy(signInActive = false, signInCode = null, signInActivateLink = null) }
+            }
         }
+    }
+
+    fun cancelSignIn() {
+        YouTubeSignInKeepAliveService.stop(context)
+        updateState { it.copy(signInActive = false, signInCode = null, signInActivateLink = null) }
     }
 
     fun signOut() {

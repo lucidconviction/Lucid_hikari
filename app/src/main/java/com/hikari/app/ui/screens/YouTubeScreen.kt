@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -69,6 +70,7 @@ import coil.compose.AsyncImage
 import com.hikari.app.player.PlayerActivity
 import com.hikari.app.youtube.YouTubeAuthRepository
 import com.hikari.app.youtube.YouTubeFeedRepository
+import com.hikari.app.youtube.YouTubeSignInKeepAliveService
 import com.hikari.app.youtube.YouTubeViewModel
 import com.hikari.app.youtube.YtFeedItem
 import com.hikari.app.youtube.YtFeedRow
@@ -110,6 +112,14 @@ fun YouTubeScreen(nav: NavHostController) {
                 uiState = uiState,
                 viewModel = viewModel,
                 onClose = { viewModel.onSearchQueryChange("") },
+            )
+        }
+
+        if (uiState.signInActive && uiState.signInCode != null) {
+            YouTubeSignInDialog(
+                code = uiState.signInCode!!,
+                activateLink = uiState.signInActivateLink ?: "https://youtube.com/activate",
+                onCancel = { viewModel.cancelSignIn() },
             )
         }
 
@@ -216,14 +226,23 @@ fun YouTubeTopAppBar(
                 IconButton(onClick = { viewModel.onSearchQueryChange("") }) {
                     Icon(Icons.Filled.Search, contentDescription = "Search", tint = MaterialTheme.colorScheme.onSurface)
                 }
-                IconButton(onClick = { viewModel.toggleAccountSheet() }) {
-                    uiState.userAvatar?.let { avatar ->
-                        AsyncImage(
-                            model = avatar,
-                            contentDescription = "",
-                            modifier = Modifier.size(28.dp).clip(CircleShape),
-                        )
-                    } ?: Icon(Icons.Filled.AccountCircle, contentDescription = "Account", tint = MaterialTheme.colorScheme.onSurface)
+                if (!uiState.signedIn) {
+                    TextButton(
+                        onClick = { viewModel.startSignIn() },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    ) {
+                        Text("Sign In", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                    }
+                } else {
+                    IconButton(onClick = { viewModel.toggleAccountSheet() }) {
+                        uiState.userAvatar?.let { avatar ->
+                            AsyncImage(
+                                model = avatar,
+                                contentDescription = "",
+                                modifier = Modifier.size(28.dp).clip(CircleShape),
+                            )
+                        } ?: Icon(Icons.Filled.AccountCircle, contentDescription = "Account", tint = MaterialTheme.colorScheme.onSurface)
+                    }
                 }
             }
         }
@@ -609,6 +628,101 @@ private fun launchPlayer(context: Context, stream: YtStream) {
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
     context.startActivity(intent)
+}
+
+/** Sign-in dialog showing the device code and a button to open the activation page. */
+@Composable
+fun YouTubeSignInDialog(
+    code: String,
+    activateLink: String,
+    onCancel: () -> Unit,
+) {
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onCancel,
+        title = { androidx.compose.material3.Text("Sign in to YouTube") },
+        text = {
+            androidx.compose.foundation.layout.Column(verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+                androidx.compose.material3.Text("Open the link below on your phone or computer and enter this code:")
+                androidx.compose.material3.Text(
+                    text = code,
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.Button(onClick = {
+                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(activateLink))
+                context.startActivity(intent)
+            }) {
+                androidx.compose.material3.Text("Open youtube.com/activate")
+            }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onCancel) {
+                androidx.compose.material3.Text("Cancel")
+            }
+        },
+    )
+}
+
+/** Account bottom sheet — sign in when not authenticated, show profile + sign out when signed in. */
+@Composable
+fun YouTubeAccountSheet(
+    signedIn: Boolean,
+    userName: String? = null,
+    onSignIn: () -> Unit,
+    onSignOut: () -> Unit = {},
+    onDismiss: () -> Unit,
+) {
+    @OptIn(ExperimentalMaterial3Api::class)
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp),
+        ) {
+            androidx.compose.material3.Text(
+                text = "Account",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(16.dp))
+            if (signedIn) {
+                userName?.let { name ->
+                    androidx.compose.material3.Text(
+                        text = name,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+                androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(16.dp))
+                androidx.compose.material3.Button(
+                    onClick = onSignOut,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    androidx.compose.material3.Text("Sign Out")
+                }
+            } else {
+                androidx.compose.material3.Text(
+                    text = "Sign in to access Subscriptions, History, Playlists, and Channels.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(16.dp))
+                androidx.compose.material3.Button(
+                    onClick = onSignIn,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    androidx.compose.material3.Text("Sign In with YouTube")
+                }
+            }
+        }
+    }
 }
 
 class YouTubeViewModelFactory(

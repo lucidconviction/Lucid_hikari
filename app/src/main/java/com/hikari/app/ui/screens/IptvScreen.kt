@@ -2600,15 +2600,25 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
     var qcValidating by remember { mutableStateOf(false) }
     var hideDead by remember { mutableStateOf(true) }
     var sheetExpanded by remember { mutableStateOf(false) }
-    // Full playlist channels — fetched once, reused for playChannel
+    // Full playlist channels — fetched once, reused for playChannel and per-channel matching
     var allChannels by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
+    var channelsFetched by remember { mutableStateOf(false) }
+
+    fun ensureAllChannels() {
+        if (channelsFetched) return
+        channelsFetched = true
+        scope.launch(Dispatchers.IO) {
+            allChannels = com.hikari.app.providers.gatherIptvChannels(playlists)
+        }
+    }
 
     fun runQcValidation() {
         if (selectedQc == null || qcValidating) return
+        ensureAllChannels()
         scope.launch(Dispatchers.IO) {
             qcValidating = true
             val currentMatches = qcMatches.ifEmpty {
-                com.hikari.app.providers.gatherIptvChannels(playlists).filter { ch ->
+                allChannels.filter { ch ->
                     QuickChannelList.matches(selectedQc!!, ch)
                 }
             }
@@ -2647,15 +2657,14 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
     // Show sheet when a quick channel is selected
     LaunchedEffect(selectedQc) {
         val qc = selectedQc ?: return@LaunchedEffect
+        ensureAllChannels()
         showSheet = true
         qcLoading = true
         qcMatches = emptyList()
         aliveByUrl = emptyMap()
 
         scope.launch(Dispatchers.IO) {
-            val fetched = com.hikari.app.providers.gatherIptvChannels(playlists)
-            allChannels = fetched
-            val matches = fetched.filter { ch ->
+            val matches = allChannels.filter { ch ->
                 QuickChannelList.matches(qc, ch)
             }
             qcMatches = matches
@@ -3696,20 +3705,25 @@ private fun QuickChannelsSectionEmbedded(playlists: List<IptvProvider>, onChanne
     val qcChannelCache = remember { mutableMapOf<String, List<IptvChannel>>() }
     // Full playlist channels (all playlists) — fetched once, reused for playChannel
     var allChannels by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
+    var channelsFetched by remember { mutableStateOf(false) }
+
+    fun ensureAllChannels() {
+        if (channelsFetched) return
+        channelsFetched = true
+        scope.launch(Dispatchers.IO) {
+            allChannels = gatherIptvChannels(playlists)
+        }
+    }
 
     fun runQcValidation() {
         val qc = selectedQc
         if (qc == null || qcValidating) return
+        ensureAllChannels()
         scope.launch(Dispatchers.IO) {
             qcValidating = true
             var currentMatches = qcMatches
             if (currentMatches.isEmpty()) {
-                currentMatches = if (allChannels.isNotEmpty()) {
-                    allChannels.filter { ch -> QuickChannelList.matches(qc, ch) }
-                } else {
-                    gatherIptvChannels(playlists).filter { ch -> QuickChannelList.matches(qc, ch) }
-                }
-                qcChannelCache[qc.displayName] = currentMatches
+                currentMatches = allChannels.filter { ch -> QuickChannelList.matches(qc, ch) }
             }
             qcMatches = currentMatches
             validateChannelStatusesEmbedded(currentMatches) { url, isAlive ->
@@ -3742,6 +3756,7 @@ private fun QuickChannelsSectionEmbedded(playlists: List<IptvProvider>, onChanne
     LaunchedEffect(selectedQc) {
         val qc = selectedQc
         if (qc != null) {
+            ensureAllChannels()
             showSheet = true
             
             // Fast path: serve from cache if available, don't clear UI
@@ -3764,9 +3779,7 @@ private fun QuickChannelsSectionEmbedded(playlists: List<IptvProvider>, onChanne
             aliveByUrl = emptyMap()
             
             scope.launch(Dispatchers.IO) {
-                val fetched = gatherIptvChannels(playlists)
-                allChannels = fetched
-                val matches = fetched.filter { ch -> QuickChannelList.matches(qc, ch) }
+                val matches = allChannels.filter { ch -> QuickChannelList.matches(qc, ch) }
                 qcChannelCache[qc.displayName] = matches
                 qcMatches = matches
                 qcLoading = false

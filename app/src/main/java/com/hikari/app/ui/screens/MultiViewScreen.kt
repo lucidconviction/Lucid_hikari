@@ -84,6 +84,7 @@ import androidx.media3.ui.PlayerView
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.navigation.NavHostController
 import android.view.WindowManager
+import android.os.SystemClock
 import com.hikari.app.HikariApp
 import com.hikari.app.R
 import com.hikari.app.data.IptvChannel
@@ -95,8 +96,10 @@ import com.hikari.app.player.PlayerPool
 import com.hikari.app.providers.IptvProvider
 import com.hikari.app.providers.ContentProvider
 import com.hikari.app.ui.navigation.Routes
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -368,7 +371,7 @@ private fun MultiViewContent(
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val isPortrait = maxWidth < maxHeight
         val isTablet = maxWidth >= 600.dp
-        val maxSlots = if (isTablet) 9 else 6
+        val maxSlots = 9
         val count = streams.size.coerceAtMost(maxSlots)
         val layout = MultiWindowStore.resolveLayout(count, isPortrait, isTablet)
         val slots = layout.calculateSlots(count)
@@ -657,6 +660,7 @@ private fun VideoCell(
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as HikariApp
+    val scope = rememberCoroutineScope()
     val player: ExoPlayer = remember(stream.id) {
         pool.get(stream.slotIndex).also {
             it.setMediaItem(MediaItem.fromUri(stream.url))
@@ -684,6 +688,50 @@ private fun VideoCell(
     var isPlaying by remember(stream.id) { mutableStateOf(!MultiWindowStore.isPaused(stream.id)) }
     var elapsedSeconds by remember { mutableStateOf(0) }
     var seekProgress by remember { mutableStateOf(0f) }
+    // Tracks whether a playback error / stall occurred while the cell was active.
+    // Set to true by player listeners; reset to false by the reload loop once it
+    // successfully starts playing again.
+    var needsReload by remember { mutableStateOf(false) }
+
+    // ExoPlayer error listener: on any playback error (network loss, decoder fail,
+    // unsupported format) force a reload so the stream comes back rather than
+    // sitting on a dead player indefinitely.
+    var reloadOnError by remember { mutableStateOf<() -> Unit>({}) }
+    DisposableEffect(stream.id) {
+        val listener = object : Player.Listener {
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                // Don't reload if the player was explicitly paused by the user
+                // (they'd see a sudden flash when it restarts). For everything
+                // else — network loss, decoder error, format error, live edge
+                // failure — reload immediately.
+                if (!MultiWindowStore.isPaused(stream.id)) {
+                    reloadOnError()
+                }
+            }
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
+    }
+
+    // Buffering-stall detection: poll the player's playbackState every 2 s and
+    // reload when it stays in STATE_BUFFERING longer than [STALL_THRESHOLD_MS].
+    val STALL_THRESHOLD_MS = 15_000L
+    var stallStartMs by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(stream.id) {
+        while (isActive) {
+            delay(2000L)
+            if (player.playbackState == Player.STATE_BUFFERING && !MultiWindowStore.isPaused(stream.id)) {
+                if (stallStartMs == null) {
+                    stallStartMs = SystemClock.elapsedRealtime()
+                } else if (SystemClock.elapsedRealtime() - stallStartMs!! >= STALL_THRESHOLD_MS) {
+                    // Still buffering after threshold → reload
+                    reloadOnError()
+                }
+            } else {
+                stallStartMs = null
+            }
+        }
+    }
 
     val borderModifier = if (isAudioFocused) {
         Modifier.border(2.dp, Primary, RoundedCornerShape(12.dp))
@@ -699,25 +747,48 @@ private fun VideoCell(
         }
     }
 
-    // Auto-refresh a frozen/paused cell. A paused stream that never
+    // Auto-refresh a frozen/paused cell, and also handle playback errors and
+    // buffering stalls via the needsReload flag. A stream that never
     // re-establishes its session just sits on a dead socket; after a short
     // grace period we re-seek so it comes back rather than staying grey.
     LaunchedEffect(isPlaying, elapsedSeconds) {
-        if (isPlaying) return@LaunchedEffect
+        if (isPlaying && !needsReload) return@LaunchedEffect
         // Wait ~25s of accumulated freeze before the first refresh, then
         // every ~60s after that so a truly dead stream keeps trying.
         val firstRefreshAt = 25
         val subsequentEvery = 60
-        while (!isPlaying) {
+        while ((!isPlaying || needsReload) && isActive) {
+            if (needsReload) {
+                needsReload = false
+            }
             val wait = if (elapsedSeconds < firstRefreshAt) 1000L else subsequentEvery * 1000L
-            kotlinx.coroutines.delay(wait)
-            if (isPlaying) break
+            delay(wait)
+            if (isPlaying && !needsReload) break
             player.setMediaItem(MediaItem.fromUri(stream.url))
             player.volume = MultiWindowStore.getVolume(stream.id)
             player.playWhenReady = true
             player.prepare()
             MultiWindowStore.setPaused(stream.id, false)
             isPlaying = true
+            elapsedSeconds = 0
+        }
+    }
+
+    // The reload lambda wired into the player error listener above. Calls the
+    // same reload logic as the LaunchedEffect so both paths stay in sync.
+    reloadOnError = {
+        needsReload = true
+        // Give a short cooldown before reloading so we don't hammer a dead URL
+        scope.launch {
+            delay(2000L)
+            player.setMediaItem(MediaItem.fromUri(stream.url))
+            player.volume = MultiWindowStore.getVolume(stream.id)
+            player.playWhenReady = true
+            player.prepare()
+            MultiWindowStore.setPaused(stream.id, false)
+            isPlaying = true
+            needsReload = false
+            elapsedSeconds = 0
         }
     }
 
