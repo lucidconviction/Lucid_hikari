@@ -23,7 +23,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material3.Card
@@ -33,6 +32,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -49,6 +49,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.hikari.app.cs3.YouTubePlayables
 import com.hikari.app.data.YouTubeChannel
 import com.hikari.app.data.stores.YouTubeChannelStore
 import com.hikari.app.net.Http
@@ -166,7 +167,21 @@ fun YouTubeScreen(nav: androidx.navigation.NavHostController) {
                             item = item,
                             isVideo = true,
                             onPlay = {
-                                launchSingleVideo(context, item.name, item.url)
+                                val videoId = extractVideoId(item.url)
+                                if (videoId != null) {
+                                    CoroutineScope(Dispatchers.IO).launch {
+                                        val sources = YouTubePlayables.resolve(videoId)
+                                        withContext(Dispatchers.Main) {
+                                            if (sources.isEmpty()) {
+                                                showError = "Could not play this YouTube video"
+                                            } else {
+                                                launchPlayer(context, sources)
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    showError = "Invalid YouTube video URL"
+                                }
                             },
                             onDelete = {
                                 CoroutineScope(Dispatchers.IO).launch {
@@ -185,9 +200,24 @@ fun YouTubeScreen(nav: androidx.navigation.NavHostController) {
                             isVideo = false,
                             onPlay = {
                                 CoroutineScope(Dispatchers.IO).launch {
-                                    val resolved = resolveYouTubeChannelVideos(item.url)
-                                    withContext(Dispatchers.Main) {
-                                        launchPlayer(context, item.name, resolved)
+                                    val videoIds = resolveYouTubeChannelVideos(item.url)
+                                    if (videoIds.isEmpty()) {
+                                        withContext(Dispatchers.Main) {
+                                            showError = "Could not fetch videos for this channel"
+                                        }
+                                    } else {
+                                        // Resolve all channel videos to actual streams
+                                        val allSources = mutableListOf<com.hikari.app.data.StreamSource>()
+                                        for (vid in videoIds) {
+                                            allSources.addAll(YouTubePlayables.resolve(vid))
+                                        }
+                                        withContext(Dispatchers.Main) {
+                                            if (allSources.isEmpty()) {
+                                                showError = "Could not play videos from this channel"
+                                            } else {
+                                                launchPlayer(context, allSources)
+                                            }
+                                        }
                                     }
                                 }
                             },
@@ -263,24 +293,22 @@ fun YouTubeItemRow(
 
             Spacer(modifier = Modifier.width(12.dp))
 
-            // Item info
+            // Item info - just show URL, no title
             Column(
                 modifier = Modifier.weight(1f),
             ) {
                 Text(
-                    text = item.name,
-                    style = MaterialTheme.typography.bodyLarge,
+                    text = item.url,
+                    style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = item.url,
+                    text = if (isVideo) "Video" else "Channel",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
             }
 
@@ -313,18 +341,15 @@ fun YouTubeAddDialog(
         title = { Text("Add YouTube Item") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                // Type selector
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    androidx.compose.material3.RadioButton(
+                // Type selector with radio buttons
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(
                         selected = selectedType == "video",
                         onClick = { selectedType = "video" },
                     )
                     Text("Video", style = MaterialTheme.typography.bodyMedium)
                     Spacer(modifier = Modifier.width(16.dp))
-                    androidx.compose.material3.RadioButton(
+                    RadioButton(
                         selected = selectedType == "channel",
                         onClick = { selectedType = "channel" },
                     )
@@ -431,35 +456,31 @@ private fun validateYoutubeUrl(url: String): Pair<String?, String?> {
     return Pair(null, null)
 }
 
+private fun extractVideoId(url: String): String? {
+    val (type, id) = validateYoutubeUrl(url)
+    return if (type == "video") id else null
+}
+
 /**
- * Resolves a YouTube channel URL to its latest videos by scraping the RSS feed.
- * Returns video titles and URLs that can be played directly.
+ * Resolves a YouTube channel URL to its latest video IDs by scraping the RSS feed.
+ * Returns video IDs in order from newest to oldest.
  */
-private suspend fun resolveYouTubeChannelVideos(channelUrl: String): List<YouTubeVideo> = withContext(Dispatchers.IO) {
-    val results = mutableListOf<YouTubeVideo>()
+private suspend fun resolveYouTubeChannelVideos(channelUrl: String): List<String> = withContext(Dispatchers.IO) {
+    val results = mutableListOf<String>()
     try {
         val channelId = extractChannelId(channelUrl)
         if (channelId.isEmpty()) return@withContext emptyList()
         val rssUrl = "https://www.youtube.com/feeds/videos.xml?channel_id=$channelId"
         val xml = Http.fetchStringRobust(rssUrl, mapOf("User-Agent" to Http.UA)).getOrNull() ?: return@withContext emptyList()
 
-        val videoEntries = """<entry>(.*?)</entry>""".toRegex(RegexOption.DOT_MATCHES_ALL)
         val idMatches = """<yt:videoId>(.*?)</yt:videoId>""".toRegex(RegexOption.DOT_MATCHES_ALL)
-        val titleMatches = """<title>(.*?)</title>""".toRegex(RegexOption.DOT_MATCHES_ALL)
-
-        val entries = videoEntries.findAll(xml).toList()
         val ids = idMatches.findAll(xml).map { it.groupValues[1] }.toList()
-        val titles = titleMatches.findAll(xml).map { it.groupValues[1] }.toList()
 
-        for (i in entries.indices) {
-            if (i < ids.size && i < titles.size) {
-                results.add(YouTubeVideo(id = ids[i], title = titles[i]))
-            }
-        }
+        results.addAll(ids)
     } catch (e: Exception) {
         com.hikari.app.data.Logs.log("YouTube", "Failed to resolve channel: ${e.message}")
     }
-    return@withContext results.take(20)
+    return@withContext results.take(20) // Limit to 20 most recent
 }
 
 private fun extractChannelId(url: String): String {
@@ -468,42 +489,22 @@ private fun extractChannelId(url: String): String {
     return pattern.find(cleanUrl)?.groupValues?.get(1) ?: ""
 }
 
-private data class YouTubeVideo(
-    val id: String,
-    val title: String,
-)
-
-private fun launchSingleVideo(context: Context, videoName: String, videoUrl: String) {
-    val sources = JSONArray().apply {
-        put(JSONObject().apply {
-            put("name", videoName)
-            put("url", videoUrl)
-            put("isM3u8", false)
-        })
-    }
-    val intent = Intent(context, PlayerActivity::class.java).apply {
-        putExtra("title", videoName)
-        putExtra("sources", sources.toString())
-        putExtra("askServer", false)
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    }
-    context.startActivity(intent)
-}
-
-private fun launchPlayer(context: Context, channelName: String, videos: List<YouTubeVideo>) {
-    if (videos.isEmpty()) return
-    val sources = JSONArray().apply {
-        videos.forEach { video ->
+private fun launchPlayer(context: Context, sources: List<com.hikari.app.data.StreamSource>) {
+    if (sources.isEmpty()) return
+    val sourcesJson = JSONArray().apply {
+        sources.forEach { source ->
             put(JSONObject().apply {
-                put("name", video.title)
-                put("url", "https://www.youtube.com/watch?v=${video.id}")
-                put("isM3u8", false)
+                put("name", source.name)
+                put("url", source.url)
+                put("isM3u8", source.isM3u8)
+                put("isMpd", source.isMpd)
+                put("provider", "YouTube")
             })
         }
     }
     val intent = Intent(context, PlayerActivity::class.java).apply {
-        putExtra("title", channelName)
-        putExtra("sources", sources.toString())
+        putExtra("title", "YouTube")
+        putExtra("sources", sourcesJson.toString())
         putExtra("askServer", false)
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
