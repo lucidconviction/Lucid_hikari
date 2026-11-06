@@ -39,9 +39,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -65,7 +63,6 @@ import com.hikari.app.data.stores.YouTubeChannelStore
 import com.hikari.app.net.Http
 import com.hikari.app.player.PlayerActivity
 import com.hikari.app.ui.openYouTubeVideo
-import com.hikari.app.ui.navigation.Routes
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -168,7 +165,6 @@ fun YouTubeScreen(nav: androidx.navigation.NavHostController) {
                             }
                         }
                     } else {
-                        urlInput = ""
                         showError = "Not a recognisable YouTube video or channel URL"
                     }
                 }
@@ -703,16 +699,6 @@ fun YouTubeChannelVideosDialog(
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         )
                                     }
-                                    if (video.description.isNotBlank()) {
-                                        Spacer(modifier = Modifier.height(2.dp))
-                                        Text(
-                                            text = video.description,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                            maxLines = 2,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    }
                                 }
                             }
                         }
@@ -831,7 +817,6 @@ data class YouTubeChannelVideo(
     val title: String,
     val thumbnailUrl: String = "",
     val published: String = "",
-    val description: String = "",
 )
 
 data class YouTubeChannelInfo(
@@ -1056,7 +1041,6 @@ private fun parseRssFeed(xml: String): Pair<String, List<YouTubeChannelVideo>> {
     val titleRegex = Regex("""<title>(.*?)</title>""")
     val publishedRegex = Regex("""<published>(.*?)</published>""")
     val thumbRegex = Regex("""<media:thumbnail[^>]+url=["']([^"']+)["']""")
-    val descRegex = Regex("""<media:description>(.*?)</media:description>""", RegexOption.DOT_MATCHES_ALL)
 
     val videos = mutableListOf<YouTubeChannelVideo>()
     for (match in entryRegex.findAll(xml)) {
@@ -1064,13 +1048,7 @@ private fun parseRssFeed(xml: String): Pair<String, List<YouTubeChannelVideo>> {
         val vid = videoIdRegex.find(entry)?.groupValues?.get(1) ?: continue
         val title = titleRegex.find(entry)?.groupValues?.get(1)?.let { unescapeXml(it) } ?: "Video"
         val pub = publishedRegex.find(entry)?.groupValues?.get(1) ?: ""
-        val desc = descRegex.find(entry)?.groupValues?.get(1)?.let { unescapeXml(it) } ?: ""
-
-        // Use the highest-quality thumbnail YouTube publishes for this video.
-        // The RSS feed usually carries a lower-quality default, so we always
-        // build the maxresdefault URL ourselves — it falls back gracefully
-        // (YouTube serves hqdefault when maxres is unavailable).
-        val thumb = "https://i.ytimg.com/vi/$vid/maxresdefault.jpg"
+        val thumb = thumbRegex.find(entry)?.groupValues?.get(1) ?: "https://i.ytimg.com/vi/$vid/hqdefault.jpg"
 
         val formattedDate = pub.take(10)
         videos.add(
@@ -1079,7 +1057,6 @@ private fun parseRssFeed(xml: String): Pair<String, List<YouTubeChannelVideo>> {
                 title = title,
                 thumbnailUrl = thumb,
                 published = formattedDate,
-                description = desc,
             ),
         )
     }
