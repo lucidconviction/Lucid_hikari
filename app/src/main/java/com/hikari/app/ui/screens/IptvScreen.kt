@@ -3387,6 +3387,30 @@ private suspend fun validateChannelStatuses(
 }
 
 /**
+ * Maximum number of channels to include in the [channelSurfChannels] Intent extra.
+ * Android's IPC parcel limit is ~1 MB; a large IPTV playlist serialised to JSON
+ * easily exceeds it and causes a [android.os.TransactionTooLargeException]. 300
+ * entries give ~150 KB even at 500 bytes per channel — well within budget.
+ */
+private const val CHANNEL_SURF_CAP = 300
+
+/**
+ * Returns a sublist of [allChannels] centred on [currentUrl] with at most
+ * [CHANNEL_SURF_CAP] entries, preserving playlist order so CH+/CH- steps
+ * through neighbours naturally.
+ */
+private fun channelSurfWindow(allChannels: List<IptvChannel>, currentUrl: String): List<IptvChannel> {
+    if (allChannels.size <= CHANNEL_SURF_CAP) return allChannels
+    val idx = allChannels.indexOfFirst { it.url == currentUrl }.coerceAtLeast(0)
+    val half = CHANNEL_SURF_CAP / 2
+    val from = (idx - half).coerceAtLeast(0)
+    val to = (from + CHANNEL_SURF_CAP).coerceAtMost(allChannels.size)
+    // Shift the window left if the channel is near the end of the list
+    val adjustedFrom = (to - CHANNEL_SURF_CAP).coerceAtLeast(0)
+    return allChannels.subList(adjustedFrom, to)
+}
+
+/**
  * Play a channel using the app's player.
  * [allChannels] is the full channel list from the relevant playlist(s) — passed
  * by the caller after computing it (channels() is suspend so it must be
@@ -3425,8 +3449,13 @@ private fun playChannel(
         // This allows fetchChannelStreams() to find the provider and resolve HLS streams
         putExtra("histProviderId", providerId)
         if (allChannels.isNotEmpty()) {
+            // Cap the channel list to avoid TransactionTooLargeException (~1MB IPC parcel limit).
+            // Large playlists (thousands of channels) easily exceed the limit when serialised to
+            // JSON. Keep at most CHANNEL_SURF_CAP entries centred on the current channel so the
+            // player has enough context for CH+/CH- without blowing the parcel.
+            val surfList = channelSurfWindow(allChannels, channel.url)
             val arr = org.json.JSONArray()
-            allChannels.forEach { ch ->
+            surfList.forEach { ch ->
                 arr.put(
                     org.json.JSONObject()
                         .put("name", ch.name)

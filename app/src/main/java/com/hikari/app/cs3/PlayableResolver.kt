@@ -135,6 +135,16 @@ object YouTubePlayables {
                 val info = org.schabi.newpipe.extractor.stream.StreamInfo.getInfo(
                     "https://www.youtube.com/watch?v=" + ytId
                 )
+                // Diagnostic: log what the extractor handed back, so a "where is the
+                // HD?" question can be answered from the log.
+                Logs.log(
+                    TAG,
+                    "streams: video=${info.videoStreams?.size} " +
+                        "videoOnly=${info.videoOnlyStreams?.size} " +
+                        "audio=${info.audioStreams?.size} " +
+                        "dashMpd=${info.dashMpdUrl?.isNullOrBlank() == true} " +
+                        "hls=${info.hlsUrl?.isNullOrBlank() == false}",
+                )
                 val subs = info.subtitles.orEmpty().mapNotNull { s ->
                     val u = s.url
                     if (u.isNullOrBlank()) null
@@ -162,6 +172,39 @@ object YouTubePlayables {
                 }.sortedByDescending { it.second }
 
                 val out = mutableListOf<StreamSource>()
+                // YouTube's own DASH manifest lists its audio as a separate
+                // adaptation set INSIDE the one document, so media3 plays it in
+                // sync — unlike a bare video-only URL, which would be silent.
+                // This is offered EVEN WHEN muxed streams exist, because YouTube
+                // only publishes a handful of progressive renditions (often just
+                // 320p and 720p); every higher resolution is DASH-only, and a
+                // viewer who wants HD needs this link in the picker. It goes
+                // FIRST so the default pick is the one that carries every
+                // resolution the user can switch to inside the player.
+                if (!info.dashMpdUrl.isNullOrBlank()) {
+                    out += StreamSource(
+                        name = "YouTube DASH (best)",
+                        url = info.dashMpdUrl!!,
+                        headers = headers,
+                        subtitles = subs,
+                        isMpd = true,
+                    )
+                }
+                // YouTube's HLS manifest is adaptive — it carries several
+                // renditions in one .m3u8, so the player can switch quality
+                // without a separate source per resolution. When the DASH URL
+                // is blank (which is common: YouTube's player response only
+                // publishes a "dash" key for some clients), this is the ONLY
+                // link that reaches HD, so it goes first when present.
+                if (!info.hlsUrl.isNullOrBlank()) {
+                    out += StreamSource(
+                        name = "YouTube HLS",
+                        url = info.hlsUrl!!,
+                        headers = headers,
+                        subtitles = subs,
+                        isM3u8 = true,
+                    )
+                }
                 for ((url, height, delivery) in allStreams) {
                     val res = if (height > 0) "$height p"
                         else info.videoStreams.firstOrNull { it.height == height }?.resolution?.takeIf { it.isNotBlank() } ?: ""
@@ -176,7 +219,9 @@ object YouTubePlayables {
                     )
                 }
                 // A live stream has no progressive rendition at all — its one
-                // address is the HLS manifest.
+                // address is the HLS manifest (the block above already added
+                // it for a VOD, so this only fires for a live stream whose
+                // hlsUrl NewPipe found).
                 if (out.isEmpty() && !info.hlsUrl.isNullOrBlank()) {
                     out += StreamSource(
                         name = "YouTube Live",
@@ -184,19 +229,6 @@ object YouTubePlayables {
                         headers = headers,
                         subtitles = subs,
                         isM3u8 = true,
-                    )
-                }
-                // Last resort, and only when nothing muxed exists: YouTube's own
-                // DASH manifest lists its audio as a separate adaptation set
-                // INSIDE the one document, so media3 plays it in sync — unlike a
-                // bare video-only URL, which would be silent.
-                if (out.isEmpty() && !info.dashMpdUrl.isNullOrBlank()) {
-                    out += StreamSource(
-                        name = "YouTube DASH",
-                        url = info.dashMpdUrl!!,
-                        headers = headers,
-                        subtitles = subs,
-                        isMpd = true,
                     )
                 }
                 if (out.isEmpty()) {

@@ -2425,9 +2425,25 @@ fun DetailScreen(
                 // advance, Auto-Next on end). Built from iptvSiblings (same
                 // group, same playlist) — omitted otherwise so non-IPTV plays
                 // pay nothing.
+                // Cap to avoid TransactionTooLargeException on large playlists:
+                // Android's IPC parcel limit is ~1 MB; keep at most 300 entries
+                // centred on the current channel (≈150 KB even at 500 B/channel).
                 if (isIptvPage && iptvAllChannels.isNotEmpty()) {
                     val arr = org.json.JSONArray()
-                    iptvAllChannels.forEach { ch ->
+                    val surfList = run {
+                        val cap = 300
+                        if (iptvAllChannels.size <= cap) {
+                            iptvAllChannels
+                        } else {
+                            val idx = iptvAllChannels.indexOfFirst { it.url == mediaId }.coerceAtLeast(0)
+                            val half = cap / 2
+                            val from = (idx - half).coerceAtLeast(0)
+                            val to = (from + cap).coerceAtMost(iptvAllChannels.size)
+                            val adjFrom = (to - cap).coerceAtLeast(0)
+                            iptvAllChannels.subList(adjFrom, to)
+                        }
+                    }
+                    surfList.forEach { ch ->
                         arr.put(
                             org.json.JSONObject()
                                 .put("name", ch.name)

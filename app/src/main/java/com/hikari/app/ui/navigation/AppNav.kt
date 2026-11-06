@@ -341,6 +341,7 @@ object Routes {
     /** F4 — opens a grouped view that merges EVERY IPTV playlist's channels
      *  into one channel list (the "View All Playlists" tile). */
     fun iptvAllPlaylists(): String = "iptv-all-playlists"
+
     /** F4 — opens the multi-view screen with the given sessions and layout. */
     fun multiView(sessions: List<com.hikari.app.data.MultiViewSession>, layout: String = ""): String {
         val encoded = Uri.encode(com.hikari.app.data.MultiViewSession.encode(sessions))
