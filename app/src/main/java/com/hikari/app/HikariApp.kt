@@ -376,6 +376,13 @@ class HikariApp : Application() {
         ensureAniyomiInjekt()
         initCloudStream(this)
         store = AppStore(this)
+        // Sports hub: settings, follows, events, channel matching. Initialized
+        // early so the Sports tab is ready when the user opens it (it loads
+        // events in the background, so it is fine to start it here).
+        // Http.init() must be called BEFORE SportsRepository.init() because
+        // the repository immediately starts fetching events.
+        Http.init()
+        com.hikari.app.sports.SportsRepository.init(this)
         val startupAt = System.currentTimeMillis()
         // Restore the saved app language BEFORE any Activity is created, so the
         // whole UI (player overlay labels, content descriptions, settings)
@@ -687,7 +694,6 @@ class HikariApp : Application() {
             runCatching { store.webviewRedirectAllow() }
             store.webviewRedirectAllowFlow().collect { RedirectAllow.set(it) }
         }
-        Http.init()
         setupImageLoader()
         CoroutineScope(Dispatchers.IO).launch {
             // Load the persisted WebView element blocks into the app cache FIRST

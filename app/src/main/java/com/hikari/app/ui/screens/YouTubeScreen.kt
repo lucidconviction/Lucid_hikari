@@ -143,6 +143,7 @@ fun YouTubeScreen(nav: androidx.navigation.NavHostController) {
                     )
                 } else {
                     val chan = extractChannelIdentifier(cleaned)
+                    com.hikari.app.data.Logs.log("YouTube", "QuickPlay chan result: $chan")
                     if (chan != null) {
                         urlInput = ""
                         urlPlaying = true
@@ -177,6 +178,7 @@ fun YouTubeScreen(nav: androidx.navigation.NavHostController) {
                 .padding(horizontal = 12.dp, vertical = 4.dp)
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(12.dp)),
         ) {
+            Text("Input: $urlInput", modifier = Modifier.align(Alignment.TopStart)) // Temp debug
             OutlinedTextField(
                 value = urlInput,
                 onValueChange = { urlInput = it },
@@ -203,7 +205,10 @@ fun YouTubeScreen(nav: androidx.navigation.NavHostController) {
                 }
             } else if (urlInput.isNotBlank()) {
                 IconButton(
-                    onClick = { handleQuickPlay() },
+                    onClick = {
+                        com.hikari.app.data.Logs.log("YouTube", "Play button clicked")
+                        handleQuickPlay()
+                    },
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
                         .padding(end = 4.dp),
@@ -856,6 +861,7 @@ fun extractVideoId(input: String): String? {
 /** Extracts channel identifier (channel ID, handle, or custom name). */
 fun extractChannelIdentifier(input: String): Pair<String, String>? {
     val trimmed = input.trim()
+    com.hikari.app.data.Logs.log("YouTube", "extractChannelIdentifier: $trimmed")
     if (trimmed.isEmpty()) return null
 
     // Raw UC ID (24 chars)
@@ -922,9 +928,11 @@ fun normalizeYouTubeUrl(url: String, type: String): String {
  * 4. YouTube RSS XML feed parsing for channel title and video list.
  */
 suspend fun resolveYouTubeChannel(channelUrl: String): YouTubeChannelInfo? = withContext(Dispatchers.IO) {
+    com.hikari.app.data.Logs.log("YouTube", "resolveYouTubeChannel: $channelUrl")
     try {
         val trimmed = channelUrl.trim()
         val chanIdent = extractChannelIdentifier(trimmed)
+        com.hikari.app.data.Logs.log("YouTube", "chanIdent: $chanIdent")
 
         // Step 1: Direct UC ID if present
         var channelId = if (chanIdent?.first == "channel_id") {
@@ -932,6 +940,7 @@ suspend fun resolveYouTubeChannel(channelUrl: String): YouTubeChannelInfo? = wit
         } else {
             Regex("""UC[a-zA-Z0-9_-]{22}""").find(trimmed)?.value
         }
+        com.hikari.app.data.Logs.log("YouTube", "initial channelId: $channelId")
 
         var channelTitle = ""
         var extractedVideos: List<YouTubeChannelVideo>? = null

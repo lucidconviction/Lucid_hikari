@@ -2609,6 +2609,8 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
         channelsFetched = true
         scope.launch(Dispatchers.IO) {
             allChannels = com.hikari.app.providers.gatherIptvChannels(playlists)
+            // Also trigger sports channel matching when channels are loaded
+            com.hikari.app.sports.SportsRepository.matchChannels(allChannels)
         }
     }
 

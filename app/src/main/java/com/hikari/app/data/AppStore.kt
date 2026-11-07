@@ -256,6 +256,13 @@ class AppStore(private val ctx: Context) {
          */
         val MULTI_VIEW_TAB = booleanPreferencesKey("showMultiViewTab")
         /**
+         * Whether the Sports tab's button is drawn in the taskbar. OFF by default
+         * — live sports on the user's IPTV playlist needs an IPTV feed to be
+         * useful, and it's a page a user goes looking for rather than one every
+         * install needs a button for.
+         */
+        val SPORTS_TAB = booleanPreferencesKey("showSportsTab")
+        /**
          * Whether the Websites tab's button is drawn in the taskbar. ON by
          * default — the user's saved WebView sites are a page of their own, so a
          * fresh install with added sites gets a button for them.
@@ -2829,6 +2836,21 @@ fun searchExceptionOnFlow(): Flow<Boolean> =
 
     suspend fun setWebsitesTab(shown: Boolean) {
         write("WEBSITES_TAB") { it[K.WEBSITES_TAB] = shown }
+    }
+
+    /**
+     * Whether the Sports tab's button is drawn in the taskbar. OFF by default —
+     * live sports on the user's IPTV playlist needs an IPTV feed to be useful,
+     * and it's a page a user goes looking for rather than one every install needs
+     * a button for.
+     */
+    fun sportsTabFlow(): Flow<Boolean> =
+        store.data.map { it[K.SPORTS_TAB] ?: true }.distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    suspend fun sportsTab(): Boolean = sportsTabFlow().first()
+
+    suspend fun setSportsTab(shown: Boolean) {
+        write("SPORTS_TAB") { it[K.SPORTS_TAB] = shown }
     }
 
     /**

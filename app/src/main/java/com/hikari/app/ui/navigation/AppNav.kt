@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LiveTv
@@ -126,6 +127,8 @@ import com.hikari.app.ui.screens.MyStuffScreen
 import com.hikari.app.ui.screens.YouTubeScreen
 import com.hikari.app.ui.screens.SearchScreen
 import com.hikari.app.ui.screens.SettingsScreen
+import com.hikari.app.ui.screens.SportsScreen
+import com.hikari.app.ui.screens.SportsGameScreen
 import com.hikari.app.ui.screens.StatsScreen
 import com.hikari.app.ui.screens.TelegramScreen
 import com.hikari.app.ui.screens.WebsitesScreen
@@ -220,6 +223,12 @@ object Routes {
      * with no channels should not carry a spare button.
      */
     const val TELEGRAM = "telegram"
+
+    /** The Sports tab: live games, scores, standings, and "what's on my TV" for the
+     *  leagues the user follows (see [com.hikari.app.ui.screens.SportsScreen]).
+     *  OFF by default and switched on in Settings → Taskbar buttons, like [IPTV]
+     *  and [STATS] — it needs an IPTV playlist to be useful. */
+    const val SPORTS = "sports"
 
     /** The Websites tab: the user's saved ad-free WebView sites (see
      *  [com.hikari.app.ui.screens.WebsitesScreen]). ON by default — any install
@@ -1042,6 +1051,7 @@ val BottomTabs = listOf(
     // at the top of this page (see [com.hikari.app.ui.screens.MyStuffScreen]),
     // and each keeps its own route so every existing link still lands right.
     BottomTab(Routes.LIBRARY, "My Stuff", Icons.Filled.VideoLibrary),
+    BottomTab(Routes.SPORTS, "Sports", Icons.Filled.FitnessCenter),
     BottomTab(Routes.YOUTUBE, "YouTube", Icons.Filled.PlayArrow),
     // Manga sits beside it as its own tab, ON by default (Settings → Taskbar
     // buttons switches it off). It is a whole reading surface (browse, follow,
@@ -1126,6 +1136,13 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
     // are closed.
     val websitesTabFlow = remember { app.store.websitesTabFlow() }
     val websitesTabOn by websitesTabFlow.collectAsState(initial = true)
+    // Sports is ON by default like Manga and Telegram (AppStore.sportsTabFlow
+    // seeds true): live games, scores and standings are the reason most
+    // people install an IPTV player, so the tab is one tap from a fresh
+    // install. A user who has no playlist turns it off in Settings →
+    // Taskbar buttons.
+    val sportsTabFlow = remember { app.store.sportsTabFlow() }
+    val sportsTabOn by sportsTabFlow.collectAsState(initial = true)
     val visibleTabs: Set<String> = buildSet {
         addAll(hiddenTabs)
         if (!iptvTabOn) add(Routes.IPTV)
@@ -1134,6 +1151,7 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
         if (!telegramTabOn) add(Routes.TELEGRAM)
         if (!multiViewTabOn) add(Routes.MULTI_VIEW)
         if (!websitesTabOn) add(Routes.WEBSITES)
+        if (!sportsTabOn) add(Routes.SPORTS)
     }
     // How the bar itself is drawn (Settings → App Layout → Taskbar & navigation).
     val navStyleFlow = remember { app.store.navStyleFlow() }
@@ -1487,6 +1505,16 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
             composable(Routes.DOWNLOADS) { MyStuffScreen(nav, MyStuff.DOWNLOADS) }
             composable(Routes.YOUTUBE) { YouTubeScreen(nav) }
             composable(Routes.IPTV) { IptvScreen(nav) }
+            composable(Routes.SPORTS) { SportsScreen(nav) }
+            composable(
+                route = "sports-game:{eventId}",
+                arguments = listOf(
+                    navArgument("eventId") { type = NavType.StringType },
+                )
+            ) { entry ->
+                val eventId = entry.arguments?.getString("eventId").orEmpty()
+                SportsGameScreen(nav, eventId)
+            }
             composable(
                 route = Routes.IPTV_PLAYLIST,
                 arguments = listOf(
