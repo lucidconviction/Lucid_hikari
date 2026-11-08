@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.GridView
@@ -124,6 +125,8 @@ import com.hikari.app.ui.screens.ScraperReaderScreen
 import com.hikari.app.ui.screens.MangaScreen
 import com.hikari.app.ui.screens.MyStuff
 import com.hikari.app.ui.screens.MyStuffScreen
+import com.hikari.app.music.MusicPlayerScreen
+import com.hikari.app.music.MusicScreen
 import com.hikari.app.ui.screens.YouTubeScreen
 import com.hikari.app.ui.screens.SearchScreen
 import com.hikari.app.ui.screens.SettingsScreen
@@ -155,6 +158,10 @@ object Routes {
     /** YouTube — a tab where the user pastes a YouTube URL and Hikari resolves
      *  it to a playable stream via the innerTube API (same technique as Nuvio). */
     const val YOUTUBE = "youtube"
+    /** The Music tab: charts/search/browse/radio/library and its own player. */
+    const val MUSIC = "music"
+    /** The full-screen Now Playing page; Back returns to the Music tab. */
+    const val MUSIC_PLAYER = "music-player"
     /**
      * The IPTV tab. Hidden by default — it appears in the taskbar only once the
      * user switches it on in Settings → Taskbar buttons (see
@@ -1054,6 +1061,10 @@ val BottomTabs = listOf(
     BottomTab(Routes.LIBRARY, "My Stuff", Icons.Filled.VideoLibrary),
     BottomTab(Routes.SPORTS, "Sports", Icons.Filled.FitnessCenter),
     BottomTab(Routes.YOUTUBE, "YouTube", Icons.Filled.PlayArrow),
+    // Music: the ported streaming page (charts, search, radio, library and a
+    // persistent player). ON by default like YouTube; a user who does not
+    // listen can switch the button off in Settings → Taskbar buttons.
+    BottomTab(Routes.MUSIC, "Music", Icons.Filled.MusicNote),
     // Manga sits beside it as its own tab, ON by default (Settings → Taskbar
     // buttons switches it off). It is a whole reading surface (browse, follow,
     // read) rather than "something to watch", so it does not belong in the
@@ -1505,6 +1516,8 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
             composable(Routes.HISTORY) { MyStuffScreen(nav, MyStuff.HISTORY) }
             composable(Routes.DOWNLOADS) { MyStuffScreen(nav, MyStuff.DOWNLOADS) }
             composable(Routes.YOUTUBE) { YouTubeScreen(nav) }
+            composable(Routes.MUSIC) { MusicScreen(nav) }
+            composable(Routes.MUSIC_PLAYER) { MusicPlayerScreen(onBack = { nav.popBackStack() }) }
             composable(Routes.IPTV) { IptvScreen(nav) }
             composable(Routes.SPORTS) { SportsScreen(nav) }
             composable(
