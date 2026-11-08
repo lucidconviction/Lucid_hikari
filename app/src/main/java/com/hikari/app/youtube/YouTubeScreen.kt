@@ -502,7 +502,7 @@ private fun VideoCard(item: YtItem, modifier: Modifier, onClick: () -> Unit) {
     Column(modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick)) {
         Box(Modifier.fillMaxWidth().aspectRatio(if (item.isShorts) 9f / 16f else 16f / 9f).clip(RoundedCornerShape(12.dp)).background(Color(0xFF222222))) {
             AsyncImage(
-                model = item.thumbnail,
+                model = item.thumbnailOrFallback(),
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,

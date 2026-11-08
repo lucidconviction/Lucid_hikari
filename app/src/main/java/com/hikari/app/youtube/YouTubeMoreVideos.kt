@@ -226,7 +226,7 @@ private fun MoreVideoRow(
             contentAlignment = Alignment.Center,
         ) {
             AsyncImage(
-                model = item.thumbnail,
+                model = item.thumbnailOrFallback(),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),

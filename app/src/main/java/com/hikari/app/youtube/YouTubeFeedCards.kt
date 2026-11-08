@@ -121,6 +121,11 @@ internal fun LazyGridState.previewCandidates(): List<PreviewCandidate> {
 /** List item keys of video cards start with this, so the one in view can be told apart from headers and spinners. */
 internal const val VIDEO_KEY_PREFIX = "v:"
 
+/** The video's own thumbnail; YouTube's still-image address when the feed didn't carry one. */
+internal fun YtItem.thumbnailOrFallback(): String? =
+    thumbnail?.takeIf { it.isNotBlank() }
+        ?: videoId?.takeIf { it.isNotBlank() }?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" }
+
 /**
  * A full-width card like the YouTube app's: the whole thumbnail, then the channel's initial, the title and the
  * details. When [active] and [resolvePreview] finds a stream, a muted preview plays over the thumbnail.
@@ -148,7 +153,7 @@ internal fun BigVideoCard(
                 .clip(RoundedCornerShape(12.dp)).background(Color(0xFF222222)),
         ) {
             AsyncImage(
-                model = item.thumbnail,
+                model = item.thumbnailOrFallback(),
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
@@ -207,7 +212,7 @@ private fun ChannelRow(item: YtItem, modifier: Modifier, onClick: () -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         AsyncImage(
-            model = item.thumbnail,
+            model = item.thumbnailOrFallback(),
             contentDescription = null,
             modifier = Modifier.size(64.dp).clip(CircleShape).background(Color(0xFF222222)),
             contentScale = ContentScale.Crop,
