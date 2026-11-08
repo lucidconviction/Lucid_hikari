@@ -5091,6 +5091,53 @@ class PlayerActivity : ComponentActivity() {
     private var sponsorFetchedFor: String? = null
     private var sponsorTicking = false
     private var lastSponsorSeekAt = 0L
+    private var ytQualityApplied = false
+
+    /**
+     * The YouTube tab's "Start at" quality/codec preference. Applied once, when
+     * the local DASH manifest's tracks arrive; the player's own quality menu
+     * still changes it afterwards.
+     */
+    private fun applyYouTubeQuality(tracks: Tracks) {
+        if (ytQualityApplied || !intent.getBooleanExtra("ytPlayback", false)) return
+        val group = tracks.groups.firstOrNull { it.type == C.TRACK_TYPE_VIDEO && it.length > 0 } ?: return
+        val formats = (0 until group.length).mapNotNull { i ->
+            runCatching { i to group.getTrackFormat(i) }.getOrNull()
+        }.filter { it.second.height > 0 }
+        if (formats.isEmpty()) return
+        val order = runCatching {
+            com.hikari.app.youtube.YouTubeSettings.codecMimeOrder(this)
+        }.getOrDefault(emptyList())
+        fun codecRank(mime: String?): Int =
+            order.indexOfFirst { mime?.startsWith(it, ignoreCase = true) == true }.let { if (it < 0) 99 else it }
+
+        val preferred = runCatching {
+            com.hikari.app.youtube.YouTubeSettings.preferredHeight(this)
+        }.getOrDefault(0)
+        val chosen = if (preferred <= 0) {
+            formats.maxWithOrNull(
+                compareBy<Pair<Int, androidx.media3.common.Format>> { it.second.height }
+                    .thenByDescending { codecRank(it.second.sampleMimeType) },
+            )
+        } else {
+            formats.filter { it.second.height <= preferred }.maxWithOrNull(
+                compareBy<Pair<Int, androidx.media3.common.Format>> { it.second.height }
+                    .thenByDescending { codecRank(it.second.sampleMimeType) },
+            ) ?: formats.minWithOrNull(
+                compareBy<Pair<Int, androidx.media3.common.Format>> { it.second.height }
+                    .thenByDescending { codecRank(it.second.sampleMimeType) },
+            )
+        } ?: return
+        runCatching {
+            val p = player ?: return
+            p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
+                .setOverrideForType(
+                    TrackSelectionOverride(group.mediaTrackGroup, ImmutableList.of(chosen.first)),
+                )
+                .build()
+            ytQualityApplied = true
+        }
+    }
 
     private fun startSponsorBlockIfNeeded() {
         if (!intent.getBooleanExtra("ytPlayback", false)) return
@@ -15389,6 +15436,7 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
             // A source rendered through the video-effects pipeline never gets an
             // onVideoSizeChanged, so take the size from the video track itself.
             videoFormatSize(tracks)?.let { (w, h) -> onKnownVideoSize(w, h) }
+            applyYouTubeQuality(tracks)
             applyVideoEnhance()
             // Re-assert the booster gain after a track change (cheap and
             // idempotent — the stage itself survives in the sink).
