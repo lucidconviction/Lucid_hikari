@@ -1461,7 +1461,8 @@ class PlayerActivity : ComponentActivity() {
     private var topIconSizeDp = 24
     /** The top-bar pills, sized by [topIconSizeDp] instead of [iconOnlySizeDp]. */
     private val topPillIds = setOf(
-        R.id.fav_btn, R.id.download_btn, R.id.pip_btn, R.id.options_btn, R.id.lock_btn
+        R.id.fav_btn, R.id.download_btn, R.id.pip_btn, R.id.mini_btn,
+        R.id.options_btn, R.id.lock_btn
     )
     /** Large left-side TV panels are opt-in from Settings → Player. */
     private var tvPanelsEnabled = false
@@ -2555,6 +2556,7 @@ class PlayerActivity : ComponentActivity() {
             pipBtn?.visibility = View.GONE
         }
         setupYouTubeMoreVideos()
+        findViewById<TextView>(R.id.mini_btn)?.setOnClickListener { enterMiniPlayer() }
 
         nextBtn?.setOnClickListener {
             if (currentIndex + 1 < sources.size) {
@@ -3435,6 +3437,36 @@ class PlayerActivity : ComponentActivity() {
         )
         playSource(0)
         ytMoreButton?.invoke()
+    }
+
+    /**
+     * In-app picture-in-picture: hand the current source and position to the
+     * floating window hosted by the app root, then close this full-screen
+     * player. The floating window can be dragged and pinched, and taps expand
+     * back into this player.
+     */
+    private fun enterMiniPlayer() {
+        val p = player ?: return
+        val src = sources.getOrNull(currentIndex) ?: return
+        if (p.currentTracks.groups.none { it.type == C.TRACK_TYPE_VIDEO }) {
+            Toast.makeText(this, I18n.t("No video track to keep in the window"), Toast.LENGTH_SHORT).show()
+            return
+        }
+        com.hikari.app.player.MiniPlayerStore.show(
+            com.hikari.app.player.MiniPlayerStore.Item(
+                title = intent.getStringExtra("title").orEmpty().ifBlank { src.name },
+                url = src.url,
+                headers = src.headers,
+                isM3u8 = src.isM3u8,
+                isMpd = src.isMpd,
+                poster = intent.getStringExtra("histPoster")?.takeIf { it.isNotBlank() }
+                    ?: src.thumbnail,
+                positionMs = p.currentPosition,
+                sourcesJson = intent.getStringExtra("sources").orEmpty(),
+                currentIndex = currentIndex,
+            ),
+        )
+        finish()
     }
 
     /** Enters picture-in-picture mode (SDK 26+). The window is sized to the

@@ -1808,5 +1808,10 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
                 }
             }
         }
+
+        // In-app picture-in-picture from the player's "Mini" pill. It floats
+        // over every tab, can be dragged and pinched, and taps through to the
+        // full player. Draw it last so it is above the taskbar/rail.
+        com.hikari.app.ui.MiniPlayerHost()
     }
 }

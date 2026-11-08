@@ -175,6 +175,12 @@
           android:contentDescription="@string/cd_pip" />
 
       <TextView
+          android:id="@+id/mini_btn"
+          style="@style/HikariPill"
+          android:text="Mini"
+          android:contentDescription="Play in a floating in-app window" />
+
+      <TextView
           android:id="@+id/options_btn"
           style="@style/HikariPill"
           android:drawableStart="@drawable/ic_settings"
