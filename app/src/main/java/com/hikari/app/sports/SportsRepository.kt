@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -53,6 +54,12 @@ object SportsRepository {
     val matching = MutableStateFlow(false)
     val problem = MutableStateFlow<String?>(null)
     val standings = MutableStateFlow<Map<String, SportsStandings.StandingsView>>(emptyMap())
+
+    /** Every channel the last match ran against, for "watch on…" lookups. */
+    val channels = MutableStateFlow<List<com.hikari.app.data.IptvChannel>>(emptyList())
+
+    /** eventId -> the scoring plays, fetched on demand by the game page. */
+    private val summaryCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<ScoringPlay>>>()
 
     private val viewing = MutableStateFlow(false)
     private val refreshJob = SupervisorJob()
@@ -121,15 +128,39 @@ object SportsRepository {
                 }
                 events.value = newEvents
                 known.value = newKnown
-                // Match to channels (will be called with current IPTV channels from UI)
-                // loadMatches() is called from UI when channels are available
-                // Load standings for followed leagues
+                channels.value.takeIf { it.isNotEmpty() }?.let { chans ->
+                    matches.value = SportsMatcher.match(newEvents, chans)
+                }
                 loadStandings()
             } catch (e: Exception) {
                 problem.value = "Failed to load: ${e.message}"
             } finally {
                 loading.value = false
                 mutex.unlock()
+            }
+        }
+    }
+
+    /**
+     * Gather the user's channels (IPTV playlists plus the ones imported from
+     * Extensions/addons) and match them to the events. The Sports tab can be
+     * opened before the IPTV tab has ever loaded, so it asks for them itself.
+     */
+    fun ensureChannels(ctx: Context, force: Boolean = false) {
+        if (!force && channels.value.isNotEmpty()) return
+        scope.launch {
+            val app = ctx.applicationContext as? com.hikari.app.HikariApp ?: return@launch
+            val playlists = app.providers.providers.value
+                .filterIsInstance<com.hikari.app.providers.IptvProvider>()
+            if (playlists.isEmpty()) return@launch
+            val list = com.hikari.app.providers.gatherIptvChannels(playlists, force)
+            if (list.isEmpty()) return@launch
+            channels.value = list
+            matching.value = true
+            try {
+                matches.value = SportsMatcher.match(events.value, list)
+            } finally {
+                matching.value = false
             }
         }
     }
@@ -142,6 +173,8 @@ object SportsRepository {
 
     /** Match current events to the given IPTV channels. */
     fun matchChannels(channels: List<com.hikari.app.data.IptvChannel>) {
+        if (channels.isEmpty()) return
+        this.channels.value = channels
         scope.launch {
             matching.value = true
             try {
@@ -151,6 +184,21 @@ object SportsRepository {
                 matching.value = false
             }
         }
+    }
+
+    /**
+     * The scoring plays for [event], newest page first. Cached for a few
+     * minutes while a game is live, much longer once it is over.
+     */
+    suspend fun summaryFor(event: SportsEvent): List<ScoringPlay> {
+        val league = SportsCatalog.league(event.leagueId) ?: return emptyList()
+        val espnId = event.espnId ?: return emptyList()
+        val cached = summaryCache[event.id]
+        val ttl = if (event.state == GameState.LIVE) 30_000L else 10 * 60_000L
+        if (cached != null && LiveTvClock.nowMs() - cached.first < ttl) return cached.second
+        val plays = runCatching { SportsFeeds.summary(league, espnId) }.getOrDefault(emptyList())
+        summaryCache[event.id] = LiveTvClock.nowMs() to plays
+        return plays
     }
 
     /** Toggle follow for a team. */
@@ -240,17 +288,22 @@ object SportsRepository {
         android.util.Log.d("Hikari/Sports", "Loading events for ${activeLeagues.size} active leagues: ${activeLeagues.joinToString { it.id }}")
         val allEvents = mutableListOf<SportsEvent>()
 
-        // Load scoreboards for each active league in parallel
+        // Load scoreboards for each active league in parallel, but not all at
+        // once: ESPN starts refusing requests when a whole region's leagues are
+        // fired simultaneously.
+        val gate = kotlinx.coroutines.sync.Semaphore(6)
         coroutineScope {
             activeLeagues.map { league ->
                 async {
-                    try {
-                        val evs = loadLeagueEvents(league)
-                        android.util.Log.d("Hikari/Sports", "Loaded ${evs.size} events for ${league.id}")
-                        evs
-                    } catch (e: Exception) {
-                        android.util.Log.e("Hikari/Sports", "Failed to load events for ${league.id}", e)
-                        emptyList()
+                    gate.withPermit {
+                        try {
+                            val evs = loadLeagueEvents(league)
+                            android.util.Log.d("Hikari/Sports", "Loaded ${evs.size} events for ${league.id}")
+                            evs
+                        } catch (e: Exception) {
+                            android.util.Log.e("Hikari/Sports", "Failed to load events for ${league.id}", e)
+                            emptyList()
+                        }
                     }
                 }
             }.awaitAll().forEach { allEvents.addAll(it) }
@@ -277,11 +330,18 @@ object SportsRepository {
     private suspend fun loadLeagueEvents(league: League): List<SportsEvent> {
         if (league.guideOnly) return loadGuideOnlyEvents(league)
         if (league.espnPath == null) return emptyList()
-        
-        // Fetch Yesterday, Today, and Tomorrow individually to avoid HTTP 400 on ranges
-        val days = listOf(-1, 0, 1).map { SportsDates.dayKey(SportsDates.dayStart(it)) }
+
+        // One range request covers the whole sports window. Some ESPN paths
+        // answer a long range with an error, so a failed/empty range falls back
+        // to the three days around today.
+        val from = SportsDates.dayKey(SportsDates.dayStart(-DAYS_BACK))
+        val to = SportsDates.dayKey(SportsDates.dayStart(DAYS_AHEAD))
+        val range = runCatching { SportsFeeds.scoreboardRaw(league, from, to) }.getOrNull()
+        val ranged = range?.let { parseScoreboard(league, it) }.orEmpty()
+        if (ranged.isNotEmpty()) return ranged
+
+        val days = (-1..3).map { SportsDates.dayKey(SportsDates.dayStart(it)) }
         val out = mutableListOf<SportsEvent>()
-        
         coroutineScope {
             days.map { day ->
                 async {
@@ -289,42 +349,41 @@ object SportsRepository {
                         val raw = SportsFeeds.scoreboardDayRaw(league, day)
                         parseScoreboard(league, raw)
                     } catch (e: Exception) {
-                        android.util.Log.e("Hikari/Sports", "Error loading events for ${league.id} on $day", e)
                         emptyList()
                     }
                 }
             }.awaitAll().forEach { out.addAll(it) }
         }
-        
         return out.distinctBy { it.id }
     }
 
-    /** Load guide-only events (darts, snooker, wrestling) from sporting-events.org / TheSportsDB. */
+    /** Load guide-only events (darts, snooker, racing, wrestling) from the fixtures feeds. */
     private suspend fun loadGuideOnlyEvents(league: League): List<SportsEvent> {
-        return when (league.fixtureSlug) {
-            "darts" -> loadDartsEvents(league)
-            "snooker" -> loadSnookerEvents(league)
-            else -> loadWrestlingEvents(league)
+        return when {
+            league.fixtureSlug != null -> loadFixtureEvents(league)
+            league.id.startsWith("guide/wwe") || league.id.startsWith("guide/aew") || league.id == "guide/wrestling" ->
+                loadWrestlingEvents(league)
+            else -> emptyList()
         }
     }
 
-    /** Load darts events from sporting-events.org. */
-    private suspend fun loadDartsEvents(league: League): List<SportsEvent> {
-        val raw = SportsFeeds.fixturesRaw(league.fixtureSlug!!)
+    /** sporting-events.org fixtures: title, start and (when given) a live flag. */
+    private suspend fun loadFixtureEvents(league: League): List<SportsEvent> {
+        val raw = runCatching { SportsFeeds.fixturesRaw(league.fixtureSlug!!) }.getOrNull() ?: return emptyList()
         val o = JSONObject(raw)
         val events = o.optJSONArray("events") ?: return emptyList()
         val out = mutableListOf<SportsEvent>()
         (0 until events.length()).forEach { i ->
             val e = events.optJSONObject(i) ?: return@forEach
             val startMs = SportsDates.parseIso(e.optString("start")) ?: return@forEach
-            val title = e.optString("title")
+            val title = e.optString("title").takeIf { it.isNotBlank() } ?: return@forEach
             val state = when {
                 startMs > LiveTvClock.nowMs() -> GameState.PRE
                 e.optBoolean("live", false) -> GameState.LIVE
                 else -> GameState.POST
             }
             out += SportsEvent(
-                id = "darts-${e.optString("id")}",
+                id = "fixture-${league.id}-${e.optString("id").ifBlank { startMs.toString() }}",
                 leagueId = league.id,
                 startMs = startMs,
                 hasTime = true,
@@ -335,40 +394,8 @@ object SportsRepository {
                 away = null,
                 home = null,
                 source = EventSource.FIXTURES,
-                espnId = null
-            )
-        }
-        return out
-    }
-
-    /** Load snooker events from sporting-events.org. */
-    private suspend fun loadSnookerEvents(league: League): List<SportsEvent> {
-        val raw = SportsFeeds.fixturesRaw(league.fixtureSlug!!)
-        val o = JSONObject(raw)
-        val events = o.optJSONArray("events") ?: return emptyList()
-        val out = mutableListOf<SportsEvent>()
-        (0 until events.length()).forEach { i ->
-            val e = events.optJSONObject(i) ?: return@forEach
-            val startMs = SportsDates.parseIso(e.optString("start")) ?: return@forEach
-            val title = e.optString("title")
-            val state = when {
-                startMs > LiveTvClock.nowMs() -> GameState.PRE
-                e.optBoolean("live", false) -> GameState.LIVE
-                else -> GameState.POST
-            }
-            out += SportsEvent(
-                id = "snooker-${e.optString("id")}",
-                leagueId = league.id,
-                startMs = startMs,
-                hasTime = true,
-                state = state,
-                title = title,
-                subtitle = null,
-                status = if (state == GameState.LIVE) "Live" else if (state == GameState.POST) "Final" else "Upcoming",
-                away = null,
-                home = null,
-                source = EventSource.FIXTURES,
-                espnId = null
+                espnId = null,
+                about = e.optString("description").takeIf { it.isNotBlank() },
             )
         }
         return out
@@ -383,6 +410,13 @@ object SportsRepository {
         (0 until events.length()).forEach { i ->
             val e = events.optJSONObject(i) ?: return@forEach
             val title = e.optString("strEvent")
+            val lower = title.lowercase()
+            val forThisLeague = when (league.id) {
+                "guide/wwe" -> listOf("wwe", "smackdown", "raw", "nxt", "wrestlemania", "royal rumble", "summerslam", "survivor series").any { it in lower }
+                "guide/aew" -> "aew" in lower || "all elite" in lower
+                else -> true
+            }
+            if (!forThisLeague) return@forEach
             val dateStr = e.optString("dateEvent")
             val timeStr = e.optString("strTime")
             val startMs = SportsDates.parseIso("$dateStr${if (timeStr.isNotBlank()) "T$timeStr" else "T00:00"}Z") ?: return@forEach
@@ -397,7 +431,7 @@ object SportsRepository {
                 startMs = startMs,
                 hasTime = timeStr.isNotBlank(),
                 state = state,
-                title = SportsCatalog.wrestlingHeadline(title),
+                title = wrestlingHeadline(title),
                 subtitle = null,
                 status = if (state == GameState.LIVE) "Live" else if (state == GameState.POST) "Final" else "Upcoming",
                 away = null,
@@ -450,11 +484,14 @@ object SportsRepository {
                 return@forEach
             }
             val statusType = status.optJSONObject("type")
-            val stateName = statusType?.optString("name")
-            val state = when (stateName?.lowercase()) {
-                "status.scheduled", "status.time_scheduled", "status_scheduled", "status.time.scheduled" -> GameState.PRE
-                "status.in_progress", "status.halftime", "status.overtime", "status.in_progress", "status.inprogress", "status.in_progress", "status_live", "status.live" -> GameState.LIVE
-                "status.final", "status.completed", "status_full_time", "status_final", "status.final", "status.completed" -> GameState.POST
+            val stateName = statusType?.optString("name")?.lowercase().orEmpty()
+            val state = when {
+                stateName.contains("scheduled") || stateName.contains("pre") || stateName.contains("tbd") -> GameState.PRE
+                stateName.contains("progress") || stateName.contains("live") || stateName.contains("halftime") ||
+                    stateName.contains("overtime") || stateName.contains("shootout") || stateName.contains("delayed") -> GameState.LIVE
+                stateName.contains("final") || stateName.contains("full_time") || stateName.contains("full-time") ||
+                    stateName.contains("completed") || stateName.contains("fulltime") -> GameState.POST
+                stateName.contains("postponed") || stateName.contains("cancel") || stateName.contains("suspend") -> GameState.OFF
                 else -> GameState.OFF
             }
             
@@ -478,7 +515,12 @@ object SportsRepository {
             competition.optJSONArray("broadcasts")?.let { bc ->
                 (0 until bc.length()).forEach { j ->
                     bc.optJSONObject(j)?.let { b ->
-                        b.optJSONObject("media")?.optString("shortName")?.let { broadcasts += it }
+                        b.optJSONObject("media")?.optString("shortName")?.takeIf { it.isNotBlank() }?.let { broadcasts += it }
+                        b.optJSONArray("names")?.let { names ->
+                            (0 until names.length()).forEach { k ->
+                                names.optString(k).takeIf { it.isNotBlank() }?.let { broadcasts += it }
+                            }
+                        }
                     }
                 }
             }
@@ -533,12 +575,19 @@ object SportsRepository {
         val color = teamInfoObj.optString("color").let { if (it.isNotBlank()) it.toLongOrNull(16) ?: 0xFF2A2F3A else null }
         val altColor = teamInfoObj.optString("alternateColor").let { if (it.isNotBlank()) it.toLongOrNull(16) else null }
         val logo = teamInfoObj.optJSONArray("logos")?.optJSONObject(0)?.optString("href").takeIf { it != null && it.isNotBlank() }
-        val record = o.optString("records").let { parseRecord(it) }
+        val record = runCatching { o.optString("records").let { parseRecord(it) } }.getOrNull()
         val score = o.optString("score").takeIf { it.isNotBlank() }
         val winner = o.optBoolean("winner") == true
+        val periods = runCatching {
+            val arr = o.optJSONArray("linescores") ?: return@runCatching emptyList<String>()
+            (0 until arr.length()).mapNotNull { i ->
+                val v = arr.optJSONObject(i)?.optString("displayValue").orEmpty()
+                v.ifBlank { arr.optJSONObject(i)?.optString("value")?.takeIf { it.isNotBlank() } }
+            }
+        }.getOrDefault(emptyList())
         
         val team = TeamInfo(league.id, id, name, fullName, abbr, location, color, altColor, logo, record)
-        return Side(team, score, record, winner, !isAway)
+        return Side(team, score, record, winner, !isAway, periods)
     }
 
     private fun parseRecord(raw: String): String? {
@@ -555,77 +604,145 @@ object SportsRepository {
         return parts.joinToString(", ").takeIf { it.isNotBlank() }
     }
 
-    /** Load known events (all time, for My Sports historical view). */
+    /** Load known events: the current window plus each followed team's own schedule. */
     private suspend fun loadKnown(): List<SportsEvent> {
-        // For now, just return current events. A full implementation would cache more.
-        return events.value
+        val out = events.value.toMutableList()
+        val followedTeams = follows.value.teams
+        if (followedTeams.isEmpty()) return out
+        coroutineScope {
+            followedTeams.map { ft ->
+                async {
+                    runCatching { loadTeamSchedule(ft) }.getOrDefault(emptyList())
+                }
+            }.awaitAll().forEach { list ->
+                val ids = out.mapTo(HashSet()) { it.id }
+                list.forEach { if (ids.add(it.id)) out += it }
+            }
+        }
+        return out.sortedBy { it.startMs }
+    }
+
+    /** A followed team's fixture list from ESPN (past and upcoming). */
+    private suspend fun loadTeamSchedule(ft: FollowedTeam): List<SportsEvent> {
+        val league = SportsCatalog.league(ft.leagueId) ?: return emptyList()
+        val path = league.espnPath ?: return emptyList()
+        val raw = runCatching { SportsFeeds.teamScheduleRaw(path, ft.teamId, fixtures = true) }
+            .getOrNull()
+            ?.takeIf { it.isNotBlank() }
+            ?: runCatching { SportsFeeds.teamScheduleRaw(path, ft.teamId, fixtures = false) }
+                .getOrNull()
+            ?: return emptyList()
+        return runCatching { parseScoreboard(league, raw) }.getOrDefault(emptyList())
     }
 
     /** Load standings for followed leagues that have tables. */
     private fun loadStandings() {
         scope.launch {
-            val active = activeLeagues(settings.value, follows.value).filter { SportsCatalog.mayHaveTable(it) }
+            val followed = (follows.value.leagues + follows.value.pins).distinct().toSet()
+            val active = activeLeagues(settings.value, follows.value)
+                .filter { SportsCatalog.mayHaveTable(it) }
+                .filter { it.id in followed }
+                .ifEmpty {
+                    activeLeagues(settings.value, follows.value)
+                        .filter { SportsCatalog.mayHaveTable(it) }
+                        .take(4)
+                }
             val results = active.map { league ->
                 scope.async { loadLeagueStandings(league) }
             }.awaitAll()
             val map = results.filterNotNull().associateBy({ it.leagueId }, { it })
-            standings.value = map
+            standings.value = standings.value + map
         }
+    }
+
+    /** Load one league's table on demand (the league page). */
+    suspend fun ensureStandings(leagueId: String) {
+        if (standings.value.containsKey(leagueId)) return
+        val league = SportsCatalog.league(leagueId) ?: return
+        if (!SportsCatalog.mayHaveTable(league)) return
+        val view = runCatching { withContext(Dispatchers.IO) { loadLeagueStandings(league) } }.getOrNull() ?: return
+        standings.value = standings.value + (leagueId to view)
     }
 
     /** Load standings for a single league. */
     private suspend fun loadLeagueStandings(league: League): SportsStandings.StandingsView? {
         val path = league.espnPath ?: return null
-        val url = "https://site.api.espn.com/apis/site/v2/sports/$path/standings"
-        val raw = runCatching { Http.getStringQuiet(url) }.getOrNull() ?: return null
-        val parsed = parseStandings(league, raw) ?: return null
+        val divisions = path in setOf("football/nfl", "basketball/nba", "hockey/nhl", "baseball/mlb")
+        val url = "https://site.api.espn.com/apis/v2/sports/$path/standings" + if (divisions) "?level=3" else ""
+        val raw = runCatching { SportsPlatform.get(url) }.getOrNull() ?: return null
+        val tables = parseStandingsTables(league, raw)
+        if (tables.isEmpty()) return null
         return SportsStandings.StandingsView(
             leagueId = league.id,
             kind = SportsStandings.StandingsKind.REGULAR,
-            tables = listOf(parsed),
+            tables = tables,
             asOf = SportsDates.localIsoDate()
         )
     }
 
-    /** Parse ESPN standings JSON. */
-    private fun parseStandings(league: League, raw: String): SportsStandings.StandingsTable? {
+    /** Parse ESPN standings JSON into all the tables it carries (conferences, divisions, groups). */
+    private fun parseStandingsTables(league: League, raw: String): List<SportsStandings.StandingsTable> {
         val o = JSONObject(raw)
-        val children = o.optJSONArray("children") ?: return null
-        val rows = mutableListOf<SportsStandings.StandingsRow>()
-        
-        (0 until children.length()).forEach { i ->
-            val group = children.optJSONObject(i) ?: return@forEach
-            val standings = group.optJSONObject("standings")?.optJSONArray("entries") ?: return@forEach
-            (0 until standings.length()).forEach { j ->
-                val entry = standings.optJSONObject(j) ?: return@forEach
+        val tables = mutableListOf<SportsStandings.StandingsTable>()
+
+        fun parseEntries(group: JSONObject): List<SportsStandings.StandingsRow> {
+            val entries = group.optJSONObject("standings")?.optJSONArray("entries") ?: return emptyList()
+            return (0 until entries.length()).mapNotNull { j ->
+                val entry = entries.optJSONObject(j) ?: return@mapNotNull null
                 val teamObj = entry.optJSONObject("team")?.optJSONObject("team") ?: entry.optJSONObject("team")
                 val teamInfo = parseTeamInfo(teamObj, league)
-                val stats = entry.optJSONArray("stats") ?: return@forEach
-                var played = 0; var won = 0; var lost = 0; var tied = 0; var otl = 0; var pts = 0; var pct = 0f; var gf = 0; var ga = 0; var gd = 0
-                (0 until stats.length()).forEach { k ->
-                    val stat = stats.optJSONObject(k) ?: return@forEach
-                    val name = stat.optString("name").lowercase()
-                    val v = stat.optString("value")
-                    when (name) {
-                        "gamesplayed" -> played = v.toIntOrNull() ?: 0
-                        "wins" -> won = v.toIntOrNull() ?: 0
-                        "losses" -> lost = v.toIntOrNull() ?: 0
-                        "ties" -> tied = v.toIntOrNull() ?: 0
-                        "otlosses" -> otl = v.toIntOrNull() ?: 0
-                        "points" -> pts = v.toIntOrNull() ?: 0
-                        "winpercent" -> pct = v.toFloatOrNull() ?: 0f
-                        "pointsfor", "runsfor" -> gf = v.toIntOrNull() ?: 0
-                        "pointsagainst", "runsagainst" -> ga = v.toIntOrNull() ?: 0
-                        "pointdifferential", "rundifferential" -> gd = v.toIntOrNull() ?: 0
+                if (teamInfo.id.isBlank()) return@mapNotNull null
+                val stats = entry.optJSONArray("stats")
+                fun stat(vararg names: String): Int {
+                    if (stats == null) return 0
+                    for (k in 0 until stats.length()) {
+                        val stat = stats.optJSONObject(k) ?: continue
+                        val name = stat.optString("name").lowercase()
+                        if (name in names) {
+                            return stat.optString("value").toDoubleOrNull()?.toInt()
+                                ?: stat.optString("displayValue").toIntOrNull() ?: 0
+                        }
                     }
+                    return 0
                 }
-                rows += SportsStandings.StandingsRow(
-                    team = teamInfo, played = played, won = won, lost = lost, tied = tied, otl = otl,
-                    gf = gf, ga = ga, gd = gd, pts = pts, pct = pct
+                SportsStandings.StandingsRow(
+                    team = teamInfo,
+                    played = stat("gamesplayed", "games", "gp"),
+                    won = stat("wins", "w"),
+                    lost = stat("losses", "l"),
+                    tied = stat("ties", "t", "draws", "d"),
+                    otl = stat("otlosses", "otl"),
+                    gf = stat("pointsfor", "runsfor", "goalsfor", "pf", "gf"),
+                    ga = stat("pointsagainst", "runsagainst", "goalsagainst", "pa", "ga"),
+                    gd = stat("pointdifferential", "rundifferential", "goaldifferential", "gd"),
+                    pts = stat("points", "pts"),
+                    pct = stat("winpercent", "pct").toFloat(),
+                    streak = null,
                 )
             }
         }
-        return if (rows.isNotEmpty()) SportsStandings.StandingsTable(name = "", rows = rows) else null
+
+        val children = o.optJSONArray("children")
+        if (children != null && children.length() > 0) {
+            fun walk(node: JSONObject) {
+                val rows = parseEntries(node)
+                if (rows.isNotEmpty()) {
+                    tables += SportsStandings.StandingsTable(
+                        name = node.optString("name").takeIf { it.isNotBlank() } ?: "",
+                        rows = rows,
+                    )
+                    return
+                }
+                val kids = node.optJSONArray("children") ?: return
+                for (i in 0 until kids.length()) kids.optJSONObject(i)?.let { walk(it) }
+            }
+            for (i in 0 until children.length()) children.optJSONObject(i)?.let { walk(it) }
+        }
+        if (tables.isEmpty()) {
+            val rows = parseEntries(o)
+            if (rows.isNotEmpty()) tables += SportsStandings.StandingsTable(name = "", rows = rows)
+        }
+        return tables
     }
 
     /** Parse TeamInfo from ESPN team object. */
@@ -650,7 +767,7 @@ object SportsRepository {
         teamCache[league.id]?.let { return it }
         val path = league.espnPath ?: return emptyList()
         return try {
-            val raw = Http.getStringQuiet("https://site.api.espn.com/apis/site/v2/sports/$path/teams?limit=1000") ?: return emptyList()
+            val raw = SportsPlatform.get("https://site.api.espn.com/apis/site/v2/sports/$path/teams?limit=1000")
             val parsed = parseTeams(league, raw)
             teamCache[league.id] = parsed
             parsed
@@ -663,10 +780,16 @@ object SportsRepository {
     private fun parseTeams(league: League, raw: String): List<TeamInfo> {
         if (raw.isBlank()) return emptyList()
         val o = JSONObject(raw)
-        val teamsArr = o.optJSONArray("teams") ?: return emptyList()
+        val teamsArr = o.optJSONArray("teams")
+            ?: o.optJSONArray("sports")?.optJSONObject(0)
+                ?.optJSONArray("leagues")?.optJSONObject(0)
+                ?.optJSONArray("teams")
+            ?: return emptyList()
         val out = mutableListOf<TeamInfo>()
         (0 until teamsArr.length()).forEach { i ->
-            val t = teamsArr.optJSONObject(i) ?: return@forEach
+            val row = teamsArr.optJSONObject(i) ?: return@forEach
+            // ESPN nests the team in a "team" object in this endpoint.
+            val t = row.optJSONObject("team") ?: row
             val id = t.optString("id")
             if (id.isBlank()) return@forEach
             val name = t.optString("shortDisplayName").takeIf { it.isNotBlank() } ?: t.optString("name")
@@ -685,16 +808,18 @@ object SportsRepository {
 
     /** Active leagues based on settings and follows. */
     fun activeLeagues(settings: SportsSettings, follows: SportsFollows): List<League> {
-        val base = SportsCatalog.ordered(settings)
-        val region = settings.region.ifBlank { SportsPlatform.countryCode() }.uppercase()
-        val followedLeagues = follows.leagues + follows.teams.map { SportsCatalog.teamFamily(it.leagueId) }.distinct()
+        val followedLeagues = (
+            follows.leagues +
+                follows.teams.map { SportsCatalog.teamFamily(it.leagueId) } +
+                follows.leagues.flatMap { SportsCatalog.relatedLeagues(it) } +
+                follows.teams.flatMap { SportsCatalog.relatedLeagues(it.leagueId) }
+            ).distinct()
         val pinned = follows.pins
         val unpinned = follows.unpinned
-        
-        return base.filter { league ->
-            !settings.hiddenLeagues.contains(league.id) &&
-            (league.id in followedLeagues || league.id in pinned || league.regions.contains(region) || league.sport in SportsCatalog.sportsOrder(settings)) &&
-            league.id !in unpinned
+        return SportsCatalog.ordered(settings).filter { league ->
+            if (league.id in unpinned) return@filter false
+            val mine = league.id in followedLeagues || league.id in pinned
+            mine || SportsCatalog.shown(league, settings)
         }
     }
 

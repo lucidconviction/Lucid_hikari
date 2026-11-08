@@ -49,27 +49,77 @@ object SportsFeeds {
     /** Scoring plays for a game. */
     suspend fun summary(league: League, espnId: String): List<ScoringPlay> = parseSummary(summaryJson(league, espnId))
 
-    suspend fun summaryJson(league: League, espnId: String): JSONObject =
-        JSONObject(get("https://cdn.espn.com/core/${league.sport.name.lowercase()}/summary?xhr=1&gameId=$espnId"))
+    suspend fun summaryJson(league: League, espnId: String): JSONObject {
+        val path = league.espnPath ?: throw IllegalStateException("no summary for this league")
+        return JSONObject(get("https://site.api.espn.com/apis/site/v2/sports/$path/summary?event=$espnId"))
+    }
 
     /** Standings table as raw JSON text (returns null when the league doesn't have one). */
     suspend fun standingsRaw(url: String): String? = runCatching { get(url) }.getOrNull()
 
     private fun parseSummary(o: JSONObject): List<ScoringPlay> {
         val plays = mutableListOf<ScoringPlay>()
-        val periodTypes = o.optJSONArray("periods") ?: return plays
-        (0 until periodTypes.length()).forEach { i ->
-            val period = periodTypes.optJSONObject(i) ?: return@forEach
-            val playTypes = period.optJSONArray("plays") ?: return@forEach
-            (0 until playTypes.length()).forEach { j ->
-                val play = playTypes.optJSONObject(j) ?: return@forEach
-                plays.add(ScoringPlay(
-                    clock = play.optString("clock").takeIf { it.isNotBlank() } ?: play.optString("time"),
-                    teamAbbr = play.optString("teamAbbreviation").takeIf { it.isNotBlank() },
-                    text = play.optString("text"),
-                    awayScore = play.optString("awayScore").takeIf { it.isNotBlank() },
-                    homeScore = play.optString("homeScore").takeIf { it.isNotBlank() }
-                ))
+
+        fun periodLabel(n: Int): String = when (n) {
+            1 -> "Q1"; 2 -> "Q2"; 3 -> "Q3"; 4 -> "Q4"; 5 -> "OT"
+            else -> if (n > 0) "P$n" else ""
+        }
+
+        // Most ESPN sports put the scoring in one flat list.
+        o.optJSONArray("scoringPlays")?.let { a ->
+            (0 until a.length()).forEach { i ->
+                val p = a.optJSONObject(i) ?: return@forEach
+                val period = p.optJSONObject("period")?.optInt("number", 0) ?: 0
+                val clock = p.optJSONObject("clock")?.optString("displayValue").orEmpty()
+                val type = p.optJSONObject("scoringType")?.optString("abbreviation").orEmpty()
+                    .ifBlank { p.optJSONObject("type")?.optString("abbreviation").orEmpty() }
+                val team = p.optJSONObject("team")?.let {
+                    it.optString("abbreviation").ifBlank { it.optString("displayName") }
+                }
+                plays += ScoringPlay(
+                    clock = listOfNotNull(periodLabel(period).takeIf { it.isNotBlank() }, clock.takeIf { it.isNotBlank() }).joinToString(" "),
+                    teamAbbr = team?.takeIf { it.isNotBlank() },
+                    text = listOfNotNull(type.takeIf { it.isNotBlank() }, p.optString("text").takeIf { it.isNotBlank() }).joinToString(" · "),
+                    awayScore = p.opt("awayScore")?.toString()?.takeIf { it.isNotBlank() && it != "null" },
+                    homeScore = p.opt("homeScore")?.toString()?.takeIf { it.isNotBlank() && it != "null" },
+                )
+            }
+        }
+
+        // Hockey/baseball/basketball: every play, with the scoring ones flagged.
+        if (plays.isEmpty()) o.optJSONArray("plays")?.let { a ->
+            (0 until a.length()).forEach { i ->
+                val p = a.optJSONObject(i) ?: return@forEach
+                val scoring = p.optBoolean("scoringPlay", false)
+                if (!scoring) return@forEach
+                val clock = p.optJSONObject("clock")?.optString("displayValue").orEmpty()
+                val period = p.optJSONObject("period")?.optInt("number", 0) ?: 0
+                plays += ScoringPlay(
+                    clock = listOfNotNull(periodLabel(period).takeIf { it.isNotBlank() }, clock.takeIf { it.isNotBlank() }).joinToString(" "),
+                    teamAbbr = p.optJSONObject("team")?.optString("abbreviation")?.takeIf { it.isNotBlank() },
+                    text = p.optString("text"),
+                    awayScore = p.opt("awayScore")?.toString()?.takeIf { it.isNotBlank() && it != "null" },
+                    homeScore = p.opt("homeScore")?.toString()?.takeIf { it.isNotBlank() && it != "null" },
+                )
+            }
+        }
+
+        // Last resort: the periods' own play lists.
+        if (plays.isEmpty()) {
+            val periods = o.optJSONArray("periods") ?: return plays
+            (0 until periods.length()).forEach { i ->
+                val period = periods.optJSONObject(i) ?: return@forEach
+                val periodPlays = period.optJSONArray("plays") ?: return@forEach
+                (0 until periodPlays.length()).forEach { j ->
+                    val play = periodPlays.optJSONObject(j) ?: return@forEach
+                    plays += ScoringPlay(
+                        clock = play.optString("clock").takeIf { it.isNotBlank() } ?: play.optString("time"),
+                        teamAbbr = play.optString("teamAbbreviation").takeIf { it.isNotBlank() },
+                        text = play.optString("text"),
+                        awayScore = play.optString("awayScore").takeIf { it.isNotBlank() },
+                        homeScore = play.optString("homeScore").takeIf { it.isNotBlank() },
+                    )
+                }
             }
         }
         return plays

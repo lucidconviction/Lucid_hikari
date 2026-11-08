@@ -13,9 +13,8 @@ import android.os.IBinder
 import android.os.Looper
 
 /**
- * Keeps the app running while the YouTube sign-in page is open in the browser tab.
- * Without it Android treats the app as backgrounded and holds back its network access,
- * so the approval isn't noticed until you come back yourself.
+ * Keeps the app running while the YouTube sign-in page is open in the browser tab. Without it Android treats the app
+ * as backgrounded and holds back its network access, so the approval isn't noticed until you come back yourself.
  */
 class YouTubeSignInKeepAliveService : Service() {
     private val handler = Handler(Looper.getMainLooper())

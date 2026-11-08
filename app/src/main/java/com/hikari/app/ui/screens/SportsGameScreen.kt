@@ -1,7 +1,5 @@
 package com.hikari.app.ui.screens
 
-import android.content.Context
-import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -25,20 +23,16 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsNone
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.RemoveRedEye
-import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Divider
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -54,384 +48,465 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
-import com.hikari.app.data.IptvChannel
-import com.hikari.app.player.PlayerActivity
-import com.hikari.app.sports.CivilTime
+import com.hikari.app.sports.ChannelMatch
 import com.hikari.app.sports.GameState
-import com.hikari.app.sports.League
-import com.hikari.app.sports.LiveTvTimeZones
+import com.hikari.app.sports.ScoringPlay
+import com.hikari.app.sports.Side
 import com.hikari.app.sports.SportsCatalog
 import com.hikari.app.sports.SportsDates
 import com.hikari.app.sports.SportsEvent
 import com.hikari.app.sports.SportsRepository
-import com.hikari.app.sports.Side
-
+import com.hikari.app.sports.SportsStandings
+import com.hikari.app.sports.TeamInfo
+import com.hikari.app.ui.navigation.LocalTaskbarInset
 import kotlinx.coroutines.launch
+import android.text.format.DateFormat
 
 /**
- * Detail screen for a single sports event. Shows teams, score, status,
- * matched channels, and a play button for the best match.
+ * A game's page: the score, the channels showing it (from the IPTV playlists
+ * and extension/addon playlists, matched by team and network), the latest
+ * scoring, the league table, and remind.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SportsGameScreen(nav: androidx.navigation.NavHostController, eventId: String) {
     val context = LocalContext.current
     val events by SportsRepository.events.collectAsState()
+    val known by SportsRepository.known.collectAsState()
     val matches by SportsRepository.matches.collectAsState()
     val standings by SportsRepository.standings.collectAsState()
+    val event = remember(events, known, eventId) {
+        events.firstOrNull { it.id == eventId } ?: known.firstOrNull { it.id == eventId }
+    }
+    val league = event?.let { SportsCatalog.league(it.leagueId) }
+    var plays by remember(eventId) { mutableStateOf<List<ScoringPlay>>(emptyList()) }
+    var loadingPlays by remember(eventId) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val bottom = LocalTaskbarInset.current
+    val use24h = remember { DateFormat.is24HourFormat(context) }
 
-    val event = events.find { it.id == eventId } ?: return
-    val eventMatches = matches[eventId] ?: emptyList()
-
-    val league = SportsCatalog.league(event.leagueId)
-    val awayScore = event.away?.score?.takeIf { it.isNotBlank() } ?: "-"
-    val homeScore = event.home?.score?.takeIf { it.isNotBlank() } ?: "-"
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(league?.name ?: event.title, style = MaterialTheme.typography.headlineSmall) },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
-                    titleContentColor = MaterialTheme.colorScheme.onSurface
-                ),
-                navigationIcon = {
-                    IconButton(onClick = { nav.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
-                    }
-                }
-            )
+    LaunchedEffect(event?.id) {
+        val ev = event ?: return@LaunchedEffect
+        if (ev.espnId != null) {
+            loadingPlays = true
+            plays = SportsRepository.summaryFor(ev)
+            loadingPlays = false
         }
-    ) { padding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+    }
+    LaunchedEffect(event?.leagueId) {
+        event?.leagueId?.let { SportsRepository.ensureStandings(it) }
+    }
+
+    Column(modifier = Modifier.fillMaxSize().padding(bottom = bottom)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 12.dp, top = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Score section
-            item {
-                ScoreSection(
-                    away = event.away,
-                    home = event.home,
-                    state = event.state,
-                    status = event.status
+            IconButton(onClick = { nav.popBackStack() }) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+            }
+            Column(Modifier.weight(1f)) {
+                Text(
+                    league?.name ?: "Game",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
-            }
-
-            // Event info
-            if (event.subtitle?.isNotBlank() == true || event.note?.isNotBlank() == true) {
-                item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            event.subtitle?.let {
-                                Text(text = it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
-                                Spacer(modifier = Modifier.height(4.dp))
-                            }
-                            event.note?.let {
-                                Text(text = it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
-                    }
+                event?.let {
+                    Text(
+                        "${SportsDates.dayLabel(it.startMs)}${if (it.hasTime) " · ${startTime(it.startMs, use24h)}" else ""}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
-
-            // Channels section
-            if (eventMatches.isNotEmpty()) {
-                item {
-                    Text("Broadcast Channels", style = MaterialTheme.typography.titleMedium)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    eventMatches
-                        .filter { it.score >= 50 }
-                        .sortedByDescending { it.score }
-                        .forEach { match ->
-                            val sport = com.hikari.app.sports.SportsCatalog.league(event.leagueId)?.sport
-                            ChannelRow(
-                                channel = IptvChannel(
-                                    name = match.channelName,
-                                    group = "",
-                                    tvgId = null,
-                                    logo = match.logo,
-                                    url = "",
-                                    providerId = "",
-                                    country = ""
-                                ),
-                                score = match.score,
-                                how = match.how,
-                                logo = match.logo,
-                                sport = sport,
-                                onPlay = { launchChannel(context, it) }
-                            )
-                        }
-                }
+            if (league != null) {
+                TextButton(onClick = { nav.navigate("sports-league:${android.net.Uri.encode(league.id)}") }) { Text("League") }
             }
-
-            // Standings for this league
-            standings[event.leagueId]?.let { sv ->
-                sv.tables.firstOrNull()?.rows?.firstOrNull { row ->
-                    row.team.id == event.away?.team?.id || row.team.id == event.home?.team?.id
-                }?.let { row ->
-                    item {
-                        Text("Standings Position", style = MaterialTheme.typography.titleSmall)
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "Rank: ${row.played + row.won + row.lost + row.tied + row.otl}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                }
+        }
+        if (event == null) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("This game is no longer in the feed.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            return@Column
+        }
 
-            // Status section
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item { ScoreCard(event) }
+
             item {
-                StatusSection(state = event.state, status = event.status)
-            }
-
-            // Remind section
-            item {
-                val scope = rememberCoroutineScope()
-                var reminded by remember { mutableStateOf(SportsRepository.isReminded(event.id)) }
+                var reminded by remember(event.id) { mutableStateOf(SportsRepository.isReminded(event.id)) }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
                         .clickable {
                             scope.launch {
                                 SportsRepository.toggleRemind(event)
                                 reminded = SportsRepository.isReminded(event.id)
                             }
                         }
-                        .padding(vertical = 8.dp),
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Icon(
-                        imageVector = if (reminded) Icons.Filled.Notifications else Icons.Filled.NotificationsNone,
-                        contentDescription = "Remind",
-                        tint = if (reminded) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        if (reminded) Icons.Filled.Notifications else Icons.Filled.NotificationsNone,
+                        contentDescription = null,
+                        tint = if (reminded) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = if (reminded) "Reminder set" else "Remind me",
+                        if (reminded) "Reminder set" else "Remind me",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = if (reminded) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        color = if (reminded) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f),
                     )
-                }
-            }
-        }
-    }
-}
-
-private fun launchChannel(context: Context, channel: IptvChannel) {
-    val isM3u8 = channel.url.endsWith(".m3u8", ignoreCase = true)
-    val isMpd = channel.url.substringBefore('?').contains(".mpd", ignoreCase = true)
-    val sources = org.json.JSONArray().apply {
-        put(org.json.JSONObject()
-            .put("name", channel.name)
-            .put("url", channel.url)
-            .put("isM3u8", isM3u8)
-            .put("isMpd", isMpd)
-            .put("provider", "IPTV")
-            .put("providerId", channel.providerId)
-            .put("providerName", "")
-            .put("details", "")
-            .put("ytId", "")
-            .put("isTorrent", false)
-        )
-    }
-    val intent = Intent(context, PlayerActivity::class.java).apply {
-        putExtra("title", channel.name)
-        putExtra("sources", sources.toString())
-        putExtra("askServer", false)
-        putExtra("histProviderId", channel.providerId)
-    }
-    context.startActivity(intent)
-}
-
-@Composable
-private fun ScoreSection(away: Side?, home: Side?, state: GameState, status: String?) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f))
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Away team
-                TeamScoreSection(side = away, isHome = false)
-                // Score
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                ) {
-                    Text(
-                        text = "${away?.score?.takeIf { it.isNotBlank() } ?: "-"} - ${home?.score?.takeIf { it.isNotBlank() } ?: "-"}",
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                // Home team
-                TeamScoreSection(side = home, isHome = true)
-            }
-
-            // Status
-            if (status?.isNotBlank() == true) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    if (state == GameState.LIVE) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.error)
+                    if (event.hasTime && event.state == GameState.PRE) {
+                        Text(
+                            "at ${startTime(event.startMs, use24h)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                }
+            }
+
+            // ---- channels
+            val found = matches[event.id].orEmpty()
+            item {
+                Text("Watch on", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            }
+            if (event.broadcasts.isNotEmpty()) {
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        event.broadcasts.distinct().forEach { network ->
+                            Text(
+                                network,
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                            )
+                        }
+                    }
+                }
+            }
+            if (found.isEmpty()) {
+                item {
                     Text(
-                        text = status,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (state == GameState.LIVE) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                        "No channel in your playlists matches this game yet. Add the league's network channel in IPTV, or import a playlist in Extensions.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            } else {
+                items(found, key = { "${event.id}:${it.channelName}" }) { match ->
+                    ChannelRow(match)
+                }
+            }
+
+            // ---- latest scoring
+            if (plays.isNotEmpty()) {
+                item {
+                    Text("Latest scoring", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp))
+                }
+                items(plays.take(12), key = { "p:${it.clock}:${it.text}" }) { play ->
+                    ScoringRow(play)
+                }
+            } else if (loadingPlays) {
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        androidx.compose.material3.CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Text("Getting the latest plays…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+
+            // ---- table
+            val view = standings[event.leagueId]
+            if (view != null) {
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            view.tables.firstOrNull()?.name?.takeIf { it.isNotBlank() } ?: "Table",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { nav.navigate("sports-league:${android.net.Uri.encode(event.leagueId)}") }) { Text("Full table") }
+                    }
+                }
+                item {
+                    StandingsCard(
+                        rows = view.tables.firstOrNull()?.rows.orEmpty(),
+                        highlight = listOfNotNull(event.away?.team?.id, event.home?.team?.id).toSet(),
+                        limit = 10,
                     )
                 }
             }
+
+            // ---- about / broadcast
+            event.about?.takeIf { it.isNotBlank() }?.let { about ->
+                item {
+                    Text("About", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    Text(about, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 8, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            item { Spacer(Modifier.height(16.dp)) }
         }
     }
 }
 
 @Composable
-private fun TeamScoreSection(side: Side?, isHome: Boolean) {
-    Column(horizontalAlignment = if (isHome) Alignment.End else Alignment.Start) {
-        side?.team?.let { team ->
-            if (!team.logo.isNullOrBlank()) {
-                AsyncImage(
-                    model = team.logo,
-                    contentDescription = team.name,
-                    modifier = Modifier
-                        .size(32.dp)
-                        .clip(CircleShape),
-                    contentScale = androidx.compose.ui.layout.ContentScale.Crop
-                )
-            }
-            Text(
-                text = team.name,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            if (!team.abbr.isBlank()) {
+private fun ScoreCard(event: SportsEvent) {
+    val league = SportsCatalog.league(event.leagueId)
+    val ordered = remember(event, league) { league?.let { event.ordered(it.sport) } ?: event.sides }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                league?.let { LeagueMark(it, 22.dp) }
                 Text(
-                    text = team.abbr,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    league?.name ?: event.title,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
+                if (event.state == GameState.LIVE) {
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(MaterialTheme.colorScheme.error))
+                    Text("LIVE", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                }
+            }
+            if (ordered.isEmpty()) {
+                Text(event.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                event.subtitle?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                ) {
+                    ordered.forEachIndexed { index, side ->
+                        if (index > 0) {
+                            Text(
+                                if (event.hasScore) "–" else "v",
+                                style = MaterialTheme.typography.headlineSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        BigSide(side, event)
+                    }
+                }
+                event.status?.takeIf { it.isNotBlank() }?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (event.state == GameState.LIVE) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                val periods = ordered.flatMap { it.periods }
+                if (periods.any { it.isNotBlank() }) {
+                    HorizontalDivider()
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        ordered.forEach { side ->
+                            Text(
+                                side.periods.joinToString("  "),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+            event.standings.takeIf { it.isNotEmpty() }?.let { lines ->
+                HorizontalDivider()
+                lines.take(10).forEach { line ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(line.pos, style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(34.dp))
+                        Text(line.name, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        line.detail?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    }
+                }
+            }
+            event.situation?.takeIf { it.isNotBlank() }?.let {
+                HorizontalDivider()
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
 }
 
 @Composable
-private fun ChannelRow(
-    channel: IptvChannel,
-    score: Int,
-    how: String,
-    logo: String? = null,
-    sport: com.hikari.app.sports.Sport? = null,
-    onPlay: (IptvChannel) -> Unit
-) {
+private fun BigSide(side: Side, event: SportsEvent) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(120.dp)) {
+        AsyncImageOrMark(side.team, 52.dp)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            side.team.name,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = if (side.winner) FontWeight.Bold else FontWeight.Normal,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        )
+        if (event.hasScore) {
+            Text(
+                side.score.orEmpty(),
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        side.record?.let {
+            Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+        }
+    }
+}
+
+@Composable
+private fun AsyncImageOrMark(team: TeamInfo, size: androidx.compose.ui.unit.Dp) {
+    if (!team.logo.isNullOrBlank()) {
+        AsyncImage(
+            model = team.logo,
+            contentDescription = team.name,
+            modifier = Modifier.size(size).clip(CircleShape),
+            contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+        )
+    } else {
+        Box(
+            Modifier.size(size).clip(CircleShape).background(team.color?.let { Color(it.toInt()) } ?: MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(team.abbr.ifBlank { team.name.take(2) }.uppercase(), color = Color.White, style = MaterialTheme.typography.labelMedium)
+        }
+    }
+}
+
+@Composable
+private fun ChannelRow(match: ChannelMatch) {
+    val context = LocalContext.current
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onPlay(channel) }
-            .padding(4.dp),
-        shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f))
+            .clickable(enabled = match.channel != null) { match.channel?.let { playIptvChannel(context, it) } },
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)),
     ) {
         Row(
-            modifier = Modifier.padding(12.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            if (!logo.isNullOrBlank()) {
+            if (!match.logo.isNullOrBlank()) {
                 AsyncImage(
-                    model = logo,
+                    model = match.logo,
                     contentDescription = null,
                     modifier = Modifier.size(32.dp).clip(RoundedCornerShape(4.dp)),
-                    contentScale = androidx.compose.ui.layout.ContentScale.Fit
+                    contentScale = androidx.compose.ui.layout.ContentScale.Fit,
                 )
             } else {
+                Box(Modifier.size(32.dp), contentAlignment = Alignment.Center) { Text("📺") }
+            }
+            Column(Modifier.weight(1f)) {
+                Text(match.channelName, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
-                    text = sport?.icon ?: "📺",
-                    style = MaterialTheme.typography.headlineSmall,
-                    modifier = Modifier.size(32.dp),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    if (match.sure) "Likely showing this game" else "Possible match",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (match.sure) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = channel.name,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = "Match: $score%",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            if (match.channel != null) {
+                Icon(Icons.Filled.PlayArrow, contentDescription = "Play", tint = MaterialTheme.colorScheme.primary)
             }
         }
     }
 }
 
 @Composable
-private fun StatusSection(state: GameState, status: String?) {
-    val label = when (state) {
-        GameState.PRE -> "Upcoming"
-        GameState.LIVE -> "Live"
-        GameState.POST -> "Final"
-        else -> "TBD"
-    }
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
+private fun ScoringRow(play: ScoringPlay) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Icon(
-                imageVector = if (state == GameState.LIVE) Icons.Filled.RemoveRedEye else Icons.Filled.Schedule,
-                contentDescription = null,
-                tint = if (state == GameState.LIVE) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp)
-            )
+        Text(play.clock, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(44.dp))
+        play.teamAbbr?.let {
+            Text(it, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, modifier = Modifier.width(34.dp))
+        }
+        Text(play.text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+        if (play.awayScore != null || play.homeScore != null) {
             Text(
-                text = label + (if (status?.isNotBlank() == true) " · $status" else ""),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface
+                "${play.awayScore.orEmpty()}–${play.homeScore.orEmpty()}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
 }
 
-// Helper to look up standings rank - would need proper implementation
-private fun ordinal(teamId: String, table: com.hikari.app.sports.SportsStandings.StandingsTable): String {
-    val idx = table.rows.indexOfFirst { it.team.id == teamId }
-    return if (idx >= 0) "${idx + 1}" else "-"
+@Composable
+internal fun StandingsCard(
+    rows: List<SportsStandings.StandingsRow>,
+    highlight: Set<String> = emptySet(),
+    limit: Int = Int.MAX_VALUE,
+) {
+    if (rows.isEmpty()) return
+    val show = rows.take(limit)
+    val hasPts = rows.any { it.pts > 0 }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+    ) {
+        Column(Modifier.padding(vertical = 6.dp)) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+                Text("#", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(28.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Team", style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("W-L", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(52.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(if (hasPts) "PTS" else "PCT", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(38.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            show.forEachIndexed { i, row ->
+                val mine = row.team.id in highlight
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(if (mine) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
+                        .padding(horizontal = 12.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("${i + 1}", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(28.dp))
+                    Text(
+                        row.team.name,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = if (mine) FontWeight.Bold else FontWeight.Normal,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        if (row.pts > 0) "${row.won}-${row.lost}" else SportsStandings.record(row),
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.width(52.dp),
+                    )
+                    Text(
+                        if (hasPts) "${row.pts}" else if (row.pct > 0f) String.format(java.util.Locale.US, "%.3f", row.pct) else "—",
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.width(38.dp),
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+        }
+    }
 }

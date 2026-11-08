@@ -160,7 +160,9 @@ data class ChannelMatch(
     val programTitle: String?,
     val quality: String?,
     val catchup: Boolean,
-    val logo: String? = null
+    val logo: String? = null,
+    /** The actual playlist channel, so the game page can play it. */
+    val channel: com.hikari.app.data.IptvChannel? = null
 ) {
     val sure: Boolean get() = score >= 80
 }
@@ -349,14 +351,15 @@ data class SportsFollows(
                         SportsReminder(r.optString("e"), r.optString("t"), r.optLong("s"), if (r.has("a")) r.optBoolean("a") else null)
                     }
                 }.orEmpty()
+                val oldLeagues = o.optJSONArray("leagues")?.strings() ?: emptyList()
                 SportsFollows(
                     teams = teams,
-                    leagues = emptySet(),
+                    leagues = oldLeagues.toSet(),
                     words = o.optJSONArray("words")?.strings() ?: emptyList(),
                     reminders = reminders,
                     setUp = o.optBoolean("setUp", false),
                     // "Every game" leagues (from before there was one Follow) are followed leagues now.
-                    pins = (o.optJSONArray("pins")?.strings() ?: emptyList()) + (o.optJSONArray("leagues")?.strings() ?: emptyList()),
+                    pins = (o.optJSONArray("pins")?.strings() ?: oldLeagues).distinct(),
                     unpinned = o.optJSONArray("unpinned")?.strings()?.toSet() ?: emptySet(),
                     order = o.optJSONArray("order")?.strings() ?: emptyList()
                 )

@@ -129,6 +129,7 @@ import com.hikari.app.ui.screens.SearchScreen
 import com.hikari.app.ui.screens.SettingsScreen
 import com.hikari.app.ui.screens.SportsScreen
 import com.hikari.app.ui.screens.SportsGameScreen
+import com.hikari.app.ui.screens.SportsLeagueScreen
 import com.hikari.app.ui.screens.StatsScreen
 import com.hikari.app.ui.screens.TelegramScreen
 import com.hikari.app.ui.screens.WebsitesScreen
@@ -1512,8 +1513,17 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
                     navArgument("eventId") { type = NavType.StringType },
                 )
             ) { entry ->
-                val eventId = entry.arguments?.getString("eventId").orEmpty()
+                val eventId = Uri.decode(entry.arguments?.getString("eventId").orEmpty())
                 SportsGameScreen(nav, eventId)
+            }
+            composable(
+                route = "sports-league:{leagueId}",
+                arguments = listOf(
+                    navArgument("leagueId") { type = NavType.StringType },
+                )
+            ) { entry ->
+                val leagueId = Uri.decode(entry.arguments?.getString("leagueId").orEmpty())
+                SportsLeagueScreen(nav, leagueId)
             }
             composable(
                 route = Routes.IPTV_PLAYLIST,

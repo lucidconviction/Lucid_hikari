@@ -2604,6 +2604,19 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
     var allChannels by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
     var channelsFetched by remember { mutableStateOf(false) }
 
+    // Warm the channel list once so the Sports tab has something to match against,
+    // even when the user never opened a channel picker. This is also what brings
+    // IPTV providers imported through Extensions/addons into Sports.
+    LaunchedEffect(playlists) {
+        if (playlists.isNotEmpty() && allChannels.isEmpty()) {
+            allChannels = withContext(Dispatchers.IO) { gatherIptvChannels(playlists) }
+            if (allChannels.isNotEmpty()) {
+                com.hikari.app.sports.SportsRepository.matchChannels(allChannels)
+                channelsFetched = true
+            }
+        }
+    }
+
     fun ensureAllChannels() {
         if (channelsFetched) return
         channelsFetched = true

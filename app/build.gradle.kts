@@ -318,7 +318,27 @@ dependencies {
     // at runtime (e.g. AnikotoExtractors.extractMegaPlayUrl) — without it they
     // die with NoClassDefFoundError: com.google.gson.JsonObject.
     implementation("com.google.code.gson:gson:2.11.0")
+    // ---- SmartTube YouTube engine (MediaServiceCore, MIT) ----
+    // The engine behind the full YouTube tab (same one NuvioPlusIPTV uses):
+    // feeds, search, accounts, stream resolution. It was ported as the
+    // `mediaservicecore` modules so its Android-only JNI (j2v8) and Cronet
+    // stack come along unchanged.
+    implementation(project(":mediaservicecore:youtubeapi"))
+    implementation(project(":mediaservicecore:mediaserviceinterfaces"))
+    implementation(project(":mediaservicecore:sharedutils"))
+    implementation(project(":mediaservicecore:j2v8"))
+    // nanojson: the runtime copy comes from NewPipeExtractor (same classes);
+    // adding com.grack:nanojson as well would be a duplicate class.
+    // The engine exposes ReactiveX 2 observables; the YouTube view models
+    // bridge them to coroutines. (RxJava 1 above is a different package and
+    // is used by the manga/catalogue side.)
+    implementation("io.reactivex.rxjava2:rxjava:2.2.21")
+    implementation("io.reactivex.rxjava2:rxandroid:2.1.1")
+    // collectAsStateWithLifecycle for the YouTube screens.
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    // YouTube sign-in opens youtube.com/activate in an in-app Custom Tab.
+    implementation("androidx.browser:browser:1.8.0")
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
     implementation(libs.androidx.activity.compose)

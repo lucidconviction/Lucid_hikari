@@ -6,6 +6,7 @@ import android.app.Dialog
 import android.app.AppOpsManager
 import android.app.PictureInPictureParams
 import android.content.Context
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
 import android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -8266,6 +8267,7 @@ class PlayerActivity : ComponentActivity() {
      *  Movies, live channels and the last episode stay put; an already-running
      *  advance (or a switch the user just made) wins over a second ENDED event. */
     private fun onPlaybackEnded() {
+        if (intent.getBooleanExtra("ytPlayback", false)) ytEnded = true
         if (isFinishing || isDestroyed) return
         if (autoNextOn && channelSurfController != null && !autoNextRunning) {
             autoNextRunning = true
@@ -15285,25 +15287,11 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
             (exoView("exo_content_frame") as? AspectRatioFrameLayout)
                 ?.setAspectRatio(width.toFloat() / height.toFloat())
         }
+        // The player never changes orientation on its own. A stream starts (and
+        // plays) in whatever orientation the user is holding the phone in; the
+        // rotate button in the controls is the only thing that turns it. (F5's
+        // automatic rotation was removed on request.)
         if (autoRotated || userRotated) return
-        // Respect the user's auto-rotate setting — when disabled, keep the
-        // device's current orientation regardless of video aspect ratio.
-        if (!_autoRotatePlayer) return
-        // Skip auto-rotate before the stream has actually started playing —
-        // the video size is known early but the user is still watching in
-        // whatever orientation they held the phone in. Store the dimensions
-        // so we can apply rotation once play is confirmed.
-        if (!_hasStartedPlaying) {
-            pendingAutoRotateSize = Pair(width, height)
-            return
-        }
-        autoRotated = true
-        val landscape = width > height
-        requestedOrientation = if (landscape) {
-            SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-        } else {
-            SCREEN_ORIENTATION_PORTRAIT
-        }
     }
 
     private val listener = object : Player.Listener {
@@ -15401,22 +15389,11 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
                 onPlaybackEnded()
                 return
             }
-            // Mark that playback has started so auto-rotate can apply on subsequent starts
+            // Orientation is never changed when a stream starts: playback stays
+            // in the orientation the user is already holding the phone in.
             if (playWhenReady && playbackState == Player.STATE_READY) {
                 _hasStartedPlaying = true
-                // If we captured video dimensions before play started, apply
-                // the rotation now so the screen matches the content.
-                if (!autoRotated && !userRotated && pendingAutoRotateSize != null) {
-                    val (w, h) = pendingAutoRotateSize!!
-                    pendingAutoRotateSize = null
-                    autoRotated = true
-                    val landscape = w > h
-                    requestedOrientation = if (landscape) {
-                        SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                    } else {
-                        SCREEN_ORIENTATION_PORTRAIT
-                    }
-                }
+                pendingAutoRotateSize = null
             }
             if (playbackState == Player.STATE_READY) {
                 // Duration badge (total runtime) — known once media is ready.
@@ -17346,19 +17323,10 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
         // while an IPTV stream is playing (Settings → Playback). On phones,
         // always ignored on televisions (TVs do not rotate).
         if (!com.hikari.app.tv.TvMode.isTv) {
-            // Reset the "has started playing" flag so the first auto-rotate
-            // attempt after each onStart() is skipped — the stream has not
-            // actually started yet and we don't want to spin before media.
+            // Orientation stays exactly where the user is holding the phone.
+            // (F5 auto-rotation was removed on request — a stream must never
+            // spin the screen when it starts.)
             _hasStartedPlaying = false
-            runCatching { lifecycleScope.launch { maybeApplyAutoRotate() } }
-            // Cache the auto-rotate setting so [onKnownVideoSize] can read it
-            // without suspending.
-            val arStore = (applicationContext as com.hikari.app.HikariApp).store
-            runCatching {
-                lifecycleScope.launch {
-                    _autoRotatePlayer = arStore.autoRotatePlayer()
-                }
-            }
         }
         // The CloudStream Torrent engine resolves its cache dir from the
         // activity reference (throws "No activity" otherwise).
@@ -17427,7 +17395,42 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
         super.onStop()
     }
 
+    /** Whether the YouTube outcome has already been handed back to the tab. */
+    private var youtubeResultSent = false
+
+    /** The video played through to the end (for the YouTube tab's autoplay). */
+    private var ytEnded = false
+
+    /**
+     * The YouTube tab opens this player with `ytPlayback`: hand back where the
+     * video got to so the feed can carry its watched bar (and report to
+     * YouTube history when signed in). This has to happen in [finish], not
+     * onDestroy: the result is delivered when the activity finishes, and
+     * setting it during onDestroy — after that delivery — is too late.
+     */
+    private fun sendYouTubeResult() {
+        if (youtubeResultSent) return
+        if (!intent.getBooleanExtra("ytPlayback", false)) return
+        val p = player ?: return
+        youtubeResultSent = true
+        runCatching {
+            setResult(
+                RESULT_OK,
+                Intent()
+                    .putExtra("ytPosition", p.currentPosition)
+                    .putExtra("ytDuration", p.duration)
+                    .putExtra("ytEnded", ytEnded),
+            )
+        }
+    }
+
+    override fun finish() {
+        sendYouTubeResult()
+        super.finish()
+    }
+
     override fun onDestroy() {
+        sendYouTubeResult()
         stopBannerAnimators()
         recordProgress()
         flushWatchSeconds()

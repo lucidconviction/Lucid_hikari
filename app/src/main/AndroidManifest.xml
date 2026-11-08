@@ -426,6 +426,14 @@ android:name=".player.PlayerActivity"
             android:foregroundServiceType="dataSync"
             android:stopWithTask="false" />
 
+        <!-- Keeps the app alive while the YouTube sign-in page is open in the
+             browser tab; without it Android holds back the app's network access
+             and the approval isn't noticed until the user comes back. -->
+        <service
+            android:name="com.hikari.app.youtube.YouTubeSignInKeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
