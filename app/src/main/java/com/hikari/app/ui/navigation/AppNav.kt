@@ -1785,27 +1785,32 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
         // are occupied so the user knows what they have open at a glance.
         val mwStreams = MultiWindowStore.allStreams
         val isOnMultiView = tabRoute == Routes.MULTI_VIEW
-        if (mwStreams.isNotEmpty() && !isOnMultiView && showBar && !isTv) {
+        // As long as any multi-window stream is alive this floats over EVERY
+        // page (not just the tabs with the bottom bar): translucent dark disc,
+        // white outline, and only the RED count inside.
+        if (mwStreams.isNotEmpty() && !isOnMultiView) {
             val mwCount = mwStreams.size
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(end = 16.dp, bottom = if (showBar) 80.dp else 16.dp)
-                    .size(48.dp)
+                    .size(46.dp)
                     .clip(CircleShape)
-                    .background(Color(0xFFE53935))
+                    .background(Color(0x66101218))
                     .border(
-                        width = 1.dp,
-                        color = Color.White.copy(alpha = 0.5f),
+                        width = 1.5.dp,
+                        color = Color.White.copy(alpha = 0.92f),
                         shape = CircleShape,
                     )
                     .clickable { Routes.navigateTab(nav, Routes.MULTI_VIEW) },
                 contentAlignment = Alignment.Center,
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("MW", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                    Text("$mwCount", color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold)
-                }
+                Text(
+                    "$mwCount",
+                    color = Color(0xFFFF3B30),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                )
             }
         }
 

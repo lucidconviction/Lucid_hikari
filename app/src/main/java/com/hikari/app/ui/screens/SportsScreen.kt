@@ -1184,6 +1184,7 @@ private fun SportsReplaysTab() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val items by SportsReplays.items.collectAsState()
+    val replaySections by SportsReplays.sections.collectAsState()
     val loading by SportsReplays.loading.collectAsState()
     val problem by SportsReplays.problem.collectAsState()
     var filter by rememberSaveable { mutableStateOf<String?>(null) }
@@ -1199,7 +1200,7 @@ private fun SportsReplaysTab() {
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Fight replays", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            Text("Replays", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
             if (loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
             IconButton(onClick = { scope.launch { SportsReplays.ensureLoaded(force = true) } }) {
                 Icon(Icons.Filled.Refresh, contentDescription = "Refresh replays")
@@ -1209,21 +1210,22 @@ private fun SportsReplaysTab() {
             contentPadding = PaddingValues(horizontal = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            listOf<String?>(null, "ufc", "mma", "boxing").forEach { section ->
+            // One chip per sport that actually returned videos, in the
+            // archive's own reading order. "All" is the combined, date-sorted
+            // list — the fastest way to see what happened last night.
+            item {
+                FilterChip(
+                    selected = filter == null,
+                    onClick = { filter = null },
+                    label = { Text("All") },
+                )
+            }
+            replaySections.forEach { section ->
                 item {
                     FilterChip(
-                        selected = filter == section,
-                        onClick = { filter = section },
-                        label = {
-                            Text(
-                                when (section) {
-                                    null -> "All"
-                                    "ufc" -> "UFC"
-                                    "mma" -> "MMA"
-                                    else -> "Boxing"
-                                },
-                            )
-                        },
+                        selected = filter == section.key,
+                        onClick = { filter = section.key },
+                        label = { Text(section.label) },
                     )
                 }
             }
@@ -1263,7 +1265,7 @@ private fun SportsReplaysTab() {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
-                        if (picked.dateMs > 0) SportsDates.longDateLabel(picked.dateMs) else picked.section.uppercase(),
+                        if (picked.dateMs > 0) SportsDates.longDateLabel(picked.dateMs) else picked.sectionLabel.uppercase(),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1341,7 +1343,7 @@ private fun ReplayCard(replay: SportsReplays.Replay, onClick: () -> Unit) {
                     Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color.White)
                 }
                 Text(
-                    replay.section.uppercase(),
+                    replay.sectionLabel.uppercase(),
                     modifier = Modifier.align(Alignment.TopStart).padding(8.dp)
                         .clip(RoundedCornerShape(4.dp)).background(Color(0xCC000000))
                         .padding(horizontal = 6.dp, vertical = 2.dp),

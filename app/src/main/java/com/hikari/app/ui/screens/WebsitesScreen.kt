@@ -69,6 +69,7 @@ import com.hikari.app.HikariApp
 import com.hikari.app.data.Site
 import com.hikari.app.i18n.I18n
 import com.hikari.app.i18n.tr
+import com.hikari.app.web.WebAppShots
 import com.hikari.app.web.WebViewActivity
 import kotlinx.coroutines.launch
 
@@ -111,8 +112,17 @@ fun WebsitesScreen(nav: NavController) {
         return value
     }
 
+    /** Opens the name-only add dialog. The URL is the address bar's, as asked:
+     *  no second URL field to paste into. */
+    fun openAddDialog() {
+        addError = null
+        addName = ""
+        addUrl = urlInput.trim()
+        showAddDialog = true
+    }
+
     fun saveSite() {
-        val normalized = normalizeSiteUrl(addUrl)
+        val normalized = normalizeSiteUrl(addUrl.ifBlank { urlInput })
         if (normalized == null) {
             addError = I18n.t("Enter a website address, for example example.com")
             return
@@ -130,6 +140,7 @@ fun WebsitesScreen(nav: NavController) {
         showAddDialog = false
         addName = ""
         addUrl = ""
+        urlInput = ""
         addError = null
     }
 
@@ -145,14 +156,6 @@ fun WebsitesScreen(nav: NavController) {
                             contentDescription = if (isGrid) tr("List view") else tr("Grid view"),
                             tint = Color.White.copy(alpha = 0.8f),
                         )
-                    }
-                    IconButton(onClick = {
-                        addError = null
-                        addName = ""
-                        addUrl = urlInput.trim()
-                        showAddDialog = true
-                    }) {
-                        Icon(Icons.Filled.Add, contentDescription = tr("Add web app"), tint = Color.White.copy(alpha = 0.8f))
                     }
                 },
             )
@@ -215,24 +218,10 @@ fun WebsitesScreen(nav: NavController) {
                         .size(44.dp)
                         .background(Color.White.copy(alpha = 0.15f), RoundedCornerShape(22.dp))
                         .clickable {
-                            // Save whatever is in the address bar straight into
-                            // Web Apps, without going through the dialog.
-                            val normalized = normalizeSiteUrl(urlInput)
-                            if (normalized == null) {
-                                if (urlInput.isNotBlank()) {
-                                    android.widget.Toast.makeText(
-                                        context,
-                                        I18n.t("Enter a website address, for example example.com"),
-                                        android.widget.Toast.LENGTH_SHORT,
-                                    ).show()
-                                }
-                            } else {
-                                val host = runCatching { java.net.URI(normalized).host }.getOrNull()
-                                    .orEmpty().removePrefix("www.").ifBlank { normalized }
-                                app.appScope.launch { app.store.addSite(Site(host, normalized)) }
-                                urlInput = ""
-                                addError = null
-                            }
+                            // The + between the search bar and the globe saves
+                            // the site IN THE ADDRESS BAR: it asks only for a
+                            // name, never a second URL.
+                            openAddDialog()
                         },
                     contentAlignment = Alignment.Center,
                 ) {
@@ -293,12 +282,7 @@ fun WebsitesScreen(nav: NavController) {
                         )
                         Spacer(Modifier.height(16.dp))
                         Surface(
-                            onClick = {
-                                addError = null
-                                addName = ""
-                                addUrl = urlInput.trim()
-                                showAddDialog = true
-                            },
+                            onClick = { openAddDialog() },
                             shape = RoundedCornerShape(50),
                             color = androidx.compose.material3.MaterialTheme.colorScheme.primaryContainer,
                         ) {
@@ -356,18 +340,20 @@ fun WebsitesScreen(nav: NavController) {
             title = { Text(tr("Add web app")) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    // The URL is the one in the search bar, shown here read-only
+                    // so it is obvious what "+" is about to save.
+                    Text(
+                        addUrl.ifBlank { I18n.t("Paste the website address in the search bar first.") },
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        color = if (addUrl.isBlank()) androidx.compose.material3.MaterialTheme.colorScheme.error
+                        else Color.White.copy(alpha = 0.65f),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                     OutlinedTextField(
                         value = addName,
                         onValueChange = { addName = it },
                         label = { Text(tr("Web app name")) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(),
-                    )
-                    OutlinedTextField(
-                        value = addUrl,
-                        onValueChange = { addUrl = it },
-                        label = { Text(tr("Web app URL")) },
                         singleLine = true,
                         isError = addError != null,
                         supportingText = addError?.let { { Text(it) } },
@@ -428,6 +414,20 @@ private fun siteScreenshotUrl(url: String): String {
     return "https://s.wordpress.com/mshots/v1/$encoded?w=640&h=360"
 }
 
+/**
+ * A card's thumbnail model: the WebView's own capture when one exists, the
+ * mShots URL otherwise. The capture's cache key carries [version], because the
+ * file is overwritten in place on the next visit and a plain File model could
+ * otherwise be served from Coil's memory cache as the old page.
+ */
+private fun siteShotModel(context: android.content.Context, url: String, version: Long): Any {
+    val captured = WebAppShots.cachedFile(context, url) ?: return siteScreenshotUrl(url)
+    return coil.request.ImageRequest.Builder(context)
+        .data(captured)
+        .memoryCacheKey("webapp-shot:${WebAppShots.hostKey(url)}:$version")
+        .build()
+}
+
 @Composable
 fun SiteCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
     Surface(
@@ -440,7 +440,11 @@ fun SiteCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
         ) {
-            val shot = remember(site.url) { siteScreenshotUrl(site.url) }
+            val context = LocalContext.current
+            val shotVersion = WebAppShots.versionOf(site.url)
+            val shot = remember(site.url, shotVersion) {
+                siteShotModel(context, site.url, shotVersion)
+            }
             SubcomposeAsyncImage(
                 model = shot,
                 contentDescription = site.name,
@@ -505,10 +509,13 @@ fun SiteGridCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
         val host = runCatching { java.net.URI(site.url).host }.getOrNull() ?: site.url
         "https://www.google.com/s2/favicons?domain=$host&sz=64"
     }
-    val screenshotUrl = remember(site.url) {
-        // WordPress mShots renders the page (and caches the result); it is the
-        // keyless screenshot service that survives on slow mobile networks.
-        siteScreenshotUrl(site.url)
+    val context = LocalContext.current
+    val shotVersion = WebAppShots.versionOf(site.url)
+    val screenshotUrl = remember(site.url, shotVersion) {
+        // A capture from this WebView is the real page, taken after it fully
+        // loaded. Only a site that has never been opened falls back to mShots
+        // (keyless, but its cache can lag behind a fresh addition).
+        siteShotModel(context, site.url, shotVersion)
     }
     Surface(
         onClick = onOpen,

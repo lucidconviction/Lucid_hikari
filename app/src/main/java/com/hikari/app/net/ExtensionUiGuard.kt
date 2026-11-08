@@ -1,9 +1,13 @@
 package com.hikari.app.net
 
+import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.os.SystemClock
 import com.hikari.app.data.Logs
+import com.hikari.app.i18n.I18n
+import com.hikari.app.web.WebViewActivity
 
 /**
  * Keeps EXTENSIONS from opening external pages on their own — the enforcement
@@ -117,6 +121,63 @@ object ExtensionUiGuard {
         return false
     }
 
+    /**
+     * The version of [checkStartActivity] used by our Activity/Application
+     * overrides: guard first, then REROUTE an extension's browser page into
+     * Hikari's own WebView instead of the outside browser.
+     *
+     * Returns true when the caller may `super.startActivity(intent)`; false
+     * when the intent was blocked OR already handled in-app. An extension that
+     * asks for `ACTION_VIEW https://…` is the "Login" / "Verify" / "Read more"
+     * button inside a plugin — it already passed the user-gesture rule, and
+     * sending it to Chrome drops the session (cookies, the plugin's own
+     * referer) that the next step needs. Our OWN browser links are stamped via
+     * [runTrusted] and keep going to the user's real browser.
+     */
+    fun checkAndReroute(context: Context, intent: Intent?): Boolean {
+        if (!checkStartActivity(intent)) return false
+        if (intent == null || !isPluginBrowserIntent(intent)) return true
+        val url = intent.dataString ?: return true
+        return try {
+            val web = Intent(context, WebViewActivity::class.java).apply {
+                putExtra("url", url)
+                putExtra("title", I18n.t("Browser"))
+            }
+            // Starting an Activity from the Application context needs the new
+            // task flag. From an Activity it must NOT be set, or the WebView
+            // lands in a separate task and Back leaves the player behind.
+            if (context !is Activity) web.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(web)
+            Logs.log(
+                "Extensions",
+                "opened an extension's browser link in the in-app WebView: " +
+                    url.take(220),
+            )
+            false
+        } catch (e: Throwable) {
+            // The WebView refused to start (a finishing Activity, a broken
+            // context): fall back to the normal launch so the tap still lands
+            // somewhere instead of dying silently.
+            Logs.log(
+                "Extensions",
+                "in-app WebView for an extension link failed (" +
+                    (e.message ?: e.javaClass.simpleName) + "); opening externally",
+            )
+            true
+        }
+    }
+
+    /** A page an EXTENSION asked to open in an external browser. */
+    private fun isPluginBrowserIntent(intent: Intent): Boolean {
+        if (intent.action != Intent.ACTION_VIEW) return false
+        val scheme = intent.data?.scheme?.lowercase() ?: return false
+        if (scheme != "http" && scheme != "https") return false
+        val componentClass = runCatching { intent.component?.className }.getOrNull()
+        if (componentClass != null && componentClass.startsWith("com.hikari.app.")) return false
+        if (trusted.get() == true) return false
+        return hasPluginFrame(Thread.currentThread().stackTrace)
+    }
+
     /** Class prefixes that are never extension code: the framework, Kotlin, and
      *  every third-party library the app ships (networking, JSON, image
      *  loading, Guava...). A library frame between the Activity override and
@@ -225,15 +286,19 @@ object ExtensionUiGuard {
  * [ExtensionUiGuard]. Call from the overrides:
  *
  *     override fun startActivity(intent: Intent) {
- *         if (ExtensionUiGuardMixins.startAllowed(intent)) super.startActivity(intent)
+ *         if (ExtensionUiGuardMixins.startAllowed(this, intent)) super.startActivity(intent)
  *     }
  *     override fun startActivity(intent: Intent, options: Bundle?) {
- *         if (ExtensionUiGuardMixins.startAllowed(intent, options)) super.startActivity(intent, options)
+ *         if (ExtensionUiGuardMixins.startAllowed(this, intent, options)) super.startActivity(intent, options)
  *     }
  */
 object ExtensionUiGuardMixins {
-    fun startAllowed(intent: Intent?): Boolean = ExtensionUiGuard.checkStartActivity(intent)
+    fun startAllowed(context: Context, intent: Intent?): Boolean =
+        ExtensionUiGuard.checkAndReroute(context, intent)
 
-    fun startAllowed(intent: Intent?, @Suppress("UNUSED_PARAMETER") options: Bundle?): Boolean =
-        ExtensionUiGuard.checkStartActivity(intent)
+    fun startAllowed(
+        context: Context,
+        intent: Intent?,
+        @Suppress("UNUSED_PARAMETER") options: Bundle?,
+    ): Boolean = ExtensionUiGuard.checkAndReroute(context, intent)
 }

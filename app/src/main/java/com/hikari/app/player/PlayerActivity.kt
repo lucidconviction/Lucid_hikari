@@ -101,6 +101,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -1849,11 +1850,11 @@ class PlayerActivity : ComponentActivity() {
      * proxy crashes EVERY dialog — ClassCastException on WindowManagerImpl).
      */
     override fun startActivity(intent: android.content.Intent) {
-        if (com.hikari.app.net.ExtensionUiGuardMixins.startAllowed(intent)) super.startActivity(intent)
+        if (com.hikari.app.net.ExtensionUiGuardMixins.startAllowed(this, intent)) super.startActivity(intent)
     }
 
     override fun startActivity(intent: android.content.Intent, options: android.os.Bundle?) {
-        if (com.hikari.app.net.ExtensionUiGuardMixins.startAllowed(intent, options)) {
+        if (com.hikari.app.net.ExtensionUiGuardMixins.startAllowed(this, intent, options)) {
             super.startActivity(intent, options)
         }
     }
@@ -1950,8 +1951,9 @@ class PlayerActivity : ComponentActivity() {
         applySubtitleSize(subtitleScale)
         applySubtitlePosition(subtitlePosition)
         applySubtitleStyle()
-        // YouTube-style: fade the controls out after 3s instead of media3's 5s.
-        playerView?.controllerShowTimeoutMs = 3000
+        // Keep the overlay up long enough to read the title/pills and press a
+        // control: 7s (the stock 5s plus the 2s the inline labels need).
+        playerView?.controllerShowTimeoutMs = 7000
         // One synchronous hide for the top AND bottom bars. media3 1.7's
         // controller hides in STAGES (PlayerControlViewLayoutManager: the main
         // bars fade, then the whole view goes GONE a full ANIMATION_INTERVAL_MS
@@ -3378,7 +3380,9 @@ class PlayerActivity : ComponentActivity() {
                 if (!ytMoreOpen.value) button.visibility = View.GONE
             }
             ytMoreHideTask = hide
-            button.postDelayed(hide, 5_000L)
+            // Matches the extra overlay time: the button is a tap target, not
+            // a flash, so it stays reachable for 9s after the controls return.
+            button.postDelayed(hide, 9_000L)
         }
 
         button.setOnClickListener {
@@ -4801,6 +4805,23 @@ class PlayerActivity : ComponentActivity() {
     }
 
     /**
+     * Status-bar / display-cutout height at the top of the window.
+     *
+     * Immersive playback hides the bars, but a notch still covers the top
+     * edge; the real insets are authoritative and the framework's
+     * `status_bar_height` is the fallback for the moment before the decor is
+     * laid out (the first applyPlayerSkin in onCreate).
+     */
+    private fun statusBarTopPx(): Int {
+        val insets = runCatching { ViewCompat.getRootWindowInsets(window.decorView) }.getOrNull()
+        val bars = insets?.getInsets(WindowInsetsCompat.Type.statusBars())?.top ?: 0
+        val cutout = insets?.getInsets(WindowInsetsCompat.Type.displayCutout())?.top ?: 0
+        val resId = resources.getIdentifier("status_bar_height", "dimen", "android")
+        val resource = if (resId > 0) runCatching { resources.getDimensionPixelSize(resId) }.getOrDefault(0) else 0
+        return maxOf(bars, cutout, resource)
+    }
+
+    /**
      * Applies the Player UI skin (Settings → Player → Player UI) to the already
      * inflated controller. Called once from onCreate (after [applyAccentPalette]
      * would have run) and again from [applyControlLayout], because a pill that
@@ -4840,11 +4861,16 @@ class PlayerActivity : ComponentActivity() {
         // Floating decks (Neon): keep the panels clear of the screen edges, and
         // give the top bar a little headroom so the rounded chip never clips.
         val deckMargin = dp(spec.deckMarginDp)
+        // The player is immersive, but on a notched phone the display cutout
+        // still eats into the top edge (shortEdges keeps content under it):
+        // push the title bar below the status-bar/cutout height so its back
+        // button and title never sit behind the clock or the camera hole.
+        val statusInset = statusBarTopPx()
         for (bar in listOfNotNull(topBar, bottomBar)) {
             (bar.layoutParams as? ViewGroup.MarginLayoutParams)?.let { lp ->
                 lp.marginStart = deckMargin
                 lp.marginEnd = deckMargin
-                lp.topMargin = if (bar === topBar) deckMargin else 0
+                lp.topMargin = if (bar === topBar) deckMargin + statusInset else 0
                 lp.bottomMargin = if (bar === bottomBar) deckMargin else 0
                 bar.layoutParams = lp
             }

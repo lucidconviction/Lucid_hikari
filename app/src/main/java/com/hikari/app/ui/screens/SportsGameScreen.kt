@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -57,6 +58,8 @@ import com.hikari.app.sports.SportsDates
 import com.hikari.app.sports.SportsEvent
 import com.hikari.app.sports.SportsRepository
 import com.hikari.app.sports.SportsStandings
+import com.hikari.app.sports.SportsWatch
+import com.hikari.app.sports.SportsYouTube
 import com.hikari.app.sports.TeamInfo
 import com.hikari.app.ui.navigation.LocalTaskbarInset
 import kotlinx.coroutines.launch
@@ -83,6 +86,34 @@ fun SportsGameScreen(nav: androidx.navigation.NavHostController, eventId: String
     val scope = rememberCoroutineScope()
     val bottom = LocalTaskbarInset.current
     val use24h = remember { DateFormat.is24HourFormat(context) }
+
+    // Live/upcoming: streams found by searching every installed extension,
+    // addon and IPTV playlist for this fixture (the IPTV channel matches are
+    // already shown directly below "Watch on").
+    var watchStreams by remember(eventId) { mutableStateOf<List<SportsWatch.Playable>>(emptyList()) }
+    var watchLoading by remember(eventId) { mutableStateOf(false) }
+    // Promotional clips before the event; highlights/interviews after it.
+    // Both come from the YouTube tab's engine (SportsYouTube).
+    var ytClips by remember(eventId) { mutableStateOf<List<SportsYouTube.Clip>>(emptyList()) }
+    var ytLoading by remember(eventId) { mutableStateOf(false) }
+
+    LaunchedEffect(event?.id, event?.state) {
+        val ev = event ?: return@LaunchedEffect
+        if (ev.state == GameState.PRE || ev.state == GameState.LIVE) {
+            watchLoading = true
+            watchStreams = SportsWatch.search(ev)
+            watchLoading = false
+        } else {
+            watchStreams = emptyList()
+            watchLoading = false
+        }
+    }
+    LaunchedEffect(event?.id, event?.state) {
+        val ev = event ?: return@LaunchedEffect
+        ytLoading = true
+        ytClips = SportsYouTube.clipsFor(ev, postEvent = ev.state == GameState.POST)
+        ytLoading = false
+    }
 
     LaunchedEffect(event?.id) {
         val ev = event ?: return@LaunchedEffect
@@ -222,6 +253,85 @@ fun SportsGameScreen(nav: androidx.navigation.NavHostController, eventId: String
             } else {
                 items(found, key = { "${event.id}:${it.channelName}" }) { match ->
                     ChannelRow(match)
+                }
+            }
+
+            // Streams discovered by searching the app's extensions, addons and
+            // IPTV playlists for this fixture. Only a live/upcoming game asks:
+            // a finished one has no live server left to find.
+            if (event.state == GameState.PRE || event.state == GameState.LIVE) {
+                if (watchLoading || watchStreams.isNotEmpty()) {
+                    item {
+                        Text(
+                            "From your extensions & addons",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                    }
+                }
+                if (watchLoading) {
+                    item {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            androidx.compose.material3.CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Text(
+                                "Searching extensions and playlists for this event…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                items(watchStreams, key = { "w:${it.key}" }) { playable ->
+                    WatchStreamRow(playable) { SportsWatch.play(context, playable) }
+                }
+            }
+
+            // ---- YouTube: build-up before the event, highlights after it.
+            // Both resolve through the YouTube tab's own engine.
+            if (ytLoading || ytClips.isNotEmpty()) {
+                item {
+                    Text(
+                        if (event.state == GameState.POST) "Highlights & interviews" else "Pre-event videos",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+                if (ytLoading) {
+                    item {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            androidx.compose.material3.CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Text(
+                                "Finding videos on YouTube…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                } else {
+                    item {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            items(ytClips, key = { it.videoId }) { clip ->
+                                YouTubeClipCard(clip) {
+                                    scope.launch {
+                                        val problem = SportsYouTube.play(context, clip)
+                                        if (problem != null) {
+                                            android.widget.Toast.makeText(
+                                                context, problem, android.widget.Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -443,6 +553,97 @@ private fun ChannelRow(match: ChannelMatch) {
             if (match.channel != null) {
                 Icon(Icons.Filled.PlayArrow, contentDescription = "Play", tint = MaterialTheme.colorScheme.primary)
             }
+        }
+    }
+}
+
+/** A stream found by the app-wide event search (extensions / addons / IPTV). */
+@Composable
+private fun WatchStreamRow(playable: SportsWatch.Playable, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.35f),
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            if (!playable.poster.isNullOrBlank()) {
+                AsyncImage(
+                    model = playable.poster,
+                    contentDescription = null,
+                    modifier = Modifier.width(52.dp).height(32.dp).clip(RoundedCornerShape(5.dp)),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                )
+            } else {
+                Box(Modifier.size(32.dp), contentAlignment = Alignment.Center) { Text("📡") }
+            }
+            Column(Modifier.weight(1f)) {
+                Text(
+                    playable.title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    playable.provider + " · " + playable.sources.size +
+                        if (playable.sources.size == 1) " server" else " servers",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Icon(Icons.Filled.PlayArrow, contentDescription = "Play", tint = MaterialTheme.colorScheme.primary)
+        }
+    }
+}
+
+/** One YouTube clip on the game page (engine-resolved when tapped). */
+@Composable
+private fun YouTubeClipCard(clip: SportsYouTube.Clip, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier.width(212.dp).clickable(onClick = onClick),
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(119.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color(0xFF181820)),
+        ) {
+            if (!clip.thumbnail.isNullOrBlank()) {
+                AsyncImage(
+                    model = clip.thumbnail,
+                    contentDescription = clip.title,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                )
+            }
+            Box(
+                Modifier.align(Alignment.Center).size(36.dp).clip(CircleShape).background(Color(0xCC000000)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color.White)
+            }
+        }
+        Spacer(Modifier.height(5.dp))
+        Text(
+            clip.title,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        clip.author?.takeIf { it.isNotBlank() }?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }

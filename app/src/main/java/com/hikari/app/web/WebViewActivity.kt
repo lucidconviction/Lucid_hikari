@@ -99,6 +99,12 @@ class WebViewActivity : ComponentActivity() {
     private var pageTitle: String = ""
     private var startUrl: String = ""
 
+    // Web Apps thumbnails: a page capture is taken a moment AFTER onPageFinished
+    // so lazy images/webfonts are in place. Each navigation bumps the token so a
+    // pending capture can never write the previous page under the new host.
+    private val shotHandler = Handler(Looper.getMainLooper())
+    private var shotToken = 0
+
     // Provider this WebView was opened for (null = a plain site/URL). Used by
     // the per-extension auto-translate feature to decide whether the page's
     // text should be translated to English.
@@ -382,6 +388,29 @@ class WebViewActivity : ComponentActivity() {
 
     // ---- Save current page as a Website -----------------------------------
 
+    /**
+     * Captures the loaded page for the Web Apps grid once it has fully settled.
+     *
+     * onPageFinished fires when the document is done, not when its lazy images
+     * and webfonts are painted, so the capture waits a moment. The token makes
+     * this a no-op if the user has navigated somewhere else in between — a
+     * screenshot of page A must never be filed under page B's host.
+     */
+    private fun scheduleScreenshot(view: WebView?, url: String?) {
+        if (view == null || url.isNullOrBlank()) return
+        // Only ordinary browsing gets thumbnailed: an extension's verification
+        // / login / watch page has no Web Apps card, and saving screenshots of
+        // those would be both useless and a privacy leak.
+        if (providerId != null) return
+        val token = ++shotToken
+        shotHandler.removeCallbacksAndMessages(null)
+        shotHandler.postDelayed({
+            if (token != shotToken) return@postDelayed
+            val current = webView?.url?.takeIf { it.isNotBlank() } ?: url
+            WebAppShots.capture(this, view, current)
+        }, 2_200L)
+    }
+
     /** Adds the currently-viewed page to the user's saved Websites (as seen in
      *  the Websites tab). Shows a small dialog for the user to confirm or rename
      *  the site before saving. */
@@ -398,6 +427,13 @@ class WebViewActivity : ComponentActivity() {
         builder.setView(input)
         builder.setPositiveButton(I18n.t("Save")) { _, _ ->
             val name = input.text?.toString()?.trim()?.ifEmpty { defaultName } ?: defaultName
+            // Take the thumbnail only once the page reports 100% — a site
+            // saved while still streaming in its hero images would otherwise
+            // get a half-painted screenshot. A page not done yet is captured
+            // by the scheduled post-load shot instead.
+            if (webView.progress >= 100) {
+                WebAppShots.capture(this, webView, webView.url ?: url)
+            }
             lifecycleScope.launch(Dispatchers.IO) {
                 val app = applicationContext as HikariApp
                 app.store.addSite(Site(name, url))
@@ -1128,6 +1164,10 @@ class WebViewActivity : ComponentActivity() {
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 pageUrl = url
+                // A new navigation invalidates the capture still queued for the
+                // page that was on screen (see scheduleScreenshot).
+                shotToken++
+                shotHandler.removeCallbacksAndMessages(null)
                 detectedVideos.clear()
                 autoLaunched = false
                 scanHandler.removeCallbacksAndMessages(null)
@@ -1194,6 +1234,7 @@ class WebViewActivity : ComponentActivity() {
                 }
                 scanRunnable = r
                 scanHandler.postDelayed(r, 1500)
+                scheduleScreenshot(view, url)
             }
 
             override fun onRenderProcessGone(
