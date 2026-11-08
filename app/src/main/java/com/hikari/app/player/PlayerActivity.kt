@@ -5084,6 +5084,68 @@ class PlayerActivity : ComponentActivity() {
      *  always ignored on televisions (TVs do not rotate).
      *  Skips rotation on initial stream start to prevent unwanted spinning. */
     private var _hasStartedPlaying = false
+
+    // ---- YouTube SponsorBlock (only for the YouTube tab's player launches)
+    private val sponsorHandler = Handler(Looper.getMainLooper())
+    private var sponsorSegments: List<com.hikari.app.youtube.YouTubeSponsorBlock.Segment> = emptyList()
+    private var sponsorFetchedFor: String? = null
+    private var sponsorTicking = false
+    private var lastSponsorSeekAt = 0L
+
+    private fun startSponsorBlockIfNeeded() {
+        if (!intent.getBooleanExtra("ytPlayback", false)) return
+        if (!runCatching { com.hikari.app.youtube.YouTubeSettings.sponsorBlockEnabled(this) }.getOrDefault(false)) return
+        val id = intent.getStringExtra("histMediaId")
+            ?.removePrefix(com.hikari.app.youtube.YouTubeProgress.ID_PREFIX)
+            ?.takeIf { it.isNotBlank() } ?: return
+        if (sponsorFetchedFor == id) return
+        sponsorFetchedFor = id
+        val categories = runCatching {
+            com.hikari.app.youtube.YouTubeSettings.sponsorCategoriesOn(this)
+        }.getOrDefault(emptySet())
+        lifecycleScope.launch {
+            val segs = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                com.hikari.app.youtube.YouTubeSponsorBlock.fetch(id, categories)
+            }
+            sponsorSegments = segs
+            startSponsorTicker()
+        }
+    }
+
+    private fun startSponsorTicker() {
+        if (sponsorTicking) return
+        sponsorTicking = true
+        val tick = object : Runnable {
+            override fun run() {
+                val p = player
+                if (p == null || isFinishing || isDestroyed) {
+                    sponsorTicking = false
+                    return
+                }
+                if (p.isPlaying && sponsorSegments.isNotEmpty()) {
+                    val pos = p.currentPosition
+                    val seg = sponsorSegments.firstOrNull { pos >= it.startMs && pos < it.endMs }
+                    if (seg != null && kotlin.math.abs(pos - lastSponsorSeekAt) > 1_000L) {
+                        lastSponsorSeekAt = pos
+                        val end = if (p.duration > 0) seg.endMs.coerceAtMost(p.duration) else seg.endMs
+                        p.seekTo(end)
+                        if (runCatching {
+                                com.hikari.app.youtube.YouTubeSettings.sponsorNotice(this@PlayerActivity)
+                            }.getOrDefault(false)
+                        ) {
+                            Toast.makeText(
+                                this@PlayerActivity,
+                                "Skipped ${seg.category.replace('-', ' ')}",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                    }
+                }
+                sponsorHandler.postDelayed(this, 500L)
+            }
+        }
+        sponsorHandler.post(tick)
+    }
     private suspend fun maybeApplyAutoRotate() {
         if (com.hikari.app.tv.TvMode.isTv) return
         val store = (applicationContext as com.hikari.app.HikariApp).store
@@ -15407,6 +15469,7 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
             if (playWhenReady && playbackState == Player.STATE_READY) {
                 _hasStartedPlaying = true
                 pendingAutoRotateSize = null
+                startSponsorBlockIfNeeded()
             }
             if (playbackState == Player.STATE_READY) {
                 // Duration badge (total runtime) — known once media is ready.
@@ -17444,6 +17507,8 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
 
     override fun onDestroy() {
         sendYouTubeResult()
+        sponsorHandler.removeCallbacksAndMessages(null)
+        sponsorTicking = false
         stopBannerAnimators()
         recordProgress()
         flushWatchSeconds()
