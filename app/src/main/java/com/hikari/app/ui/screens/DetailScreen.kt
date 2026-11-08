@@ -2320,12 +2320,18 @@ fun DetailScreen(
         val payload = playerPayload(playable)
         if (payload == null) return@launchPlayer false
         playerLaunched = true
+        // A YouTube row is already resolved by the YouTube engine into a
+        // playable manifest: there is no server hunt to run and no reason to
+        // put the loading cover into "searching extensions" mode.
+        val youtubeOnly = playable.isNotEmpty() &&
+            playable.all { it.provider.equals("YouTube", ignoreCase = true) }
+        val effectiveLiveId = if (youtubeOnly) "" else liveId
         // Keep the background extension sweep off the loading cover: it is held
         // from here and released the moment the player has a frame on screen
         // (see StreamsLive.releaseSweep). The servers it looks for are only ever
         // ADDED to a list that is already playing, so nothing is lost by
         // waiting, and "searching extensions…" no longer races the video.
-        m?.let { StreamsLive.holdSweep(liveId, it, ep) }
+        if (effectiveLiveId.isNotBlank()) m?.let { StreamsLive.holdSweep(effectiveLiveId, it, ep) }
         // History context rides along so the player can record resume position
         // and remember which server this video was last played with (so a
         // replay continues on that server and starts instantly).
@@ -2337,7 +2343,7 @@ fun DetailScreen(
                 // Live server feed: playback starts with the first server found
                 // while the detail screen keeps searching every installed
                 // provider; the player appends them to its "Select server" list.
-                putExtra("streamsLiveId", liveId)
+                if (effectiveLiveId.isNotBlank()) putExtra("streamsLiveId", effectiveLiveId)
                 putExtra("histTitle", m?.title ?: title)
                 // The provider that the page actually resolved to — NOT the id
                 // the page was opened with, which may be a stale one that no
@@ -2448,7 +2454,7 @@ fun DetailScreen(
                             org.json.JSONObject()
                                 .put("name", ch.name)
                                 .put("url", ch.url)
-                                .put("logo", ch.logo ?: "")
+                                .put("logo", ch.artwork ?: "")
                                 .put("group", ch.group)
                                 .put("providerId", ch.providerId.ifBlank { livePid })
                         )
@@ -6814,7 +6820,9 @@ fun DetailScreen(
         LaunchedEffect(ytKey) {
             val sources = YouTubePlayables.resolve(ytKey)
             if (sources.isNotEmpty()) {
-                launchPlayer(sources, null, "trailer:$ytKey", 0L, false)
+                // No live server session for a trailer: the YouTube engine has
+                // already produced the HD manifest the player should open.
+                launchPlayer(sources, null, "", 0L, false)
             } else {
                 openYouTubeVideo(context, ytKey, ytTitle)
             }

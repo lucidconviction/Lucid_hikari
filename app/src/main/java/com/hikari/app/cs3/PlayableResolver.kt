@@ -127,8 +127,83 @@ object YouTubePlayables {
      * answer keeps the original row, so the behaviour is never worse than it was
      * before this existed.
      */
+    /**
+     * Resolve a YouTube id through the SmartTube engine used by the YouTube
+     * tab. VOD returns the engine's adaptive DASH manifest (every video/audio
+     * rendition, so the player can start at the highest quality it can decode);
+     * live returns YouTube's HLS manifest.
+     */
+    private suspend fun engineResolve(ytId: String): List<StreamSource> = withContext(Dispatchers.IO) {
+        val context = runCatching { com.hikari.app.HikariApp.instance }.getOrNull()
+            ?: return@withContext emptyList()
+        com.liskovsoft.sharedutils.prefs.GlobalPreferences.instance(context)
+        val service = com.liskovsoft.youtubeapi.service.YouTubeServiceManager.instance()
+        var info = service.mediaItemService.getFormatInfoObserve(ytId).blockingFirst()
+        var attempts = 0
+        while (!info.containsDashFormats() && !(info.isLive && info.containsHlsUrl()) && attempts++ < 4) {
+            service.switchNextClientNow()
+            info = service.mediaItemService.getFormatInfoObserve(ytId).blockingFirst()
+        }
+        if (info.isUnplayable) return@withContext emptyList()
+        val headers = info.clientInfo?.userAgent?.takeIf { it.isNotBlank() }
+            ?.let { mapOf("User-Agent" to it) }.orEmpty()
+
+        if (info.isLive) {
+            val hls = info.hlsManifestUrl?.takeIf { it.isNotBlank() }
+            if (hls != null) {
+                return@withContext listOf(
+                    StreamSource(
+                        name = "YouTube Live HD",
+                        url = hls,
+                        headers = headers,
+                        isM3u8 = true,
+                        provider = "YouTube",
+                    ),
+                )
+            }
+        }
+        val mpd = runCatching {
+            info.createMpdStream()?.use { it.readBytes() }
+        }.getOrNull()
+        if (mpd != null && mpd.isNotEmpty()) {
+            val url = com.hikari.app.youtube.YouTubeMpdServer.publish(ytId, mpd)
+            return@withContext listOf(
+                StreamSource(
+                    name = "YouTube HD",
+                    url = url,
+                    headers = headers,
+                    isMpd = true,
+                    provider = "YouTube",
+                ),
+            )
+        }
+        val fallback = info.hlsManifestUrl?.takeIf { it.isNotBlank() }
+            ?: info.dashManifestUrl?.takeIf { it.isNotBlank() }
+        if (fallback != null) {
+            return@withContext listOf(
+                StreamSource(
+                    name = "YouTube HD",
+                    url = fallback,
+                    headers = headers,
+                    isM3u8 = fallback.contains(".m3u8", true),
+                    isMpd = fallback.contains(".mpd", true),
+                    provider = "YouTube",
+                ),
+            )
+        }
+        emptyList()
+    }
+
     suspend fun resolve(ytId: String): List<StreamSource> {
         if (ytId.isBlank()) return emptyList()
+        // The YouTube page's own engine (SmartTube/MediaServiceCore) is the
+        // primary resolver: it carries the full adaptive manifest, so trailers
+        // and addon YouTube rows start at HD without a second server search.
+        val fromEngine = runCatching { engineResolve(ytId) }.getOrDefault(emptyList())
+        if (fromEngine.isNotEmpty()) {
+            Logs.log(TAG, "$ytId → YouTube engine (${fromEngine.first().name})")
+            return fromEngine
+        }
         return try {
             withContext(Dispatchers.IO) {
                 if (!ensureReady()) return@withContext emptyList()
@@ -173,6 +248,7 @@ object YouTubePlayables {
                         subtitles = subs,
                         isM3u8 = delivery == org.schabi.newpipe.extractor.stream.DeliveryMethod.HLS ||
                             url.contains(".m3u8", true),
+                        provider = "YouTube",
                     )
                 }
                 // A live stream has no progressive rendition at all — its one
@@ -184,6 +260,7 @@ object YouTubePlayables {
                         headers = headers,
                         subtitles = subs,
                         isM3u8 = true,
+                        provider = "YouTube",
                     )
                 }
                 // Last resort, and only when nothing muxed exists: YouTube's own
@@ -197,6 +274,7 @@ object YouTubePlayables {
                         headers = headers,
                         subtitles = subs,
                         isMpd = true,
+                        provider = "YouTube",
                     )
                 }
                 if (out.isEmpty()) {

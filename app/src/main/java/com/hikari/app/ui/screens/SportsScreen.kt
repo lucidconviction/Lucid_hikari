@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -22,6 +23,9 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
@@ -37,6 +41,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Sports
 import androidx.compose.material.icons.filled.Star
@@ -100,12 +105,14 @@ import com.hikari.app.sports.SportsDates
 import com.hikari.app.sports.SportsEvent
 import com.hikari.app.sports.SportsFollows
 import com.hikari.app.sports.SportsRepository
+import com.hikari.app.sports.SportsReplays
 import com.hikari.app.sports.SportsRows
 import com.hikari.app.sports.SportsSettings
 import com.hikari.app.sports.TeamInfo
 import com.hikari.app.ui.navigation.LocalTaskbarInset
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import android.text.format.DateFormat
 import java.util.Locale
 
@@ -115,6 +122,7 @@ private enum class SportsTab(val title: String, val icon: androidx.compose.ui.gr
     ALL("All Events", Icons.Filled.Sports),
     SEARCH("Search", Icons.Filled.Search),
     FOLLOWING("Following", Icons.Filled.Star),
+    REPLAYS("Replays", Icons.Filled.Replay),
 }
 
 /**
@@ -263,6 +271,7 @@ fun SportsScreen(nav: androidx.navigation.NavHostController) {
                     onToggleWord = { scope.launch { SportsRepository.toggleWord(it) } },
                     onOpenLeague = { nav.navigate("sports-league:${android.net.Uri.encode(it.id)}") },
                 )
+                SportsTab.REPLAYS -> SportsReplaysTab()
             }
         }
     }
@@ -652,7 +661,11 @@ private fun SportsSearchTab(
     val matched = remember(q, events) {
         if (q.isBlank()) emptyList()
         else events.filter { ev ->
+            val leagueName = SportsCatalog.league(ev.leagueId)?.name.orEmpty()
             SportsCatalog.norm(ev.title).contains(q) ||
+                SportsCatalog.norm(ev.subtitle.orEmpty()).contains(q) ||
+                SportsCatalog.norm(ev.note.orEmpty()).contains(q) ||
+                SportsCatalog.norm(leagueName).contains(q) ||
                 listOfNotNull(ev.away, ev.home).any { SportsCatalog.norm(it.team.name).contains(q) || SportsCatalog.norm(it.team.fullName).contains(q) }
         }.take(40)
     }
@@ -1159,6 +1172,236 @@ private fun EmptyNote(title: String, subtitle: String?, button: String?, onButto
     }
 }
 
+// ------------------------------------------------------------------ replays
+
+/**
+ * Replays from the sport-video-archive: recent UFC, MMA and boxing cards with
+ * their poster. Picking a stream plays it in the app when the link resolves to
+ * media; file hosts and embed pages open normally when they can't.
+ */
+@Composable
+private fun SportsReplaysTab() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val items by SportsReplays.items.collectAsState()
+    val loading by SportsReplays.loading.collectAsState()
+    val problem by SportsReplays.problem.collectAsState()
+    var filter by rememberSaveable { mutableStateOf<String?>(null) }
+    var chooser by remember { mutableStateOf<SportsReplays.Replay?>(null) }
+
+    LaunchedEffect(Unit) { SportsReplays.ensureLoaded() }
+    val shown = remember(items, filter) {
+        if (filter == null) items else items.filter { it.section == filter }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Fight replays", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            if (loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+            IconButton(onClick = { scope.launch { SportsReplays.ensureLoaded(force = true) } }) {
+                Icon(Icons.Filled.Refresh, contentDescription = "Refresh replays")
+            }
+        }
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            listOf<String?>(null, "ufc", "mma", "boxing").forEach { section ->
+                item {
+                    FilterChip(
+                        selected = filter == section,
+                        onClick = { filter = section },
+                        label = {
+                            Text(
+                                when (section) {
+                                    null -> "All"
+                                    "ufc" -> "UFC"
+                                    "mma" -> "MMA"
+                                    else -> "Boxing"
+                                },
+                            )
+                        },
+                    )
+                }
+            }
+        }
+        problem?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+        }
+        if (loading && items.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        } else if (shown.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    if (loading) "Looking for replays…" else "No replays in this section.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 260.dp),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                gridItems(shown, key = { it.id }) { replay ->
+                    ReplayCard(replay) { chooser = replay }
+                }
+            }
+        }
+    }
+
+    val picked = chooser
+    if (picked != null) {
+        AlertDialog(
+            onDismissRequest = { chooser = null },
+            title = { Text(picked.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        if (picked.dateMs > 0) SportsDates.longDateLabel(picked.dateMs) else picked.section.uppercase(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (picked.streams.isEmpty()) {
+                        Text("No streams listed. Open the archive page for this card.", style = MaterialTheme.typography.bodySmall)
+                    }
+                    picked.streams.take(12).forEach { stream ->
+                        TextButton(
+                            onClick = {
+                                chooser = null
+                                scope.launch {
+                                    val url = stream.url
+                                    if (isDirectMedia(url)) {
+                                        playReplayUrl(context, url, picked.title)
+                                    } else {
+                                        val extracted = withTimeoutOrNull(20_000L) {
+                                            runCatching {
+                                                com.hikari.app.cs3.FallbackResolver.resolveEmbedUrl(url, null)
+                                            }.getOrNull()
+                                        }.orEmpty()
+                                        val playable = extracted.firstOrNull { it.url.isNotBlank() }
+                                        if (playable != null) {
+                                            playReplayUrl(context, playable.url, picked.title, playable.headers)
+                                        } else {
+                                            openInBrowser(context, picked.pageUrl.ifBlank { url })
+                                        }
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                stream.label + (stream.provider?.let { " · $it" } ?: ""),
+                                modifier = Modifier.fillMaxWidth(),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val page = picked.pageUrl
+                    chooser = null
+                    if (page.isNotBlank()) openInBrowser(context, page)
+                }) { Text("Open page") }
+            },
+            dismissButton = { TextButton(onClick = { chooser = null }) { Text("Close") } },
+        )
+    }
+}
+
+@Composable
+private fun ReplayCard(replay: SportsReplays.Replay, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
+    ) {
+        Column {
+            Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(Color(0xFF1A1A1E))) {
+                if (!replay.thumb.isNullOrBlank()) {
+                    AsyncImage(
+                        model = replay.thumb,
+                        contentDescription = replay.title,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                }
+                Box(
+                    Modifier.align(Alignment.Center).size(42.dp).clip(CircleShape).background(Color(0xCC000000)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color.White)
+                }
+                Text(
+                    replay.section.uppercase(),
+                    modifier = Modifier.align(Alignment.TopStart).padding(8.dp)
+                        .clip(RoundedCornerShape(4.dp)).background(Color(0xCC000000))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White,
+                )
+            }
+            Column(Modifier.padding(10.dp)) {
+                Text(replay.title, style = MaterialTheme.typography.bodyMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                if (replay.dateMs > 0) {
+                    Text(
+                        SportsDates.longDateLabel(replay.dateMs),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun isDirectMedia(url: String): Boolean {
+    val path = url.substringBefore('?').lowercase()
+    return path.endsWith(".m3u8") || path.endsWith(".mp4") || path.endsWith(".mpd") ||
+        path.endsWith(".mkv") || path.endsWith(".webm") || path.endsWith(".ts")
+}
+
+private fun playReplayUrl(
+    context: Context,
+    url: String,
+    title: String,
+    headers: Map<String, String> = emptyMap(),
+) {
+    if (url.isBlank()) return
+    val lower = url.substringBefore('?').lowercase()
+    val headersJson = org.json.JSONObject().apply { headers.forEach { (k, v) -> put(k, v) } }
+    val sources = org.json.JSONArray().put(
+        org.json.JSONObject()
+            .put("name", "Replay")
+            .put("url", url)
+            .put("headers", headersJson)
+            .put("isM3u8", lower.endsWith(".m3u8"))
+            .put("isMpd", lower.endsWith(".mpd"))
+            .put("provider", "Replay"),
+    )
+    val intent = Intent(context, PlayerActivity::class.java).apply {
+        putExtra("title", title)
+        putExtra("sources", sources.toString())
+        putExtra("askServer", false)
+    }
+    context.startActivity(intent)
+}
+
+private fun openInBrowser(context: Context, url: String) {
+    if (url.isBlank()) return
+    runCatching {
+        context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+    }
+}
+
 // ------------------------------------------------------------------ playback
 
 private fun isMine(event: SportsEvent, follows: SportsFollows): Boolean {
@@ -1214,7 +1457,11 @@ internal fun playIptvChannel(context: Context, channel: IptvChannel) {
         putExtra("askServer", false)
         putExtra("histProviderId", channel.providerId)
         putExtra("histTitle", channel.name)
-        channel.logo?.takeIf { it.isNotBlank() }?.let { putExtra("titleLogo", it) }
+        channel.artwork?.takeIf { it.isNotBlank() }?.let {
+            putExtra("titleLogo", it)
+            putExtra("bannerBackdrop", it)
+            putExtra("histPoster", it)
+        }
     }
     context.startActivity(intent)
 }

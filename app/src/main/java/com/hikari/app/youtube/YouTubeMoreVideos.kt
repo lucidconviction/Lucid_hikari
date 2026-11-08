@@ -53,6 +53,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import kotlinx.coroutines.delay
 import com.hikari.app.youtube.YouTubePlayRequest
 
 /**
@@ -65,17 +66,37 @@ import com.hikari.app.youtube.YouTubePlayRequest
 @Composable
 fun YouTubeMoreVideos(
     videoId: String,
-    buttonVisible: Boolean,
+    buttonVisible: Boolean = true,
+    initialOpen: Boolean = false,
+    autoHideMs: Long = 5_000L,
+    onOpenChange: (Boolean) -> Unit = {},
     onPlay: (YouTubePlayRequest) -> Unit,
 ) {
     val vm = YouTubeSession.feed ?: return
     val queue by vm.queue.collectAsStateWithLifecycle()
-    var open by remember { mutableStateOf(false) }
+    var open by remember { mutableStateOf(initialOpen) }
+    var showButton by remember { mutableStateOf(buttonVisible && !initialOpen) }
     var loadingVideoId by remember { mutableStateOf<String?>(null) }
 
+    fun setOpen(value: Boolean) {
+        open = value
+        if (value) showButton = false
+        onOpenChange(value)
+    }
+
     // A new video is playing: clear any spinner left over from the previous one.
-    LaunchedEffect(videoId) { loadingVideoId = null }
-    BackHandler(enabled = open) { open = false }
+    // The button is offered for a few seconds after the video starts, then
+    // times out of the way (the user can reopen it by tapping again when the
+    // player is recreated).
+    LaunchedEffect(videoId, buttonVisible) {
+        loadingVideoId = null
+        showButton = buttonVisible && !open
+        if (buttonVisible) {
+            delay(autoHideMs)
+            if (!open) showButton = false
+        }
+    }
+    BackHandler(enabled = open) { setOpen(false) }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         // The requested size: each thumbnail fills a quarter of the player's width. Item and list
@@ -84,7 +105,7 @@ fun YouTubeMoreVideos(
         val panelWidth = (thumbnailWidth + 28.dp).coerceAtMost(maxWidth * 0.6f)
 
         AnimatedVisibility(
-            visible = buttonVisible && !open,
+            visible = showButton && !open,
             modifier = Modifier
                 .align(Alignment.CenterEnd)
                 .padding(end = 16.dp),
@@ -96,7 +117,7 @@ fun YouTubeMoreVideos(
                     .clip(RoundedCornerShape(50))
                     .background(Color(0xB3000000))
                     .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(50))
-                    .clickable { open = true }
+                    .clickable { setOpen(true) }
                     .padding(horizontal = 14.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -114,6 +135,20 @@ fun YouTubeMoreVideos(
                     fontWeight = FontWeight.SemiBold,
                 )
             }
+        }
+
+        AnimatedVisibility(
+            visible = open,
+            modifier = Modifier.fillMaxSize(),
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color(0x66000000))
+                    .clickable { setOpen(false) },
+            )
         }
 
         AnimatedVisibility(
@@ -146,7 +181,7 @@ fun YouTubeMoreVideos(
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.weight(1f),
                     )
-                    IconButton(onClick = { open = false }) {
+                    IconButton(onClick = { setOpen(false) }) {
                         Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White)
                     }
                 }

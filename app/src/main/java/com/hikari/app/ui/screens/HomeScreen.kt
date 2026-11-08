@@ -1109,7 +1109,9 @@ fun HomeScreen(nav: NavHostController) {
                                         }
                                     }
                                 },
-                                onOpen = { item ->                                    Routes.safeNavigate(
+                                onOpen = { item ->
+                                    com.hikari.app.player.PlaybackQueueStore.set(featured, item)
+                                    Routes.safeNavigate(
                                         nav,
                                         Routes.detail(
                                             item.providerId, item.type, item.id,
@@ -1122,6 +1124,7 @@ fun HomeScreen(nav: NavHostController) {
                             HeroBanner(
                                 items = featured,
                                 onClick = { item ->
+                                    com.hikari.app.player.PlaybackQueueStore.set(featured, item)
                                     Routes.safeNavigate(
                                         nav,
                                         Routes.detail(
@@ -1229,6 +1232,9 @@ fun HomeScreen(nav: NavHostController) {
                         items = row.items,
                         keeperKey = "homeRow:" + row.key.ifBlank { "${row.providerName}|${row.title}" },
                         onClick = { item ->
+                            if (item.rawType != "manga") {
+                                com.hikari.app.player.PlaybackQueueStore.set(row.items, item)
+                            }
                             Routes.safeNavigate(
                                 nav,
                                 // Tracker manga shelves open in the manga
@@ -1246,6 +1252,9 @@ fun HomeScreen(nav: NavHostController) {
                         // server lands (see DetailScreen autoplay). Manga has
                         // no video to autoplay — it opens in the manga section.
                         onQuickPlay = { item ->
+                            if (item.rawType != "manga") {
+                                com.hikari.app.player.PlaybackQueueStore.set(row.items, item)
+                            }
                             Routes.safeNavigate(
                                 nav,
                                 if (item.rawType == "manga") {

@@ -1397,6 +1397,9 @@ fun SearchScreen(
                 items(gridItems, key = { it.uniqueId }) { item ->
                     if (tvSearch) {
                         val go = {
+                            if (item.rawType != "manga") {
+                                com.hikari.app.player.PlaybackQueueStore.set(gridItems, item)
+                            }
                             Routes.safeNavigate(
                                 nav,
                                 if (item.rawType == "manga") Routes.mangaRoute(item.providerId, item.id, item.title, item.posterUrl)
@@ -1419,6 +1422,9 @@ fun SearchScreen(
                     Column(
                         Modifier
                             .clickable {
+                                if (item.rawType != "manga") {
+                                    com.hikari.app.player.PlaybackQueueStore.set(gridItems, item)
+                                }
                                 Routes.safeNavigate(
                                     nav,
                                     // A manga engine's results are MANGA: they open

@@ -214,15 +214,18 @@ object QuickChannelList {
         val escaped = Regex.escape(k)
         // \b works cleanly when the keyword is purely alphanumeric.
         val isPureWord = k.all { it.isLetterOrDigit() }
-        return if (isPureWord) {
-            Regex("\\b$escaped\\b", RegexOption.IGNORE_CASE).containsMatchIn(text)
-        } else {
-            // Non-word keyword (e.g. "E!", "4Music") — match the literal
-            // surrounded by non-alphanumeric boundaries so "4Music" doesn't
-            // match "4MusicHD".
-            Regex("(?<![\\w])$escaped(?![\\w])", RegexOption.IGNORE_CASE).containsMatchIn(text)
+        val cacheKey = (if (isPureWord) "w:" else "x:") + k.lowercase()
+        val regex = REGEX_CACHE.getOrPut(cacheKey) {
+            if (isPureWord) {
+                Regex("\\b$escaped\\b", RegexOption.IGNORE_CASE)
+            } else {
+                Regex("(?<![\\w])$escaped(?![\\w])", RegexOption.IGNORE_CASE)
+            }
         }
+        return regex.containsMatchIn(text)
     }
+
+    private val REGEX_CACHE = java.util.concurrent.ConcurrentHashMap<String, Regex>()
 
     val default: List<QuickChannel> = listOf(
         // ── 0. REGION BUNDLES ─────────────────────────────────────────────────

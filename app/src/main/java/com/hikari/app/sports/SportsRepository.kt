@@ -363,14 +363,62 @@ object SportsRepository {
         return out.distinctBy { it.id }
     }
 
-    /** Load guide-only events (darts, snooker, racing, wrestling) from the fixtures feeds. */
+    /** Load guide-only events (BKFC, darts, snooker, racing, wrestling) from their feeds. */
     private suspend fun loadGuideOnlyEvents(league: League): List<SportsEvent> {
         return when {
+            league.id == "guide/bkfc" -> loadBkfcEvents(league)
             league.fixtureSlug != null -> loadFixtureEvents(league)
             league.id.startsWith("guide/wwe") || league.id.startsWith("guide/aew") || league.id == "guide/wrestling" ->
                 loadWrestlingEvents(league)
             else -> emptyList()
         }
+    }
+
+    /**
+     * BKFC's own calendar (api.bkfc.com/events). It carries the poster, venue
+     * and platform for each card, which is everything the sports page needs.
+     */
+    private suspend fun loadBkfcEvents(league: League): List<SportsEvent> {
+        val raw = runCatching { SportsFeeds.bkfcEventsRaw() }.getOrNull() ?: return emptyList()
+        val arr = runCatching { JSONArray(raw) }.getOrNull() ?: return emptyList()
+        val now = LiveTvClock.nowMs()
+        val out = mutableListOf<SportsEvent>()
+        (0 until arr.length()).forEach { i ->
+            val e = arr.optJSONObject(i) ?: return@forEach
+            val startMs = SportsDates.parseIso(
+                e.optString("main_card_start_time").ifBlank { e.optString("event_date") },
+            ) ?: return@forEach
+            val title = e.optString("name").takeIf { it.isNotBlank() && it != "null" } ?: "BKFC event"
+            val state = when {
+                now < startMs -> GameState.PRE
+                now in startMs..(startMs + 5 * 60 * 60_000L) -> GameState.LIVE
+                else -> GameState.POST
+            }
+            out += SportsEvent(
+                id = "bkfc-" + e.optString("id").ifBlank { startMs.toString() },
+                leagueId = league.id,
+                startMs = startMs,
+                hasTime = true,
+                state = state,
+                title = title,
+                subtitle = e.optString("location").ifBlank { e.optString("venue_name") }
+                    .takeIf { it.isNotBlank() && it != "null" },
+                status = when (state) {
+                    GameState.LIVE -> "Live"
+                    GameState.POST -> "Final"
+                    else -> "Upcoming"
+                },
+                away = null,
+                home = null,
+                source = EventSource.FIXTURES,
+                espnId = null,
+                note = e.optString("platform").takeIf { it.isNotBlank() && it != "null" },
+                about = e.optString("description").takeIf { it.isNotBlank() && it != "null" },
+                image = e.optString("main_image_url").ifBlank { e.optString("hero_image_url") }
+                    .takeIf { it.isNotBlank() },
+            )
+        }
+        return out
     }
 
     /** sporting-events.org fixtures: title, start and (when given) a live flag. */
@@ -456,132 +504,139 @@ object SportsRepository {
         val o = JSONObject(raw)
         val events = o.optJSONArray("events") ?: return emptyList()
         val out = mutableListOf<SportsEvent>()
-        val now = LiveTvClock.nowMs()
-        
-        android.util.Log.d("Hikari/Sports", "Parsing ${events.length()} events for ${league.id}")
-        
+
         (0 until events.length()).forEach { i ->
-            val e = events.optJSONObject(i) ?: run {
-                android.util.Log.w("Hikari/Sports", "Event $i is null")
-                return@forEach
+            val e = events.optJSONObject(i) ?: return@forEach
+            val eventId = e.optString("id")
+            val comps = e.optJSONArray("competitions") ?: return@forEach
+            if (comps.length() == 0) return@forEach
+            // A team sport's event is one game (competition[0]). A fight card
+            // (UFC, PFL, boxing) is one event with one competition per bout, so
+            // every bout gets its own row on the Sports page.
+            val count = if (league.kind == LeagueKind.EVENT) comps.length() else 1
+            for (ci in 0 until count) {
+                val comp = comps.optJSONObject(ci) ?: continue
+                parseCompetition(league, e, comp, eventId, ci)?.let { out += it }
             }
-            val id = e.optString("id")
-            val competitions = e.optJSONArray("competitions")
-            if (competitions == null || competitions.length() == 0) {
-                android.util.Log.w("Hikari/Sports", "Event $id has no competitions")
-                return@forEach
-            }
-            val competition = competitions.optJSONObject(0) ?: run {
-                android.util.Log.w("Hikari/Sports", "Event $id has null competition[0]")
-                return@forEach
-            }
-            
-            // Start time
-            val dateStr = e.optString("date")
-            val startMs = SportsDates.parseIso(dateStr) ?: run {
-                android.util.Log.w("Hikari/Sports", "Event $id has invalid date: $dateStr")
-                return@forEach
-            }
-            val hasTime = dateStr.contains('T')
-            
-            // State
-            val status = competition.optJSONObject("status") ?: run {
-                android.util.Log.w("Hikari/Sports", "Event $id has null status")
-                return@forEach
-            }
-            val statusType = status.optJSONObject("type")
-            val stateName = statusType?.optString("name")?.lowercase().orEmpty()
-            val state = when {
-                stateName.contains("scheduled") || stateName.contains("pre") || stateName.contains("tbd") -> GameState.PRE
-                stateName.contains("progress") || stateName.contains("live") || stateName.contains("halftime") ||
-                    stateName.contains("overtime") || stateName.contains("shootout") || stateName.contains("delayed") -> GameState.LIVE
-                stateName.contains("final") || stateName.contains("full_time") || stateName.contains("full-time") ||
-                    stateName.contains("completed") || stateName.contains("fulltime") -> GameState.POST
-                stateName.contains("postponed") || stateName.contains("cancel") || stateName.contains("suspend") -> GameState.OFF
-                else -> GameState.OFF
-            }
-            
-            // Competitors
-            val competitors = competition.optJSONArray("competitors")
-            if (competitors == null || competitors.length() != 2) {
-                android.util.Log.w("Hikari/Sports", "Event $id has ${competitors?.length() ?: 0} competitors")
-                return@forEach
-            }
-            
-            val away = parseSide(competitors.optJSONObject(0), league, true, competition)
-            val home = parseSide(competitors.optJSONObject(1), league, false, competition)
-            
-            if (away == null || home == null) {
-                android.util.Log.w("Hikari/Sports", "Event $id skipped: away=$away, home=$home")
-                return@forEach
-            }
-            
-            // Broadcasts
-            val broadcasts = mutableListOf<String>()
-            competition.optJSONArray("broadcasts")?.let { bc ->
-                (0 until bc.length()).forEach { j ->
-                    bc.optJSONObject(j)?.let { b ->
-                        b.optJSONObject("media")?.optString("shortName")?.takeIf { it.isNotBlank() }?.let { broadcasts += it }
-                        b.optJSONArray("names")?.let { names ->
-                            (0 until names.length()).forEach { k ->
-                                names.optString(k).takeIf { it.isNotBlank() }?.let { broadcasts += it }
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // Title
-            val shortName = e.optString("shortName")
-            val title = if (shortName.isNotBlank()) shortName else "${away.team.name} @ ${home.team.name}"
-            val statusText = statusType?.optString("shortDetail")?.takeIf { it.isNotBlank() }
-                ?: statusType?.optString("detail")?.takeIf { it.isNotBlank() }
-            
-            out += SportsEvent(
-                id = "espn-$id",
-                leagueId = league.id,
-                startMs = startMs,
-                hasTime = hasTime,
-                state = state,
-                title = title,
-                subtitle = e.optString("name").takeIf { it.isNotBlank() },
-                status = statusText,
-                away = away,
-                home = home,
-                broadcasts = broadcasts,
-                source = EventSource.ESPN,
-                espnId = id.takeIf { it.isNotBlank() },
-                note = e.optString("notes").takeIf { it.isNotBlank() }
-            )
-            android.util.Log.d("Hikari/Sports", "Added event: $id ($title)")
         }
         return out
     }
 
-    /** Parse one side (team) from ESPN competition. */
+    /** One competition (a game, or one fight on a card) -> a SportsEvent. */
+    private fun parseCompetition(
+        league: League,
+        event: JSONObject,
+        competition: JSONObject,
+        eventId: String,
+        index: Int,
+    ): SportsEvent? {
+        val dateStr = competition.optString("date").ifBlank { event.optString("date") }
+        val startMs = SportsDates.parseIso(dateStr) ?: return null
+        val hasTime = dateStr.contains('T')
+
+        val status = competition.optJSONObject("status") ?: event.optJSONObject("status") ?: return null
+        val statusType = status.optJSONObject("type")
+        val stateName = statusType?.optString("name")?.lowercase().orEmpty()
+        val state = when {
+            stateName.contains("scheduled") || stateName.contains("pre") || stateName.contains("tbd") -> GameState.PRE
+            stateName.contains("progress") || stateName.contains("live") || stateName.contains("halftime") ||
+                stateName.contains("overtime") || stateName.contains("shootout") || stateName.contains("delayed") -> GameState.LIVE
+            stateName.contains("final") || stateName.contains("full_time") || stateName.contains("full-time") ||
+                stateName.contains("completed") || stateName.contains("fulltime") -> GameState.POST
+            stateName.contains("postponed") || stateName.contains("cancel") || stateName.contains("suspend") -> GameState.OFF
+            else -> GameState.OFF
+        }
+
+        val competitors = competition.optJSONArray("competitors") ?: return null
+        val ordered = (0 until competitors.length()).mapNotNull { competitors.optJSONObject(it) }
+            .sortedBy { it.optInt("order", 0) }
+        if (ordered.size < 2) return null
+        val away = parseSide(ordered[0], league, true, competition) ?: return null
+        val home = parseSide(ordered[1], league, false, competition) ?: return null
+
+        val broadcasts = mutableListOf<String>()
+        competition.optJSONArray("broadcasts")?.let { bc ->
+            (0 until bc.length()).forEach { j ->
+                bc.optJSONObject(j)?.let { b ->
+                    b.optJSONObject("media")?.optString("shortName")?.takeIf { it.isNotBlank() }?.let { broadcasts += it }
+                    b.optJSONArray("names")?.let { names ->
+                        (0 until names.length()).forEach { k ->
+                            names.optString(k).takeIf { it.isNotBlank() }?.let { broadcasts += it }
+                        }
+                    }
+                }
+            }
+        }
+
+        val weight = competition.optJSONObject("type")?.optString("abbreviation").orEmpty()
+            .takeIf { it.isNotBlank() && it.length <= 30 }
+        val eventName = event.optString("name").takeIf { it.isNotBlank() }
+        val shortName = event.optString("shortName").takeIf { it.isNotBlank() }
+        val title = when {
+            league.kind == LeagueKind.EVENT && away.team.name.isNotBlank() ->
+                "${away.team.name} vs ${home.team.name}"
+            shortName != null -> shortName
+            else -> "${away.team.name} @ ${home.team.name}"
+        }
+        val subtitle = when {
+            league.kind == LeagueKind.EVENT -> listOfNotNull(weight, eventName).joinToString(" · ").takeIf { it.isNotBlank() }
+            else -> eventName
+        }
+        val id = if (league.kind == LeagueKind.EVENT) {
+            "espn-$eventId-" + competition.optString("id").ifBlank { index.toString() }
+        } else {
+            "espn-$eventId"
+        }
+        val statusText = statusType?.optString("shortDetail")?.takeIf { it.isNotBlank() }
+            ?: statusType?.optString("detail")?.takeIf { it.isNotBlank() }
+
+        return SportsEvent(
+            id = id,
+            leagueId = league.id,
+            startMs = startMs,
+            hasTime = hasTime,
+            state = state,
+            title = title,
+            subtitle = subtitle,
+            status = statusText,
+            away = away,
+            home = home,
+            broadcasts = broadcasts,
+            source = EventSource.ESPN,
+            espnId = eventId.takeIf { it.isNotBlank() },
+            note = weight?.takeIf { league.kind != LeagueKind.EVENT },
+        )
+    }
+
+    /** Parse one side (a team, or a fighter/athlete) from ESPN competition. */
     private fun parseSide(o: JSONObject?, league: League, isAway: Boolean, competition: JSONObject): Side? {
-        if (o == null) {
-            android.util.Log.w("Hikari/Sports", "parseSide: o is null")
-            return null
+        if (o == null) return null
+        val teamObj = o.optJSONObject("team")?.let { it.optJSONObject("team") ?: it }
+        val athlete = o.optJSONObject("athlete")
+        val info = teamObj ?: athlete ?: return null
+        val isAthlete = teamObj == null && athlete != null
+
+        val id = info.optString("id").ifBlank { o.optString("id") }
+        if (id.isBlank()) return null
+        val name = info.optString("shortDisplayName").ifBlank { info.optString("displayName") }
+            .ifBlank { info.optString("shortName") }
+            .ifBlank { info.optString("name") }
+            .ifBlank { info.optString("fullName") }
+        val fullName = info.optString("displayName").ifBlank { info.optString("fullName") }
+            .ifBlank { name }
+        val abbr = info.optString("abbreviation").ifBlank {
+            if (isAthlete) {
+                name.split(' ').lastOrNull()?.take(3)?.uppercase().orEmpty()
+            } else {
+                name.take(3).uppercase()
+            }
         }
-        val teamObj = o.optJSONObject("team") ?: run {
-            android.util.Log.w("Hikari/Sports", "parseSide: team object is missing in ${o.keys()}")
-            return null
-        }
-        val teamInfoObj = teamObj.optJSONObject("team") ?: teamObj
-        val id = teamInfoObj.optString("id")
-        if (id.isBlank()) {
-            android.util.Log.w("Hikari/Sports", "parseSide: team id is missing")
-            return null
-        }
-        val name = teamInfoObj.optString("shortDisplayName").takeIf { it.isNotBlank() } ?: teamInfoObj.optString("name")
-        val fullName = teamInfoObj.optString("displayName")
-        val abbr = teamInfoObj.optString("abbreviation")
-        val location = teamInfoObj.optString("location").takeIf { it.isNotBlank() }
-        val color = teamInfoObj.optString("color").let { if (it.isNotBlank()) it.toLongOrNull(16) ?: 0xFF2A2F3A else null }
-        val altColor = teamInfoObj.optString("alternateColor").let { if (it.isNotBlank()) it.toLongOrNull(16) else null }
-        val logo = teamInfoObj.optJSONArray("logos")?.optJSONObject(0)?.optString("href").takeIf { it != null && it.isNotBlank() }
-        val record = runCatching { o.optString("records").let { parseRecord(it) } }.getOrNull()
+        val location = info.optString("location").takeIf { it.isNotBlank() }
+        val color = info.optString("color").let { if (it.isNotBlank()) it.toLongOrNull(16) ?: 0xFF2A2F3A else null }
+        val altColor = info.optString("alternateColor").let { if (it.isNotBlank()) it.toLongOrNull(16) else null }
+        val logo = info.optJSONArray("logos")?.optJSONObject(0)?.optString("href")
+            ?.takeIf { it.isNotBlank() }
+        val record = recordOf(o)
         val score = o.optString("score").takeIf { it.isNotBlank() }
         val winner = o.optBoolean("winner") == true
         val periods = runCatching {
@@ -591,9 +646,21 @@ object SportsRepository {
                 v.ifBlank { arr.optJSONObject(i)?.optString("value")?.takeIf { it.isNotBlank() } }
             }
         }.getOrDefault(emptyList())
-        
+
         val team = TeamInfo(league.id, id, name, fullName, abbr, location, color, altColor, logo, record)
         return Side(team, score, record, winner, !isAway, periods)
+    }
+
+    /** A team's or fighter's record, from either of ESPN's shapes. */
+    private fun recordOf(o: JSONObject): String? {
+        o.optJSONArray("records")?.let { arr ->
+            (0 until arr.length()).forEach { i ->
+                val r = arr.optJSONObject(i) ?: return@forEach
+                r.optString("summary").takeIf { it.isNotBlank() }?.let { return it }
+            }
+        }
+        o.optJSONObject("records")?.let { return parseRecord(it.toString()) }
+        return null
     }
 
     private fun parseRecord(raw: String): String? {

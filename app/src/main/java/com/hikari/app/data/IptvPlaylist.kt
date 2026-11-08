@@ -14,6 +14,13 @@ data class IptvChannel(
     val name: String,
     val url: String,
     val logo: String? = null,
+    /**
+     * The stream's own attached thumbnail/poster when the playlist declares one
+     * (`tvg-thumbnail`, `thumbnail`, `poster`, `image` …). This is separate from
+     * [logo] because a playlist can carry a small channel logo AND a 16:9
+     * programme/stream image; the player prefers this artwork when present.
+     */
+    val thumbnail: String? = null,
     val group: String = "",
     val tvgId: String? = null,
     val language: String = "",
@@ -43,6 +50,9 @@ data class IptvChannel(
      *  when playing from the IPTV tab or channel surf dialog. */
     val providerId: String = "",
 ) {
+    /** The best artwork this stream carries: its own thumbnail, else its logo. */
+    val artwork: String? get() = thumbnail?.takeIf { it.isNotBlank() } ?: logo
+
     companion object {
         const val KIND_DIRECT = "direct"
         const val KIND_EMBED = "embed"
@@ -91,6 +101,7 @@ object IptvPlaylist {
     private data class Pending(
         val name: String?,
         val logo: String?,
+        val thumbnail: String?,
         val group: String,
         val tvgId: String?,
         val language: String,
@@ -181,18 +192,27 @@ object IptvPlaylist {
                                 .ifBlank { attrs["logo-small"].orEmpty() },
                             base,
                         )
+                        val thumbnail = resolveLogo(
+                            attrs["tvg-thumbnail"].orEmpty()
+                                .ifBlank { attrs["thumbnail"].orEmpty() }
+                                .ifBlank { attrs["poster"].orEmpty() }
+                                .ifBlank { attrs["tvg-poster"].orEmpty() }
+                                .ifBlank { attrs["image"].orEmpty() }
+                                .ifBlank { attrs["tvg-image"].orEmpty() },
+                            base,
+                        )
                         val lang = attrs["tvg-language"].orEmpty()
                             .ifBlank { attrs["language"].orEmpty() }
                             .trim()
                         val country = attrs["tvg-country"].orEmpty()
                             .ifBlank { attrs["country"].orEmpty() }
                             .trim()
-                        pending = Pending(name, logo, group, attrs["tvg-id"]?.takeIf { it.isNotBlank() }, lang, country)
+                        pending = Pending(name, logo, thumbnail, group, attrs["tvg-id"]?.takeIf { it.isNotBlank() }, lang, country)
                     }
                     // The group can also sit on its own line AFTER the #EXTINF.
                     upper.startsWith("#EXTGRP:") -> {
                         val g = line.substringAfter(':').trim()
-                        if (g.isNotBlank()) pending = (pending ?: Pending(null, null, "", null, "", "")).copy(group = g)
+                        if (g.isNotBlank()) pending = (pending ?: Pending(null, null, null, "", null, "", "")).copy(group = g)
                     }
                     // #EXTM3U/#EXT-X-…: not channels (VLCOPT/KODIPROP handled above).
                 }
@@ -210,6 +230,7 @@ object IptvPlaylist {
                 name = name,
                 url = line,
                 logo = pending?.logo,
+                thumbnail = pending?.thumbnail,
                 group = pending?.group.orEmpty().trim(),
                 tvgId = pending?.tvgId,
                 language = pending?.language.orEmpty().trim(),

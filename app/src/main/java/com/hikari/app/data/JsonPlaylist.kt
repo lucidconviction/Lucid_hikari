@@ -176,6 +176,11 @@ object JsonPlaylist {
             .ifBlank { o.optString("tvg-logo").trim() }
             .ifBlank { o.optString("icon").trim() }
             .ifBlank { null }
+        val thumbnail = o.optString("thumbnail").trim()
+            .ifBlank { o.optString("poster").trim() }
+            .ifBlank { o.optString("tvg-thumbnail").trim() }
+            .ifBlank { o.optString("cover").trim() }
+            .ifBlank { null }
         val group = o.optString("group").trim()
             .ifBlank { o.optString("group-title").trim() }
             .ifBlank { o.optString("category").trim() }
@@ -203,6 +208,7 @@ object JsonPlaylist {
             },
             url = url,
             logo = logo,
+            thumbnail = thumbnail,
             group = group,
             headers = emptyMap(),
             drmKid = kid,

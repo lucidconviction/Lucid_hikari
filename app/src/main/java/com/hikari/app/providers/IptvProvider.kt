@@ -717,7 +717,7 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
                     provider = ProviderType.IPTV.groupLabel,
                     providerId = config.id,
                     providerName = displayName,
-                    thumbnail = channel.logo,
+                    thumbnail = channel.artwork,
                 ),
             )
         }
@@ -735,7 +735,7 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
                 provider = ProviderType.IPTV.groupLabel,
                 providerId = config.id,
                 providerName = displayName,
-                thumbnail = channel.logo,
+                thumbnail = channel.artwork,
             ),
         )
     }

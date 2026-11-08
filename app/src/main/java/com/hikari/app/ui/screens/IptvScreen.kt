@@ -76,6 +76,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -449,6 +450,8 @@ addStream = false
 
     var cards by remember { mutableStateOf<List<IptvCard>>(emptyList()) }
     var reading by remember { mutableStateOf(false) }
+    var refreshing by remember { mutableStateOf(false) }
+    var refreshKey by remember { mutableIntStateOf(0) }
     // The playlist whose tile was tapped on its trash button. Removal is
     // confirmed in a dialog first: it takes the playlist's channels out of
     // Home, search and the player's server list, and deletes the app's own
@@ -547,6 +550,33 @@ addStream = false
      *  the results, so the health dots on each playlist's tile update
      *  without re-reading the whole M3U. Declared before [SectionPage] so
      *  the composable can call it without a forward-reference issue. */
+    /** Re-download every playlist now (the header's Refresh). Unlike the
+     *  provider-list refresh this clears each playlist's channel cache, so a
+     *  changed M3U/XTREAM export actually lands in the tiles and in Sports. */
+    fun refreshPlaylists() {
+        val ps = playlists
+        if (ps.isEmpty() || refreshing) return
+        refreshing = true
+        scope.launch {
+            try {
+                reading = true
+                withContext(Dispatchers.IO) {
+                    ps.chunked(3).forEach { chunk ->
+                        chunk.forEach { p -> runCatching { p.channels(force = true) } }
+                    }
+                }
+                cards = ps.map { readCard(it) }
+                refreshKey++
+                val fresh = withContext(Dispatchers.IO) { gatherIptvChannels(ps) }
+                if (fresh.isNotEmpty()) com.hikari.app.sports.SportsRepository.matchChannels(fresh)
+                runCatching { app.providers.refresh() }
+            } finally {
+                reading = false
+                refreshing = false
+            }
+        }
+    }
+
     fun validateAllPlaylists() {
         val ps = playlists
         if (ps.isEmpty()) return
@@ -572,7 +602,7 @@ addStream = false
             torCards = torCards,
             streamCards = streamCards,
             playlistsEmpty = playlists.isEmpty(),
-            reading = reading,
+            reading = reading || refreshing,
             playlistShape = playlistShape,
             torShape = torShape,
             streamShape = streamShape,
@@ -583,13 +613,13 @@ addStream = false
             onAddPreset = { presetAdd(it) },
             onRemove = { removeTarget = it },
             onValidateAll = { validateAllPlaylists() },
-            onRefresh = { scope.launch { app.providers.refresh() } },
+            onRefresh = { refreshPlaylists() },
         )
     }
 
     Column(Modifier.fillMaxSize()) {
         // Quick Channels section at the TOP of IPTV tab (no separate tab)
-        QuickChannelsSection(nav, playlists)
+        QuickChannelsSection(nav, playlists, refreshKey)
 
         // Xtream accounts quick access row
         XtreamAccountRow(app = app)
@@ -1845,7 +1875,7 @@ private suspend fun readCard(p: IptvProvider): IptvCard {
         // The first channel that really has a logo: a playlist tile wearing one
         // of its own channel logos reads as "this is what is inside" far better
         // than a generic glyph.
-        cover = list.firstOrNull { !it.logo.isNullOrBlank() }?.logo,
+        cover = list.firstOrNull { !it.artwork.isNullOrBlank() }?.artwork,
         error = IptvProvider.iptvErrors[p.config.id],
         stream = NetworkStream.isStream(p.config),
         torrent = NetworkStream.isTorrentLink(p.config.url),
@@ -2563,7 +2593,7 @@ private fun XtreamAccountPill(account: com.hikari.app.data.XtreamAccount, onClic
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvProvider>) {
+private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvProvider>, refreshKey: Int = 0) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val cacheDir = remember { (ctx.applicationContext as? HikariApp)?.cacheDir ?: ctx.cacheDir }
@@ -2600,48 +2630,55 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
     var qcValidating by remember { mutableStateOf(false) }
     var hideDead by remember { mutableStateOf(true) }
     var sheetExpanded by remember { mutableStateOf(false) }
-    // Full playlist channels — fetched once, reused for playChannel and per-channel matching
+    // Full playlist channels — fetched once and shared by every quick search,
+    // the player handoff and the Sports matcher. The deferred is the single
+    // in-flight download: opening a quick channel while the prefetch is still
+    // running waits on that same job instead of starting a second M3U parse.
     var allChannels by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
-    var channelsFetched by remember { mutableStateOf(false) }
+    val channelsJob = remember { mutableStateOf<kotlinx.coroutines.Deferred<List<IptvChannel>>?>(null) }
+    var channelsKey by remember { mutableIntStateOf(0) }
 
-    // Warm the channel list once so the Sports tab has something to match against,
-    // even when the user never opened a channel picker. This is also what brings
-    // IPTV providers imported through Extensions/addons into Sports.
-    LaunchedEffect(playlists) {
-        if (playlists.isNotEmpty() && allChannels.isEmpty()) {
-            allChannels = withContext(Dispatchers.IO) { gatherIptvChannels(playlists) }
-            if (allChannels.isNotEmpty()) {
-                com.hikari.app.sports.SportsRepository.matchChannels(allChannels)
-                channelsFetched = true
-            }
+    fun requestChannels(force: Boolean = false): kotlinx.coroutines.Deferred<List<IptvChannel>> {
+        val existing = channelsJob.value
+        if (!force && existing != null) return existing
+        val next = scope.async(Dispatchers.IO) {
+            com.hikari.app.providers.gatherIptvChannels(playlists, force)
         }
+        channelsJob.value = next
+        return next
     }
 
-    fun ensureAllChannels() {
-        if (channelsFetched) return
-        channelsFetched = true
-        scope.launch(Dispatchers.IO) {
-            allChannels = com.hikari.app.providers.gatherIptvChannels(playlists)
-            // Also trigger sports channel matching when channels are loaded
-            com.hikari.app.sports.SportsRepository.matchChannels(allChannels)
+    LaunchedEffect(playlists, refreshKey) {
+        allChannels = emptyList()
+        channelsJob.value = null
+        channelsKey++
+        if (playlists.isEmpty()) return@LaunchedEffect
+        val list = requestChannels(force = false).await()
+        allChannels = list
+        if (list.isNotEmpty()) {
+            com.hikari.app.sports.SportsRepository.matchChannels(list)
         }
     }
 
     fun runQcValidation() {
-        if (selectedQc == null || qcValidating) return
-        ensureAllChannels()
-        scope.launch(Dispatchers.IO) {
+        val qc = selectedQc ?: return
+        if (qcValidating) return
+        scope.launch {
             qcValidating = true
-            val currentMatches = qcMatches.ifEmpty {
-                allChannels.filter { ch ->
-                    QuickChannelList.matches(selectedQc!!, ch)
+            try {
+                val matches = qcMatches.ifEmpty {
+                    val channels = if (allChannels.isNotEmpty()) allChannels else requestChannels().await()
+                    withContext(Dispatchers.Default) { channels.filter { QuickChannelList.matches(qc, it) } }
                 }
+                qcMatches = matches
+                // Probe only the rows the sheet actually shows; the rest stay
+                // unprobed instead of delaying the sheet on hundreds of URLs.
+                validateChannelStatuses(matches.take(30)) { url, isAlive ->
+                    aliveByUrl = aliveByUrl + (url to isAlive)
+                }
+            } finally {
+                qcValidating = false
             }
-            qcMatches = currentMatches
-            validateChannelStatuses(currentMatches) { url, isAlive ->
-                aliveByUrl = aliveByUrl + (url to isAlive)
-            }
-            qcValidating = false
         }
     }
 
@@ -2669,26 +2706,25 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
         reloadCustomData()
     }
 
-    // Show sheet when a quick channel is selected
+    // Show sheet when a quick channel is selected. The matching channels are
+    // painted before the first probe starts; probes only refine their dots.
     LaunchedEffect(selectedQc) {
         val qc = selectedQc ?: return@LaunchedEffect
-        ensureAllChannels()
         showSheet = true
         qcLoading = true
         qcMatches = emptyList()
         aliveByUrl = emptyMap()
 
-        scope.launch(Dispatchers.IO) {
-            val matches = allChannels.filter { ch ->
-                QuickChannelList.matches(qc, ch)
-            }
-            qcMatches = matches
-            qcLoading = false
-
-            // Real network stream probe — progressive live updates
-            validateChannelStatuses(matches) { url, isAlive ->
-                aliveByUrl = aliveByUrl + (url to isAlive)
-            }
+        val channels = if (allChannels.isNotEmpty()) allChannels else requestChannels().await()
+        if (allChannels.isEmpty()) allChannels = channels
+        val matches = withContext(Dispatchers.Default) {
+            channels.filter { ch -> QuickChannelList.matches(qc, ch) }
+        }
+        qcMatches = matches
+        qcLoading = false
+        // Real network stream probe — only the sheet's first page, progressive.
+        validateChannelStatuses(matches.take(30)) { url, isAlive ->
+            aliveByUrl = aliveByUrl + (url to isAlive)
         }
     }
 
@@ -3463,6 +3499,11 @@ private fun playChannel(
         // Pass providerId as histProviderId so PlayerActivity.originProviderId is set
         // This allows fetchChannelStreams() to find the provider and resolve HLS streams
         putExtra("histProviderId", providerId)
+        channel.artwork?.takeIf { it.isNotBlank() }?.let {
+            putExtra("titleLogo", it)
+            putExtra("bannerBackdrop", it)
+            putExtra("histPoster", it)
+        }
         if (allChannels.isNotEmpty()) {
             // Cap the channel list to avoid TransactionTooLargeException (~1MB IPC parcel limit).
             // Large playlists (thousands of channels) easily exceed the limit when serialised to
@@ -3475,8 +3516,8 @@ private fun playChannel(
                     org.json.JSONObject()
                         .put("name", ch.name)
                         .put("url", ch.url)
-                        .put("logo", ch.logo ?: "")
-                        .put("thumbnail", ch.logo ?: "")
+                        .put("logo", ch.artwork ?: "")
+                        .put("thumbnail", ch.artwork ?: "")
                         .put("group", ch.group)
                         .put("providerId", ch.providerId)
                 )

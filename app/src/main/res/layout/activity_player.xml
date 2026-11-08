@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/player_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="#000000"
@@ -562,5 +563,25 @@
         android:background="@drawable/circle_glass_ripple"
         android:scaleType="centerInside"
         android:padding="10dp"
+        android:visibility="gone" />
+
+    <!-- YouTube "More Videos": offered for a few seconds at the far middle-right
+         of the player, then times out. Its list is drawn only when opened, so
+         it never intercepts the player's own gestures while hidden. -->
+    <TextView
+        android:id="@+id/yt_more_btn"
+        style="@style/HikariPill"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="end|center_vertical"
+        android:layout_marginEnd="14dp"
+        android:text="More Videos"
+        android:contentDescription="More videos from this list"
+        android:visibility="gone" />
+
+    <androidx.compose.ui.platform.ComposeView
+        android:id="@+id/youtube_more_overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
         android:visibility="gone" />
 </FrameLayout>

@@ -23,8 +23,7 @@ import com.hikari.app.youtube.YouTubeProgress
 import com.hikari.app.youtube.YouTubeScreen as EngineYouTubeScreen
 import com.hikari.app.youtube.YouTubeSession
 import com.hikari.app.youtube.YouTubeSettings
-import org.json.JSONArray
-import org.json.JSONObject
+import com.hikari.app.youtube.youTubePlayerIntent
 
 /**
  * The YouTube tab, running SmartTube's engine through the ported feed UI and
@@ -46,10 +45,14 @@ fun YouTubeScreen(nav: NavHostController) {
         val data = result.data ?: return@rememberLauncherForActivityResult
         val position = data.getLongExtra("ytPosition", -1L)
         val duration = data.getLongExtra("ytDuration", -1L)
+        // An in-player "More Videos" switch changes the current video without
+        // leaving the player; the result names the video that actually played.
+        val playedVideoId = data.getStringExtra("ytVideoId")
+            ?.takeIf { it.isNotBlank() } ?: req.videoId
         if (position >= 0L && duration > 0L) {
             YouTubeProgress.record(
                 context,
-                YouTubeProgress.ID_PREFIX + req.videoId,
+                YouTubeProgress.ID_PREFIX + playedVideoId,
                 position,
                 duration,
             )
@@ -58,7 +61,7 @@ fun YouTubeScreen(nav: NavHostController) {
         // to the end, ask the feed what comes next and start it.
         if (data.getBooleanExtra("ytEnded", false) && YouTubeSettings.autoplayNext(context)) {
             YouTubeSession.feed?.playNext(
-                req.videoId,
+                playedVideoId,
                 { p ->
                     followUp = YouTubePlayRequest(
                         p.url, p.title, p.poster, p.videoId, 0L, p.headers,
@@ -72,7 +75,7 @@ fun YouTubeScreen(nav: NavHostController) {
     LaunchedEffect(followUp) {
         val req = followUp ?: return@LaunchedEffect
         lastRequest = req
-        player.launch(playerIntent(context, req))
+        player.launch(youTubePlayerIntent(context, req))
         followUp = null
     }
 
@@ -83,42 +86,8 @@ fun YouTubeScreen(nav: NavHostController) {
         EngineYouTubeScreen(
             onPlay = { request ->
                 lastRequest = request
-                player.launch(playerIntent(context, request))
+                player.launch(youTubePlayerIntent(context, request))
             },
         )
-    }
-}
-
-/** The PlayerActivity handoff: the engine's local DASH manifest plus the User-Agent it needs. */
-private fun playerIntent(context: Context, request: YouTubePlayRequest): Intent {
-    val lower = request.url.lowercase()
-    val isMpd = lower.contains(".mpd") || lower.startsWith("http://127.0.0.1") ||
-        lower.startsWith("http://localhost")
-    val isM3u8 = lower.contains(".m3u8")
-    val headers = JSONObject().apply {
-        request.headers.forEach { (k, v) -> put(k, v) }
-    }
-    val sources = JSONArray().put(
-        JSONObject().apply {
-            put("name", "YouTube")
-            put("url", request.url)
-            put("headers", headers)
-            put("isMpd", isMpd)
-            put("isM3u8", isM3u8)
-            put("provider", "YouTube")
-        },
-    )
-    return Intent(context, PlayerActivity::class.java).apply {
-        putExtra("title", request.title)
-        putExtra("sources", sources.toString())
-        putExtra("startPosition", request.startPositionMs)
-        putExtra("askServer", false)
-        // The player's own "YouTube" origin, so its back button returns here.
-        putExtra("histProviderId", "youtube")
-        putExtra("histMediaId", YouTubeProgress.ID_PREFIX + request.videoId)
-        putExtra("histType", "movie")
-        putExtra("histTitle", request.title)
-        putExtra("histPoster", request.poster.orEmpty())
-        putExtra("ytPlayback", true)
     }
 }

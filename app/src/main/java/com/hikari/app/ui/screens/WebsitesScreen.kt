@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -48,6 +49,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -60,6 +63,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
+import coil.compose.SubcomposeAsyncImageContent
 import com.hikari.app.HikariApp
 import com.hikari.app.data.Site
 import com.hikari.app.i18n.I18n
@@ -344,6 +349,12 @@ fun WebsitesScreen(nav: NavController) {
     }
 }
 
+/** Keyless website screenshot (mShots), cached by WordPress's renderer. */
+private fun siteScreenshotUrl(url: String): String {
+    val encoded = runCatching { java.net.URLEncoder.encode(url, "UTF-8") }.getOrDefault(url)
+    return "https://s.wordpress.com/mshots/v1/$encoded?w=640&h=360"
+}
+
 @Composable
 fun SiteCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
     Surface(
@@ -356,11 +367,26 @@ fun SiteCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
         ) {
-            Icon(
-                Icons.Filled.Public,
-                contentDescription = null,
-                tint = androidx.compose.material3.MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(24.dp),
+            val shot = remember(site.url) { siteScreenshotUrl(site.url) }
+            SubcomposeAsyncImage(
+                model = shot,
+                contentDescription = site.name,
+                modifier = Modifier
+                    .width(88.dp)
+                    .height(52.dp)
+                    .clip(RoundedCornerShape(8.dp)),
+                contentScale = ContentScale.Crop,
+                loading = {
+                    Box(Modifier.fillMaxSize().background(Color(0xFF181820)), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Filled.Public, contentDescription = null, tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(20.dp))
+                    }
+                },
+                error = {
+                    Box(Modifier.fillMaxSize().background(Color(0xFF181820)), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Filled.Public, contentDescription = null, tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(20.dp))
+                    }
+                },
+                success = { SubcomposeAsyncImageContent() },
             )
             Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
@@ -406,61 +432,98 @@ fun SiteGridCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
         val host = runCatching { java.net.URI(site.url).host }.getOrNull() ?: site.url
         "https://www.google.com/s2/favicons?domain=$host&sz=64"
     }
+    val screenshotUrl = remember(site.url) {
+        // WordPress mShots renders the page (and caches the result); it is the
+        // keyless screenshot service that survives on slow mobile networks.
+        siteScreenshotUrl(site.url)
+    }
     Surface(
         onClick = onOpen,
         color = androidx.compose.material3.MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.6f),
         shape = RoundedCornerShape(14.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 16.dp),
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                AsyncImage(
-                    model = faviconUrl,
-                    contentDescription = null,
-                    modifier = Modifier.size(48.dp),
-                    contentScale = ContentScale.Fit,
+        Box {
+            SubcomposeAsyncImage(
+                model = screenshotUrl,
+                contentDescription = site.name,
+                modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                contentScale = ContentScale.Crop,
+                loading = {
+                    SiteScreenshotFallback(faviconUrl, site.name)
+                },
+                error = {
+                    SiteScreenshotFallback(faviconUrl, site.name)
+                },
+                success = { SubcomposeAsyncImageContent() },
+            )
+            // The site name sits ON the screenshot, over a dark bottom fade so
+            // it stays readable on both light and dark pages.
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(Color.Transparent, Color(0x22000000), Color(0xD9000000)),
+                        ),
+                    ),
+            )
+            Column(
+                Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth()
+                    .padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
+            ) {
+                Text(
+                    site.name,
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    site.url.substringAfter("://").substringBefore('/'),
+                    color = Color.White.copy(alpha = 0.72f),
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
-            Spacer(Modifier.height(8.dp))
-            Text(
-                site.name,
-                color = androidx.compose.material3.MaterialTheme.colorScheme.onSurface,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                site.url,
-                color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                fontSize = 10.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(6.dp))
             Box(
                 modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp)
                     .size(28.dp)
-                    .background(androidx.compose.material3.MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.2f), RoundedCornerShape(14.dp))
+                    .background(Color(0x99000000), RoundedCornerShape(14.dp))
                     .clickable(onClick = onDelete),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     Icons.Filled.Delete,
                     contentDescription = tr("Delete web app"),
-                    tint = androidx.compose.material3.MaterialTheme.colorScheme.error,
+                    tint = Color.White,
                     modifier = Modifier.size(14.dp),
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun SiteScreenshotFallback(faviconUrl: String, name: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(16f / 9f)
+            .background(Color(0xFF181820)),
+        contentAlignment = Alignment.Center,
+    ) {
+        AsyncImage(
+            model = faviconUrl,
+            contentDescription = name,
+            modifier = Modifier.size(42.dp),
+            contentScale = ContentScale.Fit,
+        )
     }
 }

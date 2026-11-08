@@ -136,6 +136,20 @@ fun SportsGameScreen(nav: androidx.navigation.NavHostController, eventId: String
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            event.image?.takeIf { it.isNotBlank() }?.let { image ->
+                item {
+                    coil.compose.AsyncImage(
+                        model = image,
+                        contentDescription = event.title,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(190.dp)
+                            .clip(RoundedCornerShape(16.dp)),
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    )
+                }
+            }
+
             item { ScoreCard(event) }
 
             item {

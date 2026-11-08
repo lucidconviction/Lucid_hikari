@@ -1073,6 +1073,9 @@ fun CatalogScreen(
                             // rawType "manga" — see MangaProvider.catalogs), unless
                             // they came from a tracker shelf — those are searched
                             // across the installed manga engines instead.
+                            if (rawType != "manga") {
+                                com.hikari.app.player.PlaybackQueueStore.set(uniqueItems, item)
+                            }
                             Routes.safeNavigate(
                                 nav,
                                 if (rawType == "manga") {
@@ -1091,6 +1094,9 @@ fun CatalogScreen(
                             // Manga rows open the reader's detail (no video to
                             // autoplay); video rows arrive already wanting
                             // playback (see DetailScreen autoplay).
+                            if (rawType != "manga") {
+                                com.hikari.app.player.PlaybackQueueStore.set(uniqueItems, quick)
+                            }
                             Routes.safeNavigate(
                                 nav,
                                 if (rawType == "manga") {

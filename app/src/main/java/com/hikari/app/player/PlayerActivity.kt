@@ -96,7 +96,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -1980,7 +1983,12 @@ class PlayerActivity : ComponentActivity() {
                 // it parked there for the rest of the session — the first pill
                 // sat half cut off in portrait. Every fresh appearance of the
                 // controls starts the row at its left edge again.
-                if (controllerVisible) resetPillScroll()
+                if (controllerVisible) {
+                    resetPillScroll()
+                    ytMoreButton?.invoke()
+                } else {
+                    findViewById<View>(R.id.yt_more_btn)?.visibility = View.GONE
+                }
                 // An UNPINNED codec readout lives and dies with the controls —
                 // pin it and it stays on the picture (see showCodecOverlay).
                 if (!controllerVisible && !codecOverlayPinned) hideCodecOverlay()
@@ -2539,12 +2547,14 @@ class PlayerActivity : ComponentActivity() {
                     PictureInPictureParams.Builder()
                         .setAspectRatio(Rational(16, 9))
                         .setAutoEnterEnabled(isPipAllowedNow())
+                        .also { b -> runCatching { b.setSeamlessResizeEnabled(true) } }
                         .build()
                 )
             }
         } else {
             pipBtn?.visibility = View.GONE
         }
+        setupYouTubeMoreVideos()
 
         nextBtn?.setOnClickListener {
             if (currentIndex + 1 < sources.size) {
@@ -2807,69 +2817,7 @@ class PlayerActivity : ComponentActivity() {
         channelsBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
         multiWindowBtn?.visibility = View.VISIBLE
 
-        sources = runCatching {
-            val arr = JSONArray(intent.getStringExtra("sources").orEmpty())
-            (0 until arr.length()).mapNotNull { i ->
-                // One poison row must never void the whole handoff: the old
-                // all-or-nothing parse turned N found servers into an empty
-                // chooser over a cover still counting them.
-                runCatching {
-                val o = arr.getJSONObject(i)
-                val headersObj = o.optJSONObject("headers") ?: JSONObject()
-                val headers = HashMap<String, String>()
-                val keys = headersObj.keys()
-                while (keys.hasNext()) {
-                    val k = keys.next()
-                    // Header values are USUALLY strings, but a JSON payload can
-                    // carry a number/boolean/null — getString() throws on those
-                    // and used to fail the entire list. Anything stringifies.
-                    headers[k] = if (headersObj.isNull(k)) "" else (headersObj.opt(k)?.toString() ?: "")
-                }
-                val subsObj = o.optJSONArray("subtitles") ?: JSONArray()
-                val subs = (0 until subsObj.length()).map { j ->
-                    val s = subsObj.getJSONObject(j)
-                    SubtitleSource(s.optString("lang"), s.optString("url"))
-                }
-                val trackersObj = o.optJSONArray("trackers") ?: JSONArray()
-                val trackers = (0 until trackersObj.length()).mapNotNull { j ->
-                    trackersObj.optString(j).ifBlank { null }
-                }
-                PlayerSource(
-                    o.optString("name", "Source ${i + 1}"),
-                    // Normalize Google Drive URLs to the direct-download form so
-                    // the player never hits the drive virus-scan HTML page.
-                    Http.normalizeDriveUrl(o.optString("url")),
-                    headers,
-                    subs,
-                    o.optBoolean("isM3u8"),
-                    o.optBoolean("isMpd"),
-                    o.optBoolean("isTorrent"),
-                    o.optString("infoHash").ifBlank { null },
-                    o.optInt("fileIdx", -1).takeIf { it >= 0 },
-                    trackers,
-                    drm = parseDrmSpec(o.optJSONObject("drm")),
-                    local = o.optBoolean("local"),
-                    provider = o.optString("provider"),
-                    providerId = o.optString("providerId"),
-                    providerName = o.optString("providerName"),
-                    details = o.optString("details"),
-                    torrentFileHint = o.optString("torrentFileHint").ifBlank { null },
-                    torrentFileSize = o.optLong("torrentFileSize", 0L),
-                )
-                }.getOrNull()
-            }
-        }.getOrDefault(emptyList())
-            // The same video surfaced by both extraction engines / addons = one
-            // entry. Torrents carry url="" and share their identity by infoHash
-            // + file index (two files of one pack share the hash but are
-            // different videos), so keying on url alone would collapse every
-            // torrent source into a single row.
-            .distinctBy { it.identityKey() }
-            // The provider the user opened this title from goes to the FRONT, so
-            // the server playback starts on (and the top of "Select server") is
-            // one it actually came from — "on MovieBox, play MovieBox". Stable
-            // sort, so every other engine keeps the order the repo sent.
-            .sortedBy { if (it.isFromOrigin()) 0 else 1 }
+        sources = parseIntentSources()
 
         val liveId = intent.getStringExtra("streamsLiveId")
         liveSessionId = liveId
@@ -3382,6 +3330,113 @@ class PlayerActivity : ComponentActivity() {
         }.getOrDefault(true)
     }
 
+    // ---- YouTube "More Videos" (the list the current video came from) ----
+
+    /** Compose state for the overlay: the ComposeView is built once and only
+     *  its list is toggled, because setContent must not be called twice. */
+    private val ytMoreOpen = androidx.compose.runtime.mutableStateOf(false)
+    private val ytVideoId = androidx.compose.runtime.mutableStateOf("")
+    private var ytMoreHideTask: Runnable? = null
+
+    private fun setupYouTubeMoreVideos() {
+        if (!intent.getBooleanExtra("ytPlayback", false)) return
+        val videoId = intent.getStringExtra("histMediaId")
+            ?.removePrefix(com.hikari.app.youtube.YouTubeProgress.ID_PREFIX)
+            ?.takeIf { it.isNotBlank() } ?: return
+        val overlay = findViewById<ComposeView>(R.id.youtube_more_overlay) ?: return
+        val button = findViewById<View>(R.id.yt_more_btn) ?: return
+
+        ytVideoId.value = videoId
+        overlay.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+        overlay.setContent {
+            MaterialTheme(colorScheme = darkColorScheme()) {
+                if (ytMoreOpen.value) {
+                    com.hikari.app.youtube.YouTubeMoreVideos(
+                        videoId = ytVideoId.value,
+                        buttonVisible = false,
+                        initialOpen = true,
+                        onOpenChange = { open ->
+                            if (!open) {
+                                ytMoreOpen.value = false
+                                overlay.visibility = View.GONE
+                            }
+                        },
+                        onPlay = { request -> switchYouTubeVideo(request) },
+                    )
+                }
+            }
+        }
+        overlay.visibility = View.GONE
+
+        fun showButton() {
+            if (ytMoreOpen.value || findViewById<View>(R.id.youtube_more_overlay)?.visibility == View.VISIBLE) return
+            button.visibility = View.VISIBLE
+            ytMoreHideTask?.let { button.removeCallbacks(it) }
+            val hide = Runnable {
+                if (!ytMoreOpen.value) button.visibility = View.GONE
+            }
+            ytMoreHideTask = hide
+            button.postDelayed(hide, 5_000L)
+        }
+
+        button.setOnClickListener {
+            button.visibility = View.GONE
+            ytMoreOpen.value = true
+            overlay.visibility = View.VISIBLE
+        }
+        showButton()
+        // The button is offered again whenever the player controls come back.
+        ytMoreButton = ::showButton
+    }
+
+    private var ytMoreButton: (() -> Unit)? = null
+
+    /**
+     * Plays [request] in this player: the old app's "More Videos" swaps the
+     * video in place rather than stacking players. This has to be in-place —
+     * starting the same singleTop activity again would deliver onNewIntent to
+     * this instance and then finish() would close the whole player.
+     */
+    private fun switchYouTubeVideo(request: com.hikari.app.youtube.YouTubePlayRequest) {
+        val currentId = intent.getStringExtra("histMediaId")
+            ?.removePrefix(com.hikari.app.youtube.YouTubeProgress.ID_PREFIX)
+            ?.takeIf { it.isNotBlank() }
+        val p = player
+        if (p != null && currentId != null) {
+            runCatching {
+                com.hikari.app.youtube.YouTubeProgress.record(
+                    this,
+                    com.hikari.app.youtube.YouTubeProgress.ID_PREFIX + currentId,
+                    p.currentPosition,
+                    p.duration,
+                )
+            }
+        }
+        setIntent(com.hikari.app.youtube.youTubePlayerIntent(this, request))
+        sources = parseIntentSources()
+        currentIndex = 0
+        headerVariant = 0
+        uaVariant = 0
+        playbackCommitted = false
+        pickedByUser = false
+        ytVideoId.value = request.videoId
+        ytMoreOpen.value = false
+        findViewById<View>(R.id.youtube_more_overlay)?.visibility = View.GONE
+        findViewById<TextView>(R.id.title_text)?.text = request.title
+        findViewById<TextView>(R.id.subtitle_text)?.apply {
+            text = ""
+            visibility = View.GONE
+        }
+        coverPlaybackLine = I18n.t("Starting %s…").replace("%s", request.title)
+        showLoadingCover(
+            titleOverride = request.title,
+            logoOverride = request.poster,
+            backdropOverride = request.poster,
+        )
+        playSource(0)
+        ytMoreButton?.invoke()
+    }
+
     /** Enters picture-in-picture mode (SDK 26+). The window is sized to the
      *  video's actual aspect ratio (16:9 until the video is known), so the
      *  user gets a properly-proportioned mini window instead of letterboxed
@@ -3404,7 +3459,12 @@ class PlayerActivity : ComponentActivity() {
             Rational(p.videoSize.width, p.videoSize.height)
         } else Rational(16, 9)
         builder.setAspectRatio(ratio)
-        if (Build.VERSION.SDK_INT >= 31) builder.setAutoEnterEnabled(true)
+        if (Build.VERSION.SDK_INT >= 31) {
+            builder.setAutoEnterEnabled(true)
+            // Android 12+: the PiP window can be resized freely while the user
+            // drags its corners; without this it jumps between aspect ratios.
+            runCatching { builder.setSeamlessResizeEnabled(true) }
+        }
         try {
             enterPictureInPictureMode(builder.build())
         } catch (t: Throwable) {
@@ -3450,6 +3510,9 @@ class PlayerActivity : ComponentActivity() {
         }
         val pv = playerView ?: return
         if (isInPictureInPictureMode) {
+            ytMoreOpen.value = false
+            findViewById<View>(R.id.youtube_more_overlay)?.visibility = View.GONE
+            findViewById<View>(R.id.yt_more_btn)?.visibility = View.GONE
             hideLoadingBanner(immediate = true)
             pv.useController = false
             pv.hideController()
@@ -4950,6 +5013,12 @@ class PlayerActivity : ComponentActivity() {
         val top = findViewById<ViewGroup>(R.id.player_top_actions) ?: return
         val left = findViewById<ViewGroup>(R.id.player_pills) ?: return
         val right = findViewById<ViewGroup>(R.id.player_right_actions) ?: return
+
+        // PiP is available for every video the player opens, independent of a
+        // saved control layout that may have hidden the pill earlier.
+        if (Build.VERSION.SDK_INT >= 26) {
+            findViewById<View>(R.id.pip_btn)?.visibility = View.VISIBLE
+        }
 
         val managedHidden = listOf(R.id.episodes_btn, R.id.pip_btn).filter {
             findViewById<View>(it)?.visibility == View.GONE
@@ -7904,11 +7973,13 @@ class PlayerActivity : ComponentActivity() {
                 onChannelChanged = { channel ->
                     updateTitleForChannel(channel)
                     coverPlaybackLine = I18n.t("Switching to %s…").replace("%s", channel.name)
-                    // Show the loading banner with the new channel's logo
-                    // so it's visible during the transition to the next stream.
+                    // Picture AND name the incoming channel on the transition
+                    // card: an IPTV stream's attached thumbnail when it has one,
+                    // otherwise its logo.
                     showLoadingCover(
                         titleOverride = channel.name,
-                        logoOverride = channel.logo
+                        logoOverride = channel.artwork,
+                        backdropOverride = channel.artwork,
                     )
                     lifecycleScope.launch {
                         val fresh = fetchChannelStreams(channel)
@@ -8404,31 +8475,116 @@ class PlayerActivity : ComponentActivity() {
             return
         }
         if (!autoplayNextOn || autoplayRunning) return
-        val item = favouriteItem ?: return
-        if (item.type == MediaType.MOVIE) return
         if (runCatching { isLiveSource(sources.getOrNull(currentIndex)) }.getOrDefault(false)) return
+        val item = favouriteItem
+        // A film — or a player opened without a library item — has no episode
+        // to advance. Its next title is the next card in the shelf it was
+        // picked from (see PlaybackQueueStore).
+        if (item == null || item.type == MediaType.MOVIE) {
+            autoplayNextFromQueue()
+            return
+        }
         val cached = playerEpisodes
         if (cached.isEmpty()) {
             lifecycleScope.launch {
                 val eps = runCatching { contentRepo.episodesFor(item) }.getOrNull().orEmpty()
-                if (eps.isEmpty()) return@launch
+                if (eps.isEmpty()) {
+                    autoplayNextFromQueue()
+                    return@launch
+                }
                 playerEpisodes = eps
-                advanceFrom(eps)
+                if (!advanceFrom(eps)) autoplayNextFromQueue()
             }
             return
         }
-        advanceFrom(cached)
+        if (!advanceFrom(cached)) autoplayNextFromQueue()
     }
 
-    private fun advanceFrom(eps: List<Episode>) {
-        if (!autoplayNextOn || autoplayRunning) return
-        if (isFinishing || isDestroyed) return
+    /** The next card in the shelf the current title was opened from, resolved
+     *  through the same provider stack and started in a fresh player. This is
+     *  the extensions/addons counterpart of the YouTube feed's autoplay. */
+    private fun autoplayNextFromQueue() {
+        if (!autoplayNextOn || autoplayRunning || isFinishing || isDestroyed) return
+        val mediaId = intent.getStringExtra("histMediaId").orEmpty()
+        val providerId = intent.getStringExtra("histProviderId").orEmpty()
+        val next = com.hikari.app.player.PlaybackQueueStore.nextFor(providerId, mediaId) ?: return
+        autoplayRunning = true
+        showLoadingCover(
+            titleOverride = next.title,
+            logoOverride = next.posterUrl,
+            backdropOverride = next.backdropUrl ?: next.posterUrl,
+        )
+        lifecycleScope.launch {
+            val app = applicationContext as HikariApp
+            val repo = ContentRepository(app.providers)
+            var episode: Episode? = null
+            if (next.type == MediaType.SERIES) {
+                episode = runCatching { repo.episodesFor(next) }.getOrNull()
+                    ?.firstOrNull()
+            }
+            val streams = runCatching { repo.streamsFor(next, episode) }.getOrDefault(emptyList())
+                .filter { it.url.isNotBlank() && !it.externalUrl && !it.isTorrent }
+            if (streams.isEmpty()) {
+                autoplayRunning = false
+                hideLoadingBanner(immediate = true)
+                return@launch
+            }
+            val payload = org.json.JSONArray()
+            streams.take(12).forEach { src ->
+                payload.put(
+                    org.json.JSONObject()
+                        .put("name", src.name)
+                        .put("url", src.url)
+                        .put("headers", org.json.JSONObject(src.headers as Map<*, *>))
+                        .put("isM3u8", src.isM3u8)
+                        .put("isMpd", src.isMpd)
+                        .put("provider", src.provider)
+                        .put("providerId", src.providerId)
+                        .put("providerName", src.providerName)
+                        .put("details", src.details)
+                        .put("thumbnail", src.thumbnail.orEmpty())
+                        .put("ytId", src.ytId.orEmpty())
+                        .put("isTorrent", false)
+                        .put("subtitles", org.json.JSONArray().also { arr ->
+                            src.subtitles.forEach { sub ->
+                                arr.put(org.json.JSONObject().put("lang", sub.lang).put("url", sub.url))
+                            }
+                        }),
+                )
+            }
+            val intent = Intent(this@PlayerActivity, PlayerActivity::class.java).apply {
+                putExtra("title", next.title)
+                putExtra("sources", payload.toString())
+                putExtra("askServer", false)
+                putExtra("histProviderId", next.providerId)
+                putExtra("histMediaId", next.id)
+                putExtra("histType", next.type.name)
+                putExtra("histTitle", next.title)
+                putExtra("histPoster", next.posterUrl.orEmpty())
+                (next.backdropUrl ?: next.posterUrl)?.takeIf { it.isNotBlank() }?.let { putExtra("bannerBackdrop", it) }
+                next.posterUrl?.takeIf { it.isNotBlank() }?.let { putExtra("titleLogo", it) }
+                episode?.let { ep ->
+                    putExtra("histEpisodeId", ep.id)
+                    putExtra("histEpisodeName", ep.name)
+                    putExtra("histEpisodeSeason", ep.season)
+                    putExtra("histEpisodeNumber", ep.number)
+                }
+            }
+            startActivity(intent)
+            finish()
+        }
+    }
+
+    private fun advanceFrom(eps: List<Episode>): Boolean {
+        if (!autoplayNextOn || autoplayRunning) return false
+        if (isFinishing || isDestroyed) return false
         val at = indexOfLive(eps)
-        if (at < 0) return
-        // Last episode: stay on the end screen, nothing to advance to.
-        val next = eps.getOrNull(at + 1) ?: return
+        if (at < 0) return false
+        // Last episode: leave the end screen alone.
+        val next = eps.getOrNull(at + 1) ?: return false
         Toast.makeText(this, I18n.t("Playing next episode…"), Toast.LENGTH_SHORT).show()
         switchToEpisode(next, fromAutoplay = true)
+        return true
     }
 
     /** The Source pill: the same grouped picker, dismissible without a pick. */
@@ -12713,6 +12869,75 @@ class PlayerActivity : ComponentActivity() {
         return sb.toString().ifBlank { e.javaClass.simpleName }
     }
 
+    /** The sources in the launch intent (and, after an in-player YouTube
+     *  switch, the freshly set intent). */
+    private fun parseIntentSources(): List<PlayerSource> {
+        return runCatching {
+            val arr = JSONArray(intent.getStringExtra("sources").orEmpty())
+            (0 until arr.length()).mapNotNull { i ->
+                // One poison row must never void the whole handoff: the old
+                // all-or-nothing parse turned N found servers into an empty
+                // chooser over a cover still counting them.
+                runCatching {
+                val o = arr.getJSONObject(i)
+                val headersObj = o.optJSONObject("headers") ?: JSONObject()
+                val headers = HashMap<String, String>()
+                val keys = headersObj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    // Header values are USUALLY strings, but a JSON payload can
+                    // carry a number/boolean/null — getString() throws on those
+                    // and used to fail the entire list. Anything stringifies.
+                    headers[k] = if (headersObj.isNull(k)) "" else (headersObj.opt(k)?.toString() ?: "")
+                }
+                val subsObj = o.optJSONArray("subtitles") ?: JSONArray()
+                val subs = (0 until subsObj.length()).map { j ->
+                    val s = subsObj.getJSONObject(j)
+                    SubtitleSource(s.optString("lang"), s.optString("url"))
+                }
+                val trackersObj = o.optJSONArray("trackers") ?: JSONArray()
+                val trackers = (0 until trackersObj.length()).mapNotNull { j ->
+                    trackersObj.optString(j).ifBlank { null }
+                }
+                PlayerSource(
+                    o.optString("name", "Source ${i + 1}"),
+                    // Normalize Google Drive URLs to the direct-download form so
+                    // the player never hits the drive virus-scan HTML page.
+                    Http.normalizeDriveUrl(o.optString("url")),
+                    headers,
+                    subs,
+                    o.optBoolean("isM3u8"),
+                    o.optBoolean("isMpd"),
+                    o.optBoolean("isTorrent"),
+                    o.optString("infoHash").ifBlank { null },
+                    o.optInt("fileIdx", -1).takeIf { it >= 0 },
+                    trackers,
+                    drm = parseDrmSpec(o.optJSONObject("drm")),
+                    local = o.optBoolean("local"),
+                    provider = o.optString("provider"),
+                    providerId = o.optString("providerId"),
+                    providerName = o.optString("providerName"),
+                    details = o.optString("details"),
+                    torrentFileHint = o.optString("torrentFileHint").ifBlank { null },
+                    torrentFileSize = o.optLong("torrentFileSize", 0L),
+                    thumbnail = o.optString("thumbnail").ifBlank { null },
+                )
+                }.getOrNull()
+            }
+        }.getOrDefault(emptyList())
+            // The same video surfaced by both extraction engines / addons = one
+            // entry. Torrents carry url="" and share their identity by infoHash
+            // + file index (two files of one pack share the hash but are
+            // different videos), so keying on url alone would collapse every
+            // torrent source into a single row.
+            .distinctBy { it.identityKey() }
+            // The provider the user opened this title from goes to the FRONT, so
+            // the server playback starts on (and the top of "Select server") is
+            // one it actually came from — "on MovieBox, play MovieBox". Stable
+            // sort, so every other engine keeps the order the repo sent.
+            .sortedBy { if (it.isFromOrigin()) 0 else 1 }
+    }
+
     /** Parses the "drm" object of the sources payload (see `playerPayload`). */
     private fun parseDrmSpec(o: JSONObject?): DrmSpec? {
         o ?: return null
@@ -13139,18 +13364,22 @@ class PlayerActivity : ComponentActivity() {
         // printing the search's running count while a server was already being
         // prepared, which is what "it says 60 servers and it is still not
         // playing" was reading.
-        val coverName = sourceBadge.ifBlank { "server" }
+        val coverName = sourceBadge.ifBlank { src.name.ifBlank { "server" } }
         coverPlaybackLine = I18n.t("Starting %s…").replace("%s", coverName)
         // An effects-pipeline re-arm (see [rebuildPlayerForEffects]) re-opens
         // the SAME already-playing source: no cover, no spinner, playback just
         // continues with the grade applied.
         if (!silentEffectsRebuild) {
-            if (loadingBanner?.visibility != View.VISIBLE && loadingSpinner?.visibility != View.VISIBLE) {
-                showLoadingCover()
-            } else {
-                loadingStatus?.text = coverPlaybackLine
-                loadingSpinnerStatus?.text = coverPlaybackLine
-            }
+            // The transition card names and pictures the source that is about
+            // to start, so a server/channel change never shows the previous
+            // stream's artwork while the next one is being prepared.
+            showLoadingCover(
+                titleOverride = coverName,
+                logoOverride = src.thumbnail,
+                backdropOverride = src.thumbnail,
+            )
+            loadingStatus?.text = coverPlaybackLine
+            loadingSpinnerStatus?.text = coverPlaybackLine
         }
 
         player?.let { old ->
@@ -14017,7 +14246,7 @@ class PlayerActivity : ComponentActivity() {
  */
 private fun updateTitleForChannel(channel: com.hikari.app.data.IptvChannel) {
     val name = channel.name
-    val logo = channel.logo.takeIf { !it.isNullOrBlank() }
+    val logo = channel.artwork?.takeIf { !it.isNullOrBlank() }
     val epName = intent.getStringExtra("histEpisodeName").orEmpty()
     val epSeason = intent.getIntExtra("histEpisodeSeason", 0)
     val epNumber = intent.getIntExtra("histEpisodeNumber", 0)
@@ -16118,7 +16347,8 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
      *  spinner on black. */
     private fun showLoadingCover(
         titleOverride: String? = null,
-        logoOverride: String? = null
+        logoOverride: String? = null,
+        backdropOverride: String? = null
     ) {
         // Restore whatever is actually happening (or the default line) so a
         // cover re-shown mid-session (failover, second attempt) doesn't look
@@ -16128,7 +16358,7 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
         loadingStatus?.text = line
         loadingSpinnerStatus?.text = line
         startLoadingTicker()
-        if (bannerMode) showLoadingBanner(titleOverride, logoOverride) else showLoadingSpinner()
+        if (bannerMode) showLoadingBanner(titleOverride, logoOverride, backdropOverride) else showLoadingSpinner()
     }
 
     /** Re-renders the cover's status line once a second with the number of
@@ -16165,7 +16395,8 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
 
     private fun showLoadingBanner(
         titleOverride: String? = null,
-        logoOverride: String? = null
+        logoOverride: String? = null,
+        backdropOverride: String? = null
     ) {
         val banner = loadingBanner ?: return
         val box = loadingTitleBox ?: return
@@ -16227,7 +16458,7 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
         // portrait poster: center-cropping it into a landscape TV frame is the exact
         // vertical/poster loading screen users see on TV. The detail screen sends a
         // real backdrop when one exists; without one the XML fallback remains clean.
-        val bannerSource = if (tvLayout) {
+        val bannerSource = backdropOverride?.takeIf { it.isNotBlank() } ?: if (tvLayout) {
             intent.getStringExtra("bannerBackdrop")?.takeIf { it.isNotBlank() }
         } else {
             intent.getStringExtra("bannerBackdrop")?.takeIf { it.isNotBlank() }
@@ -16238,7 +16469,8 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
         // right (POSTER), falling back to the backdrop so a title whose addon
         // gave no poster still shows something.
         val posterModel = PosterLoader.model(
-            intent.getStringExtra("histPoster")?.takeIf { it.isNotBlank() }
+            backdropOverride?.takeIf { it.isNotBlank() }
+                ?: intent.getStringExtra("histPoster")?.takeIf { it.isNotBlank() }
                 ?: intent.getStringExtra("bannerBackdrop")
         )
 
@@ -17543,7 +17775,12 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
                 Intent()
                     .putExtra("ytPosition", p.currentPosition)
                     .putExtra("ytDuration", p.duration)
-                    .putExtra("ytEnded", ytEnded),
+                    .putExtra("ytEnded", ytEnded)
+                    .putExtra(
+                        "ytVideoId",
+                        intent.getStringExtra("histMediaId")
+                            ?.removePrefix(com.hikari.app.youtube.YouTubeProgress.ID_PREFIX),
+                    ),
             )
         }
     }

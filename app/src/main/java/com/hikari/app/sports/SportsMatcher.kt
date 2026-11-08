@@ -113,7 +113,7 @@ object SportsMatcher {
             programTitle = null,
             quality = null,
             catchup = false,
-            logo = nc.channel.logo,
+            logo = nc.channel.artwork,
             channel = nc.channel,
         )
     }

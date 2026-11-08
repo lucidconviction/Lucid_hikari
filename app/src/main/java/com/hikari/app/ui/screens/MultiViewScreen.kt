@@ -30,6 +30,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -37,6 +39,8 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -377,6 +381,10 @@ private fun MultiViewContent(
         val slots = layout.calculateSlots(count)
         val totalRows = (slots.maxOfOrNull { it.row + it.rowSpan } ?: 1).coerceAtLeast(1)
         val totalCols = (slots.maxOfOrNull { it.col + it.colSpan } ?: 1).coerceAtLeast(1)
+        // The focus ring follows the audio, and the audio is the loudest open
+        // window: one ring, on the window you can actually hear.
+        val loudestId = streams.maxByOrNull { MultiWindowStore.getVolume(it.id) }?.id
+        var layoutMenuOpen by remember { mutableStateOf(false) }
 
         // Fullscreen coordination: when entering fullscreen, pause all other
         // grid players so only the fullscreen stream has audio.  When returning
@@ -443,27 +451,62 @@ private fun MultiViewContent(
             ) {
                 val validLayouts = getValidLayouts(count, isPortrait, isTablet)
                 val isAuto = !MultiWindowStore.isLayoutLocked()
-                Box(
-                    Modifier.clip(RoundedCornerShape(9999.dp))
-                        .background(if (isAuto) PrimaryContainer else SurfaceContainer)
-                        .border(if (isAuto) 0.dp else 0.5.dp, OutlineVariant.copy(alpha = 0.3f), RoundedCornerShape(9999.dp))
-                        .clickable { MultiWindowStore.setAutoLayout() }
-                        .padding(horizontal = 12.dp, vertical = 5.dp),
-                ) {
-                    Text("Auto", color = if (isAuto) Color.White else OnSurfaceVariant,
-                        fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
+                val currentLayoutLabel = if (isAuto) {
+                    "Auto · " + (defaultLayout(count, isPortrait, isTablet)?.label ?: "Grid")
+                } else {
+                    MultiWindowStore.currentLayout()?.label ?: "Layout"
                 }
-                validLayouts.forEach { l ->
-                    val isSelected = MultiWindowStore.currentLayout() == l || (isAuto && defaultLayout(count, isPortrait, isTablet) == l)
-                    Box(
+                Box {
+                    Row(
                         Modifier.clip(RoundedCornerShape(9999.dp))
-                            .background(if (isSelected) PrimaryContainer else SurfaceContainer)
-                            .border(if (isSelected) 0.dp else 0.5.dp, OutlineVariant.copy(alpha = 0.3f), RoundedCornerShape(9999.dp))
-                            .clickable { MultiWindowStore.setLayout(l) }
-                            .padding(horizontal = 12.dp, vertical = 5.dp),
+                            .background(PrimaryContainer)
+                            .border(0.5.dp, Primary.copy(alpha = 0.4f), RoundedCornerShape(9999.dp))
+                            .clickable { layoutMenuOpen = true }
+                            .padding(start = 12.dp, end = 8.dp, top = 5.dp, bottom = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        Text(l.label, color = if (isSelected) Color.White else OnSurfaceVariant,
-                            fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
+                        Text(
+                            currentLayoutLabel,
+                            color = Color.White,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.5.sp,
+                        )
+                        Icon(Icons.Filled.ArrowDropDown, contentDescription = "Window layout", tint = Color.White, modifier = Modifier.size(14.dp))
+                    }
+                    DropdownMenu(
+                        expanded = layoutMenuOpen,
+                        onDismissRequest = { layoutMenuOpen = false },
+                        modifier = Modifier.background(SurfaceContainer),
+                    ) {
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Text("Auto", color = if (isAuto) Primary else OnSurface, fontSize = 13.sp)
+                                    if (isAuto) Icon(Icons.Filled.Check, contentDescription = null, tint = Primary, modifier = Modifier.size(15.dp))
+                                }
+                            },
+                            onClick = {
+                                MultiWindowStore.setAutoLayout()
+                                layoutMenuOpen = false
+                            },
+                        )
+                        validLayouts.forEach { l ->
+                            val isSelected = !isAuto && MultiWindowStore.currentLayout() == l
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Text(l.label, color = if (isSelected) Primary else OnSurface, fontSize = 13.sp)
+                                        if (isSelected) Icon(Icons.Filled.Check, contentDescription = null, tint = Primary, modifier = Modifier.size(15.dp))
+                                    }
+                                },
+                                onClick = {
+                                    MultiWindowStore.setLayout(l)
+                                    layoutMenuOpen = false
+                                },
+                            )
+                        }
                     }
                 }
                 Spacer(Modifier.width(4.dp))
@@ -541,7 +584,8 @@ private fun MultiViewContent(
                                 val stream = streams.getOrNull(slot.index)
                                 if (stream != null) {
                                     gridPos++
-                                    val isAudioFocused = MultiWindowStore.isAudioFocused(stream.id)
+                                    val isAudioFocused = stream.id == loudestId &&
+                                        MultiWindowStore.getVolume(stream.id) > 0f
                                     key(stream.id) {
                                         val occupiedSlots = streams.map { it.slotIndex }.sorted()
                                         val curSlot = stream.slotIndex
