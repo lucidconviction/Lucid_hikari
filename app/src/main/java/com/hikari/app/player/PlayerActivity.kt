@@ -8267,7 +8267,20 @@ class PlayerActivity : ComponentActivity() {
      *  Movies, live channels and the last episode stay put; an already-running
      *  advance (or a switch the user just made) wins over a second ENDED event. */
     private fun onPlaybackEnded() {
-        if (intent.getBooleanExtra("ytPlayback", false)) ytEnded = true
+        if (intent.getBooleanExtra("ytPlayback", false)) {
+            ytEnded = true
+            // The YouTube tab advances to the next video itself (it resolves
+            // the stream before launching the player). Leaving this activity
+            // hands it the finished result; with autoplay off, the end screen
+            // is the right place to stop.
+            val autoplay = runCatching {
+                com.hikari.app.youtube.YouTubeSettings.autoplayNext(this)
+            }.getOrDefault(false)
+            if (autoplay) {
+                finish()
+                return
+            }
+        }
         if (isFinishing || isDestroyed) return
         if (autoNextOn && channelSurfController != null && !autoNextRunning) {
             autoNextRunning = true
