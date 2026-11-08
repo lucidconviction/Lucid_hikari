@@ -90,8 +90,48 @@ fun WebsitesScreen(nav: NavController) {
     var showAddDialog by remember { mutableStateOf(false) }
     var addName by remember { mutableStateOf("") }
     var addUrl by remember { mutableStateOf("") }
+    var addError by remember { mutableStateOf<String?>(null) }
     var removeTarget by remember { mutableStateOf<Site?>(null) }
     var isGrid by remember { mutableStateOf(true) }
+
+    /** A valid web address with a scheme, or null when it is not one. */
+    fun normalizeSiteUrl(raw: String): String? {
+        var value = raw.trim()
+        if (value.isBlank()) return null
+        if (!value.startsWith("http://", ignoreCase = true) &&
+            !value.startsWith("https://", ignoreCase = true)
+        ) {
+            value = "https://$value"
+        }
+        val host = runCatching { java.net.URI(value).host }.getOrNull().orEmpty()
+        if (host.isBlank() || (!host.contains('.') && host != "localhost" &&
+                !host.matches(Regex("""\d{1,3}(\.\d{1,3}){3}""")))) {
+            return null
+        }
+        return value
+    }
+
+    fun saveSite() {
+        val normalized = normalizeSiteUrl(addUrl)
+        if (normalized == null) {
+            addError = I18n.t("Enter a website address, for example example.com")
+            return
+        }
+        val name = addName.trim().ifEmpty {
+            runCatching { java.net.URI(normalized).host }.getOrNull()
+                ?.removePrefix("www.")
+                ?.ifBlank { normalized }
+                ?: normalized
+        }
+        // The app-wide scope, not the screen's: a save started as the dialog
+        // closes must not be cancelled by that recomposition, which is what
+        // made a site occasionally vanish / never appear in the list.
+        app.appScope.launch { app.store.addSite(Site(name, normalized)) }
+        showAddDialog = false
+        addName = ""
+        addUrl = ""
+        addError = null
+    }
 
     Scaffold(
         topBar = {
@@ -106,7 +146,12 @@ fun WebsitesScreen(nav: NavController) {
                             tint = Color.White.copy(alpha = 0.8f),
                         )
                     }
-                    IconButton(onClick = { showAddDialog = true }) {
+                    IconButton(onClick = {
+                        addError = null
+                        addName = ""
+                        addUrl = urlInput.trim()
+                        showAddDialog = true
+                    }) {
                         Icon(Icons.Filled.Add, contentDescription = tr("Add web app"), tint = Color.White.copy(alpha = 0.8f))
                     }
                 },
@@ -170,6 +215,35 @@ fun WebsitesScreen(nav: NavController) {
                         .size(44.dp)
                         .background(Color.White.copy(alpha = 0.15f), RoundedCornerShape(22.dp))
                         .clickable {
+                            // Save whatever is in the address bar straight into
+                            // Web Apps, without going through the dialog.
+                            val normalized = normalizeSiteUrl(urlInput)
+                            if (normalized == null) {
+                                if (urlInput.isNotBlank()) {
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        I18n.t("Enter a website address, for example example.com"),
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            } else {
+                                val host = runCatching { java.net.URI(normalized).host }.getOrNull()
+                                    .orEmpty().removePrefix("www.").ifBlank { normalized }
+                                app.appScope.launch { app.store.addSite(Site(host, normalized)) }
+                                urlInput = ""
+                                addError = null
+                            }
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Filled.Add, contentDescription = tr("Save to Web Apps"), tint = Color.White, modifier = Modifier.size(20.dp))
+                }
+                Spacer(Modifier.width(8.dp))
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(Color.White.copy(alpha = 0.15f), RoundedCornerShape(22.dp))
+                        .clickable {
                             val raw = urlInput.trim()
                             if (raw.isEmpty()) return@clickable
                             val normalized = if (raw.startsWith("http://", ignoreCase = true) ||
@@ -219,7 +293,12 @@ fun WebsitesScreen(nav: NavController) {
                         )
                         Spacer(Modifier.height(16.dp))
                         Surface(
-                            onClick = { showAddDialog = true },
+                            onClick = {
+                                addError = null
+                                addName = ""
+                                addUrl = urlInput.trim()
+                                showAddDialog = true
+                            },
                             shape = RoundedCornerShape(50),
                             color = androidx.compose.material3.MaterialTheme.colorScheme.primaryContainer,
                         ) {
@@ -290,34 +369,28 @@ fun WebsitesScreen(nav: NavController) {
                         onValueChange = { addUrl = it },
                         label = { Text(tr("Web app URL")) },
                         singleLine = true,
+                        isError = addError != null,
+                        supportingText = addError?.let { { Text(it) } },
                         modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { saveSite() }),
                         colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(),
                     )
                 }
             },
             confirmButton = {
                 TextButton(
-                    enabled = addUrl.trim().isNotBlank(),
-                    onClick = {
-                        val url = addUrl.trim()
-                        val name = addName.trim().ifEmpty { url }
-                        val normalized = if (url.startsWith("http://", ignoreCase = true) ||
-                            url.startsWith("https://", ignoreCase = true)
-                        ) url else "https://$url"
-                        scope.launch {
-                            val app = context.applicationContext as HikariApp
-                            app.store.addSite(Site(name, normalized))
-                        }
-                        showAddDialog = false
-                        addName = ""
-                        addUrl = ""
-                    },
+                    enabled = normalizeSiteUrl(addUrl) != null,
+                    onClick = { saveSite() },
                 ) {
                     Text(tr("Add"), color = androidx.compose.material3.MaterialTheme.colorScheme.primary)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showAddDialog = false }) {
+                TextButton(onClick = {
+                    showAddDialog = false
+                    addError = null
+                }) {
                     Text(tr("Cancel"), color = Color.White.copy(alpha = 0.7f))
                 }
             },
