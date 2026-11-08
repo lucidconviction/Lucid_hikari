@@ -424,7 +424,7 @@ private fun AllEventsTab(
         SportsRepository.activeLeagues(settings, follows).map { it.id }.toSet()
     }
     val filterToChannels = settings.onlyOnMyChannels && matches.isNotEmpty()
-    val dayEvents = remember(events, dayStart, dayEnd, active, filterToChannels, matches) {
+    val dayEvents = remember(events, dayStart, dayEnd, active, filterToChannels, matches, follows, now / 30_000) {
         events.filter { ev ->
             val onDay = when {
                 ev.state == GameState.POST -> {
