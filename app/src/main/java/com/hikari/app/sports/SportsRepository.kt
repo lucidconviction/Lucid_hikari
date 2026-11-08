@@ -67,6 +67,7 @@ object SportsRepository {
     private val mutex = Mutex()
     private var initialized = false
     private var context: Context? = null
+    private var lastRefreshAt = 0L
 
     // ---- Persistence ----
     private lateinit var store: DataStore<Preferences>
@@ -128,6 +129,7 @@ object SportsRepository {
                 }
                 events.value = newEvents
                 known.value = newKnown
+                lastRefreshAt = LiveTvClock.nowMs()
                 channels.value.takeIf { it.isNotEmpty() }?.let { chans ->
                     matches.value = SportsMatcher.match(newEvents, chans)
                 }
@@ -168,7 +170,11 @@ object SportsRepository {
     /** Set viewing state (for auto-refresh). */
     fun setViewing(v: Boolean) {
         viewing.value = v
-        if (v) refreshNow()
+        // Opening the tab right after start-up must not repeat the refresh the
+        // init already ran; anything older than a couple of minutes does.
+        if (v && (events.value.isEmpty() || LiveTvClock.nowMs() - lastRefreshAt > 2 * 60_000L)) {
+            refreshNow()
+        }
     }
 
     /** Match current events to the given IPTV channels. */
