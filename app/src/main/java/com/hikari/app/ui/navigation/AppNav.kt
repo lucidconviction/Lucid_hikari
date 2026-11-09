@@ -708,16 +708,14 @@ object NavStyles {
  */
 object BarMetrics {
     /** The seamless layout's plate. */
-    val classicHeight = 62.dp
-    /** The floating bars' resting height. Taller than the old 54dp pill
-     *  because the taskbar icons are deliberately twice their old size: the
-     *  labels still need their own line under a 40dp glyph, and squeezing both
-     *  into a 54dp strip left the icons touching the pill's edges. */
-    val fullHeight = 70.dp
-    /** The animated layout's scrolled-in size: the same 40dp icons, with the
-     *  labels set aside, so the pill gets shorter without shrinking the thing
-     *  the user is actually aiming at. */
-    val midHeight = 58.dp
+    val classicHeight = 56.dp
+    /** The floating bars' resting height. The icons are 26dp now, so the bar
+     *  can sit lower than the 70dp slab the 40dp glyphs needed while still
+     *  leaving the label its own line. */
+    val fullHeight = 62.dp
+    /** The animated layout's scrolled-in size: the same 26dp icons, labels set
+     *  aside, drawn as a slim floating pill. */
+    val midHeight = 50.dp
     /** Gap between the bar and the bottom of the screen — and, with [hPad], the
      *  room around the pill on every side, which is what makes it float over
      *  the page instead of spanning it. */
@@ -849,11 +847,10 @@ private fun AppBottomBar(
     // it now leaves the cell real space above and below its contents, which is
     // what stops the icons from looking squeezed against the pill's edges.
     val tabHeight = (barHeight - 10.dp)
-    // 40dp: exactly twice the 20dp glyph the bar used to draw. The requirement
-    // is a taskbar you can aim at from across the room, not a decorative pill;
-    // the horizontally scrolling row below is what gives every one of those
-    // bigger buttons its own room instead of shrinking them back into slivers.
-    val iconSize by animateDpAsState(40.dp, label = "barIcon")
+    // 26dp: 35% smaller than the 40dp glyph the taskbar drew in the last
+    // build. The row still scrolls sideways, so the buttons keep their own
+    // room while the bar itself reads as a light floating strip again.
+    val iconSize by animateDpAsState(26.dp, label = "barIcon")
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -889,7 +886,11 @@ private fun AppBottomBar(
                 color = if (edgeToEdge) {
                     MaterialTheme.colorScheme.surfaceContainerHigh
                 } else {
-                    MaterialTheme.colorScheme.surface.copy(alpha = if (glass.dark) 0.92f else 0.95f)
+                    // More translucent than the old 0.92/0.95 panel: the page
+                    // and its artwork now show through the floating bar at a
+                    // glance, while the hairline edge and the labels keep it
+                    // readable over bright posters.
+                    MaterialTheme.colorScheme.surface.copy(alpha = if (glass.dark) 0.62f else 0.74f)
                 },
                 border = if (floating) BorderStroke(1.dp, glass.border) else null,
                 shadowElevation = if (floating && !glass.dark) 8.dp else 0.dp,

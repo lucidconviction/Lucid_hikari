@@ -2,6 +2,7 @@
 
 package com.hikari.app.music
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -65,6 +66,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,11 +74,70 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import kotlinx.coroutines.launch
+
+/**
+ * The Audio / Video switch shared by the Music home page and the full player.
+ *
+ * Audio is the page's own lossless/stream player; Video opens the same song as
+ * a YouTube music video in Hikari's player, where picture-in-picture and the
+ * usual video controls already live.
+ */
+@Composable
+internal fun MusicModeToggle(
+    video: Boolean,
+    onChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier
+            .clip(RoundedCornerShape(50))
+            .background(Color.White.copy(alpha = 0.08f))
+            .padding(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        MusicModeChip("Audio", Icons.Filled.MusicNote, !video) { onChange(false) }
+        MusicModeChip("Video", Icons.Filled.PlayArrow, video) { onChange(true) }
+    }
+}
+
+@Composable
+private fun MusicModeChip(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (selected) MusicAccent else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 11.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = if (selected) Color.White else Color.White.copy(alpha = 0.6f),
+            modifier = Modifier.size(14.dp),
+        )
+        Text(
+            label,
+            color = if (selected) Color.White else Color.White.copy(alpha = 0.6f),
+            fontSize = 11.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+        )
+    }
+}
 
 /** The always-visible control strip above the taskbar. */
 @Composable
@@ -151,13 +212,35 @@ internal fun MusicMiniPlayer(
  *  genuinely out of the way and Back returns to the Music page. */
 @Composable
 internal fun MusicPlayerScreen(onBack: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val state by MusicPlayer.state.collectAsState()
     val liked by MusicLibrary.liked.collectAsState()
     val preferLossless by MusicLibrary.preferLossless.collectAsState()
+    val videoMode by MusicLibrary.videoMode.collectAsState()
     var settings by remember { mutableStateOf(false) }
+
+    fun changePlaybackMode(video: Boolean) {
+        MusicLibrary.setVideoMode(video)
+        if (!video) return
+        val track = state.track ?: return
+        scope.launch {
+            if (!openMusicVideo(context, track)) {
+                MusicLibrary.setVideoMode(false)
+                Toast.makeText(
+                    context,
+                    "No music video found for this song.",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
+
     MusicNowPlaying(
         state = state,
         liked = liked.any { it.id == state.track?.id },
+        videoMode = videoMode,
+        onVideoMode = ::changePlaybackMode,
         onDismiss = onBack,
         onLike = { state.track?.let { MusicLibrary.toggleLike(it) } },
         onDownload = { state.track?.let { MusicLibrary.download(it) } },
@@ -176,6 +259,8 @@ internal fun MusicPlayerScreen(onBack: () -> Unit) {
 internal fun MusicNowPlaying(
     state: MusicPlayer.State,
     liked: Boolean,
+    videoMode: Boolean,
+    onVideoMode: (Boolean) -> Unit,
     onDismiss: () -> Unit,
     onLike: () -> Unit,
     onDownload: () -> Unit,
@@ -212,6 +297,19 @@ internal fun MusicNowPlaying(
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Filled.Settings, contentDescription = "Music settings", tint = Color.White.copy(alpha = 0.7f))
                     }
+                }
+
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        if (videoMode) "Music video · opens in the player" else "Audio · lossless when available",
+                        color = Color.White.copy(alpha = 0.5f),
+                        fontSize = 10.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                    MusicModeToggle(video = videoMode, onChange = onVideoMode)
                 }
 
                 Box(

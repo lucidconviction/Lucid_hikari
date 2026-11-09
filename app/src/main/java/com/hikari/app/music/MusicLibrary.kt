@@ -3,6 +3,7 @@ package com.hikari.app.music
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -33,6 +34,7 @@ object MusicLibrary {
     private val K_RECENT = stringPreferencesKey("recent")
     private val K_DOWNLOADS = stringPreferencesKey("downloads")
     private val K_SOURCE = stringPreferencesKey("audio_source")
+    private val K_VIDEO_MODE = booleanPreferencesKey("video_mode")
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var store: DataStore<Preferences>? = null
@@ -55,6 +57,10 @@ object MusicLibrary {
     // (Qobuz Eclipse) is an opt-in in the music settings sheet.
     private val _preferLossless = MutableStateFlow(false)
     val preferLossless: StateFlow<Boolean> = _preferLossless.asStateFlow()
+
+    /** Whether the page plays songs as music videos (YouTube) instead of audio. */
+    private val _videoMode = MutableStateFlow(false)
+    val videoMode: StateFlow<Boolean> = _videoMode.asStateFlow()
 
     data class DownloadState(val progress: Float, val running: Boolean, val message: String? = null)
     private val _downloadStates = MutableStateFlow<Map<String, DownloadState>>(emptyMap())
@@ -79,6 +85,7 @@ object MusicLibrary {
         val downloads = parseDownloads(prefs[K_DOWNLOADS])
         _downloads.value = downloads.filter { downloadFile(it)?.isFile == true }
         _preferLossless.value = (prefs[K_SOURCE] ?: "youtube") == "flac"
+        _videoMode.value = prefs[K_VIDEO_MODE] ?: false
         loaded = true
     }
 
@@ -139,6 +146,14 @@ object MusicLibrary {
     fun setPreferLossless(value: Boolean) {
         _preferLossless.value = value
         persist(K_SOURCE, if (value) "flac" else "youtube")
+    }
+
+    /** Switches the whole page between audio-only and YouTube music videos. */
+    fun setVideoMode(value: Boolean) {
+        if (_videoMode.value == value) return
+        _videoMode.value = value
+        val dataStore = store ?: return
+        scope.launch { runCatching { dataStore.edit { it[K_VIDEO_MODE] = value } } }
     }
 
     // ---- downloads ---------------------------------------------------------

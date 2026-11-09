@@ -35,6 +35,7 @@ Lucid Hikari is a fork of **Hikari** by **Hikari Drvs**. The original project an
 
 ### Music, manga and more
 - Music charts, search, radio, a local library and a mini player that follows you around the app.
+- **Audio / Video toggle** on the Music home page and in the player: listen to the song as audio, or open its YouTube music video in Hikari's player — picture-in-picture included.
 - Manga browsing, following, reading and chapter downloads.
 - Offline downloads that resume and remember their place.
 - Telegram public channels, radio-style websites and a private in-app browser.

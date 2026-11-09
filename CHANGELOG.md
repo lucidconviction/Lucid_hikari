@@ -3,6 +3,8 @@
 ### A big interface and quality update
 
 - **A new look and feel**: glass panels, springy taskbar icons, sliding page transitions and a cohesive accent colour across the app.
+- **A lighter taskbar**: the floating navigation bar is more translucent, and its icons are 35% smaller without losing the sideways scrolling.
+- **Music videos or audio**: the Music page and its player now have an **Audio / Video** toggle. Video mode finds the song on YouTube through the same engine as the YouTube tab and opens it in Hikari's player — with picture-in-picture, quality choices and normal gestures.
 - **A bigger taskbar**: navigation icons are twice their old size and the bar scrolls sideways, keeping the tab you are on in view.
 - **Channel Wall, reimagined**: full-bleed channel artwork, a scrolling rise effect as cards come into view, and no more Sources buttons on the wall itself. Portals and playlists are managed in Live TV.
 - **First-visit tutorials**: every page now introduces its main features the first time you open it. Skip at any time, or replay any tour from Settings → About & Updates.

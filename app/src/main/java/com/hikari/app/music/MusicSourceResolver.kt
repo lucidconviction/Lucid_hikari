@@ -2,6 +2,7 @@ package com.hikari.app.music
 
 import com.hikari.app.HikariApp
 import com.hikari.app.cs3.YouTubePlayables
+import com.hikari.app.youtube.YouTubePlayRequest
 import com.liskovsoft.mediaserviceinterfaces.data.MediaItem
 import com.liskovsoft.sharedutils.prefs.GlobalPreferences
 import com.liskovsoft.youtubeapi.service.YouTubeServiceManager
@@ -120,6 +121,56 @@ object MusicSourceResolver {
     }
 
     private suspend fun youtube(track: MusicTrack): MusicStream? = withContext(Dispatchers.IO) {
+        val best = findVideo(track) ?: return@withContext null
+        val videoId = best.videoId ?: return@withContext null
+        ytVideoIds[track.id] = videoId
+        val sources = runCatching { YouTubePlayables.resolve(videoId) }
+            .getOrDefault(emptyList())
+            .filter { it.url.isNotBlank() }
+        val source = sources.firstOrNull() ?: return@withContext null
+        MusicStream(
+            url = source.url,
+            headers = source.headers,
+            label = when {
+                source.isMpd -> "YouTube HD"
+                source.isM3u8 -> "YouTube Live"
+                else -> "YouTube HQ"
+            },
+            lossless = false,
+            isDash = source.isMpd,
+            isHls = source.isM3u8,
+        )
+    }
+
+    /**
+     * The YouTube music video for [track], ready for Hikari's own player.
+     *
+     * The Music page's Video mode and the player's Audio/Video toggle both call
+     * this. It uses the exact same search and ranking as audio playback and the
+     * same SmartTube engine as the YouTube tab, then hands the result to
+     * [com.hikari.app.youtube.youTubePlayerIntent] — so the video opens in the
+     * app's normal player, with quality, subtitles and picture-in-picture.
+     */
+    suspend fun videoRequest(track: MusicTrack): YouTubePlayRequest? = withContext(Dispatchers.IO) {
+        val best = findVideo(track) ?: return@withContext null
+        val videoId = best.videoId?.takeIf { it.isNotBlank() } ?: return@withContext null
+        ytVideoIds[track.id] = videoId
+        val source = runCatching { YouTubePlayables.resolve(videoId) }
+            .getOrDefault(emptyList())
+            .firstOrNull { it.url.isNotBlank() }
+            ?: return@withContext null
+        YouTubePlayRequest(
+            url = source.url,
+            title = "${track.title} · ${track.artist}",
+            poster = track.coverUrl.takeIf { it.isNotBlank() },
+            videoId = videoId,
+            startPositionMs = 0L,
+            headers = source.headers,
+        )
+    }
+
+    /** The best search result for a track, shared by audio and video playback. */
+    private suspend fun findVideo(track: MusicTrack): MediaItem? = withContext(Dispatchers.IO) {
         val context = runCatching { HikariApp.instance }.getOrNull() ?: return@withContext null
         val service = runCatching {
             GlobalPreferences.instance(context)
@@ -145,7 +196,7 @@ object MusicSourceResolver {
         // Prefer a result whose length is close to the track's (music videos
         // and lyric uploads usually are); break ties toward TYPE_MUSIC.
         val target = track.durationSeconds * 1000L
-        val best = candidates.maxByOrNull { item ->
+        candidates.maxByOrNull { item ->
             var score = 0.0
             if (item.type == MediaItem.TYPE_MUSIC) score += 1000
             if (target > 0 && item.durationMs > 0) {
@@ -155,25 +206,6 @@ object MusicSourceResolver {
                 else if (diff <= 30_000) score += 100
             }
             score
-        } ?: return@withContext null
-
-        val videoId = best.videoId ?: return@withContext null
-        ytVideoIds[track.id] = videoId
-        val sources = runCatching { YouTubePlayables.resolve(videoId) }
-            .getOrDefault(emptyList())
-            .filter { it.url.isNotBlank() }
-        val source = sources.firstOrNull() ?: return@withContext null
-        MusicStream(
-            url = source.url,
-            headers = source.headers,
-            label = when {
-                source.isMpd -> "YouTube HD"
-                source.isM3u8 -> "YouTube Live"
-                else -> "YouTube HQ"
-            },
-            lossless = false,
-            isDash = source.isMpd,
-            isHls = source.isM3u8,
-        )
+        }
     }
 }

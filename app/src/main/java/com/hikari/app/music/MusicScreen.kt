@@ -117,6 +117,7 @@ fun MusicScreen(nav: NavHostController) {
     val downloads by MusicLibrary.downloads.collectAsState()
     val downloadStates by MusicLibrary.downloadStates.collectAsState()
     val preferLossless by MusicLibrary.preferLossless.collectAsState()
+    val videoMode by MusicLibrary.videoMode.collectAsState()
 
     LaunchedEffect(Unit) {
         MusicLibrary.init(context)
@@ -154,7 +155,33 @@ fun MusicScreen(nav: NavHostController) {
     }
 
     fun playTrack(track: MusicTrack, queue: List<MusicTrack>? = null) {
-        MusicPlayer.play(track, queue)
+        if (!videoMode) {
+            MusicPlayer.play(track, queue)
+            return
+        }
+        scope.launch {
+            val opened = openMusicVideo(context, track)
+            if (!opened) {
+                // No matching upload: never leave the tap doing nothing. Drop
+                // back to Audio so the next tap plays the song immediately.
+                MusicLibrary.setVideoMode(false)
+                toast("No music video found — playing the audio instead.")
+                MusicPlayer.play(track, queue)
+            }
+        }
+    }
+
+    fun changePlaybackMode(video: Boolean) {
+        MusicLibrary.setVideoMode(video)
+        if (!video) return
+        val current = player.track ?: return
+        scope.launch {
+            val opened = openMusicVideo(context, current)
+            if (!opened) {
+                MusicLibrary.setVideoMode(false)
+                toast("No music video found for this song.")
+            }
+        }
     }
 
     fun openArtist(id: String) {
@@ -233,6 +260,22 @@ fun MusicScreen(nav: NavHostController) {
                 onRefresh = { homeReload++ },
                 onSettings = { showSettings = true },
             )
+            if (tab == MusicTab.HOME) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        if (videoMode) "Music videos on" else "Audio only",
+                        color = Color.White.copy(alpha = 0.55f),
+                        fontSize = 11.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                    MusicModeToggle(video = videoMode, onChange = ::changePlaybackMode)
+                }
+            }
             MusicTabRow(
                 selected = tab,
                 onSelect = { tabName = it.name },
