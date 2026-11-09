@@ -1,11 +1,12 @@
-## 0.12.0 — 9 November 2026
+## 0.12.0
+
+**9 November 2026**
 
 ### A big interface and quality update
 
 - **A new look and feel**: glass panels, springy taskbar icons, sliding page transitions and a cohesive accent colour across the app.
 - **A lighter taskbar**: the floating navigation bar is more translucent, and its icons are 35% smaller without losing the sideways scrolling.
 - **Music videos or audio**: the Music page and its player now have an **Audio / Video** toggle. Video mode finds the song on YouTube through the same engine as the YouTube tab and plays it inline in the Music player. The queue advances automatically to the next song or video, and a PiP button pops the current video out to Hikari's full player.
-- **A bigger taskbar**: navigation icons are twice their old size and the bar scrolls sideways, keeping the tab you are on in view.
 - **Channel Wall, reimagined**: full-bleed channel artwork, a scrolling rise effect as cards come into view, and no more Sources buttons on the wall itself. Portals and playlists are managed in Live TV.
 - **First-visit tutorials**: every page now introduces its main features the first time you open it. Skip at any time, or replay any tour from Settings → About & Updates.
 - **About & Updates**: a proper home for the version, credits, donation link, automatic GitHub update checks, a full feature guide and tutorial replay.
@@ -21,7 +22,7 @@
 - Xtream portals now show their **expiry date**, with an amber warning in the last week and a red state once expired.
 - The portal's own **EPG** is read into a compact “On now” strip, so you can see what is airing without opening a channel.
 - **Quick Ch** joins the player controls right after Channels: pick a category, then a channel pattern, and jump straight to a match inside the playlist you are watching.
-- MultiView is capped at **four windows on a phone in portrait**; rotate for larger grids.
+- MultiView holds **four windows** on a phone in portrait and **up to nine** on a tablet or in landscape.
 
 ### YouTube
 
@@ -39,7 +40,7 @@
 
 - Telegram videos now download through the app's download engine.
 - Portal generation searches more sources and handles large results without exhausting memory.
-- IPTV channel loading is bounded so large playlists stay usable on low-memory devices.
+- Very large IPTV lists stay usable on low-memory devices, and a broken portal is reported instead of appearing as a single fake channel.
 
 ### Other fixes
 - The Home donation banner is now permanent, so the support link cannot be dismissed away.
@@ -48,10 +49,7 @@
 - Web Apps opens Google when the address bar contains a search phrase instead of a URL.
 - MultiView tutorials and limits now distinguish a phone in portrait (four windows) from a tablet (up to nine).
 - Home thumbnails now rise, scale and brighten as they scroll into view, across Continue Watching and every shelf.
-
-- Bounded IPTV caches and safer Xtream error handling: a panel that answers with an error page no longer appears as a single fake channel.
 - Large Xtream exports no longer stall the playlist list.
-- The IPTV header shows a count that stays correct after refresh.
 
 ## 0.11.92 (continuous build only)
 
