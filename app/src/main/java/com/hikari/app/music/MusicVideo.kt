@@ -17,12 +17,16 @@ import com.hikari.app.youtube.youTubePlayerIntent
  * The audio player is paused first so the song and its video never play over
  * each other.
  */
-internal suspend fun openMusicVideo(context: Context, track: MusicTrack): Boolean {
+internal suspend fun openMusicVideo(
+    context: Context,
+    track: MusicTrack,
+    startPositionMs: Long = 0L,
+): Boolean {
     // Stop the song first: the search can take a few seconds, and audio must
     // never keep playing underneath a video that is about to open.
     MusicPlayer.pause()
     val request = runCatching { MusicSourceResolver.videoRequest(track) }.getOrNull() ?: return false
-    val intent = youTubePlayerIntent(context, request)
+    val intent = youTubePlayerIntent(context, request.copy(startPositionMs = startPositionMs.coerceAtLeast(0L)))
     if (context !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     return runCatching { context.startActivity(intent); true }.getOrDefault(false)
 }

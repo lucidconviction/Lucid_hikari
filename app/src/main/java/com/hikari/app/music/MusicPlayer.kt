@@ -59,6 +59,10 @@ object MusicPlayer {
         val lyrics: MusicLyrics = MusicLyrics.EMPTY,
         val lyricsLoading: Boolean = false,
         val downloadState: MusicLibrary.DownloadState? = null,
+        /** The Music page's Audio/Video choice for this playback session. */
+        val videoMode: Boolean = false,
+        /** True while the current media carries a video track and is drawn inline. */
+        val videoPlaying: Boolean = false,
     ) {
         val hasNext: Boolean
             get() = queue.isNotEmpty() && (index < queue.lastIndex || repeat == RepeatMode.ALL)
@@ -159,10 +163,26 @@ object MusicPlayer {
                 positionMs = 0L,
                 durationMs = track.durationSeconds * 1000L,
                 error = null,
+                videoMode = MusicLibrary.videoMode.value,
+                videoPlaying = false,
             )
             loadCurrent(track)
         }
     }
+
+    /** Switches the running player between audio and inline video without
+     *  losing the place in the song. */
+    fun setVideoMode(on: Boolean) {
+        val s = _state.value
+        if (s.videoMode == on) return
+        val at = (runCatching { player?.currentPosition }.getOrNull() ?: s.positionMs)
+            .coerceAtLeast(0L)
+        _state.value = s.copy(videoMode = on, positionMs = at)
+        s.track?.let { loadCurrent(it, startAtMs = at) }
+    }
+
+    /** The ExoPlayer behind the page, for the inline video surface. */
+    val exoPlayer: ExoPlayer? get() = player
 
     fun toggle() {
         val p = player ?: return
@@ -271,7 +291,7 @@ object MusicPlayer {
         }
     }
 
-    private fun loadCurrent(track: MusicTrack) {
+    private fun loadCurrent(track: MusicTrack, startAtMs: Long = 0L) {
         val token = ++playToken
         loadJob?.cancel()
         loadJob = scope.launch {
@@ -289,16 +309,29 @@ object MusicPlayer {
                 }
             }
             MusicLibrary.addRecent(track)
-            val downloaded = MusicLibrary.downloadedFor(track.id)?.let { MusicLibrary.downloadFile(it) }
+            val videoMode = _state.value.videoMode
+            // Audio mode can use the downloaded copy; video mode always asks
+            // the YouTube engine for the matching music video first.
+            val downloaded = if (videoMode) null else {
+                MusicLibrary.downloadedFor(track.id)?.let { MusicLibrary.downloadFile(it) }
+            }
             val localFile = downloaded?.takeIf { it.isFile && it.length() > 1024L }
-            val stream = if (localFile != null) null else withContext(Dispatchers.IO) {
-                MusicSourceResolver.resolve(track, MusicLibrary.preferLossless.value)
+            val videoStream = if (videoMode) withContext(Dispatchers.IO) {
+                runCatching { MusicSourceResolver.videoStream(track) }.getOrNull()
+            } else null
+            val stream = when {
+                videoStream != null -> videoStream
+                localFile != null -> null
+                else -> withContext(Dispatchers.IO) {
+                    MusicSourceResolver.resolve(track, MusicLibrary.preferLossless.value)
+                }
             }
             if (token != playToken) return@launch
             if (localFile == null && stream == null) {
                 _state.value = _state.value.copy(
                     loading = false,
                     playing = false,
+                    videoPlaying = false,
                     error = "No playable audio source for this track.",
                 )
                 return@launch
@@ -333,15 +366,21 @@ object MusicPlayer {
                 else -> ProgressiveMediaSource.Factory(dataSource).createMediaSource(mediaItem)
             }
             exo.setMediaSource(mediaSource)
+            // Audio mode disables the picture; Video mode enables it so the
+            // PlayerView on the Music player page has something to draw.
+            val hasVideo = videoStream != null
             exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
-                .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, true)
+                .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, !hasVideo)
                 .build()
+            if (startAtMs > 0L) exo.seekTo(startAtMs)
             exo.prepare()
             exo.play()
             _state.value = _state.value.copy(
                 loading = false,
+                videoPlaying = hasVideo,
                 quality = when {
                     localFile != null -> MusicLibrary.downloadedFor(track.id)?.quality ?: "Offline"
+                    videoStream != null -> "YouTube video"
                     stream != null -> stream.label
                     else -> ""
                 },

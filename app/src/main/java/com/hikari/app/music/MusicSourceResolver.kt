@@ -121,8 +121,12 @@ object MusicSourceResolver {
     }
 
     private suspend fun youtube(track: MusicTrack): MusicStream? = withContext(Dispatchers.IO) {
-        val best = findVideo(track) ?: return@withContext null
-        val videoId = best.videoId ?: return@withContext null
+        // The search is expensive; once a track has a known video id, reuse it
+        // (mode toggles, replays and auto-next all land here again).
+        val videoId = ytVideoIds[track.id] ?: run {
+            val best = findVideo(track) ?: return@withContext null
+            best.videoId?.takeIf { it.isNotBlank() }
+        } ?: return@withContext null
         ytVideoIds[track.id] = videoId
         val sources = runCatching { YouTubePlayables.resolve(videoId) }
             .getOrDefault(emptyList())
@@ -141,6 +145,9 @@ object MusicSourceResolver {
             isHls = source.isM3u8,
         )
     }
+
+    /** The YouTube video stream for [track], with its video track intact. */
+    suspend fun videoStream(track: MusicTrack): MusicStream? = youtube(track)
 
     /**
      * The YouTube music video for [track], ready for Hikari's own player.

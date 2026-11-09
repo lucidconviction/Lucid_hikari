@@ -2,7 +2,6 @@
 
 package com.hikari.app.music
 
-import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -34,6 +33,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MusicNote
@@ -79,6 +79,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
 
@@ -212,8 +215,6 @@ internal fun MusicMiniPlayer(
  *  genuinely out of the way and Back returns to the Music page. */
 @Composable
 internal fun MusicPlayerScreen(onBack: () -> Unit) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val state by MusicPlayer.state.collectAsState()
     val liked by MusicLibrary.liked.collectAsState()
     val preferLossless by MusicLibrary.preferLossless.collectAsState()
@@ -222,18 +223,7 @@ internal fun MusicPlayerScreen(onBack: () -> Unit) {
 
     fun changePlaybackMode(video: Boolean) {
         MusicLibrary.setVideoMode(video)
-        if (!video) return
-        val track = state.track ?: return
-        scope.launch {
-            if (!openMusicVideo(context, track)) {
-                MusicLibrary.setVideoMode(false)
-                Toast.makeText(
-                    context,
-                    "No music video found for this song.",
-                    Toast.LENGTH_SHORT,
-                ).show()
-            }
-        }
+        MusicPlayer.setVideoMode(video)
     }
 
     MusicNowPlaying(
@@ -270,6 +260,8 @@ internal fun MusicNowPlaying(
     var showQueue by remember { mutableStateOf(false) }
     var showLyrics by remember { mutableStateOf(false) }
     val downloaded = MusicLibrary.downloadedFor(track.id) != null
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     Box(
             Modifier
                 .fillMaxSize()
@@ -304,7 +296,7 @@ internal fun MusicNowPlaying(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        if (videoMode) "Music video · opens in the player" else "Audio · lossless when available",
+                        if (videoMode) "Music video · plays here" else "Audio · lossless when available",
                         color = Color.White.copy(alpha = 0.5f),
                         fontSize = 10.sp,
                         modifier = Modifier.weight(1f),
@@ -318,7 +310,66 @@ internal fun MusicNowPlaying(
                         .fillMaxWidth(),
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (showLyrics) {
+                    if (state.videoPlaying) {
+                        // The YouTube music video, drawn inline in the Music
+                        // player. The shared MusicPlayer ExoPlayer is attached
+                        // to a plain PlayerView; its own controls stay hidden
+                        // because the page's controls are right below.
+                        AndroidView(
+                            factory = { ctx ->
+                                PlayerView(ctx).apply {
+                                    useController = false
+                                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                    setShutterBackgroundColor(android.graphics.Color.BLACK)
+                                    setBackgroundColor(android.graphics.Color.BLACK)
+                                }
+                            },
+                            update = { view -> view.player = MusicPlayer.exoPlayer },
+                            onRelease = { view -> view.player = null },
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 10.dp)
+                                .clip(RoundedCornerShape(24.dp))
+                                .background(Color.Black),
+                        )
+                        // Pop the same video out into Hikari's full player,
+                        // where the app's picture-in-picture button lives.
+                        // It resumes at the current second, not from the top.
+                        Box(
+                            Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(18.dp),
+                        ) {
+                            Surface(
+                                onClick = {
+                                    scope.launch {
+                                        openMusicVideo(context, track, state.positionMs)
+                                    }
+                                },
+                                shape = RoundedCornerShape(50),
+                                color = Color(0x99000000),
+                            ) {
+                                Row(
+                                    Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Fullscreen,
+                                        contentDescription = "Picture in picture",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Text(
+                                        "PiP",
+                                        color = Color.White,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                }
+                            }
+                        }
+                    } else if (showLyrics) {
                         LyricsPanel(state, Modifier.fillMaxSize())
                     } else {
                         AsyncImage(

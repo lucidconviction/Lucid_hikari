@@ -155,33 +155,17 @@ fun MusicScreen(nav: NavHostController) {
     }
 
     fun playTrack(track: MusicTrack, queue: List<MusicTrack>? = null) {
-        if (!videoMode) {
-            MusicPlayer.play(track, queue)
-            return
-        }
-        scope.launch {
-            val opened = openMusicVideo(context, track)
-            if (!opened) {
-                // No matching upload: never leave the tap doing nothing. Drop
-                // back to Audio so the next tap plays the song immediately.
-                MusicLibrary.setVideoMode(false)
-                toast("No music video found — playing the audio instead.")
-                MusicPlayer.play(track, queue)
-            }
-        }
+        MusicPlayer.play(track, queue)
+        // Video mode draws its picture on the Now Playing page, so a track
+        // started from any Music shelf goes straight there; auto-next keeps
+        // the same page and simply swaps the video/song.
+        if (videoMode) nav.navigate(Routes.MUSIC_PLAYER)
     }
 
     fun changePlaybackMode(video: Boolean) {
         MusicLibrary.setVideoMode(video)
-        if (!video) return
-        val current = player.track ?: return
-        scope.launch {
-            val opened = openMusicVideo(context, current)
-            if (!opened) {
-                MusicLibrary.setVideoMode(false)
-                toast("No music video found for this song.")
-            }
-        }
+        MusicPlayer.setVideoMode(video)
+        if (video && player.track != null) nav.navigate(Routes.MUSIC_PLAYER)
     }
 
     fun openArtist(id: String) {
