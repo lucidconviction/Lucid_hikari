@@ -81,6 +81,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
+import coil.compose.SubcomposeAsyncImageContent
 import com.hikari.app.HikariApp
 import com.hikari.app.data.IptvChannel
 import com.hikari.app.data.XtreamCredentials
@@ -94,9 +96,58 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 
 private const val WALL_PREFS = "channel_wall"
-private const val WALL_PINNED = "pinned"
+private const val WALL_CUSTOM = "custom_channels"
+
+/** A stream the user added themselves to the Channel Wall. */
+private data class WallCustomChannel(
+    val id: String,
+    val name: String,
+    val url: String,
+    val logo: String?,
+)
+
+private fun parseCustomChannels(raw: String?): List<WallCustomChannel> {
+    if (raw.isNullOrBlank()) return emptyList()
+    val arr = runCatching { JSONArray(raw) }.getOrNull() ?: return emptyList()
+    val out = ArrayList<WallCustomChannel>(arr.length())
+    for (i in 0 until arr.length()) {
+        val o = arr.optJSONObject(i) ?: continue
+        val name = o.optString("name")
+        val url = o.optString("url")
+        if (name.isBlank() || url.isBlank()) continue
+        out += WallCustomChannel(
+            id = o.optString("id").ifBlank { "custom_$i" },
+            name = name,
+            url = url,
+            logo = o.optString("logo").takeIf { it.isNotBlank() },
+        )
+    }
+    return out
+}
+
+private fun encodeCustomChannels(list: List<WallCustomChannel>): String =
+    JSONArray().apply {
+        list.forEach { channel ->
+            put(
+                JSONObject()
+                    .put("id", channel.id)
+                    .put("name", channel.name)
+                    .put("url", channel.url)
+                    .put("logo", channel.logo.orEmpty()),
+            )
+        }
+    }.toString()
+
+/** Artwork found for a wall channel in the user's own playlists/portals,
+ *  keyed by curated channel id. Updated after a channel scan so the wall
+ *  cards get a real thumbnail even when the curated icon URL is dead. */
+private object ChannelWallArt {
+    val byChannel = androidx.compose.runtime.mutableStateMapOf<String, String>()
+}
 
 /**
  * The Live TV directory from PlayTorrio, rebuilt as Hikari's Channel Wall.
@@ -119,9 +170,10 @@ fun ChannelWallScreen(nav: NavHostController) {
 
     var query by rememberSaveable { mutableStateOf("") }
     var searchOpen by rememberSaveable { mutableStateOf(false) }
-    var pinnedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var quickPicker by remember { mutableStateOf(false) }
+    var customChannels by remember { mutableStateOf<List<WallCustomChannel>>(emptyList()) }
+    var showAddCustom by remember { mutableStateOf(false) }
     var showSources by remember { mutableStateOf(false) }
+    var showGenerator by remember { mutableStateOf(false) }
     var selectedWall by remember { mutableStateOf<WallChannel?>(null) }
     var wallMatches by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
     var wallLoading by remember { mutableStateOf(false) }
@@ -143,13 +195,13 @@ fun ChannelWallScreen(nav: NavHostController) {
         Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
     }
 
-    fun persistPinned(ids: Set<String>) {
-        pinnedIds = ids
-        prefs.edit().putStringSet(WALL_PINNED, ids).apply()
+    fun saveCustomChannels(list: List<WallCustomChannel>) {
+        customChannels = list
+        prefs.edit().putString(WALL_CUSTOM, encodeCustomChannels(list)).apply()
     }
 
     LaunchedEffect(Unit) {
-        pinnedIds = prefs.getStringSet(WALL_PINNED, emptySet()).orEmpty()
+        customChannels = parseCustomChannels(prefs.getString(WALL_CUSTOM, null))
     }
 
     fun requestChannels(force: Boolean = false): Deferred<List<IptvChannel>> {
@@ -168,8 +220,24 @@ fun ChannelWallScreen(nav: NavHostController) {
             return@LaunchedEffect
         }
         channelsLoading = true
-        allChannels = requestChannels(force = reloadKey > 0).await()
+        val loaded = requestChannels(force = reloadKey > 0).await()
+        allChannels = loaded
         channelsLoading = false
+        // A wall channel often has a curated logo that has gone stale; the
+        // user's own playlist already carries the live logo/thumbnail. Scan
+        // once per load and use it as the card/hero image.
+        val art = withContext(Dispatchers.Default) {
+            val out = HashMap<String, String>()
+            for (wall in ChannelWallChannels.all) {
+                val match = loaded.firstOrNull { channel ->
+                    !channel.artwork.isNullOrBlank() && ChannelWallChannels.matches(wall, channel.name)
+                } ?: continue
+                match.artwork?.let { out[wall.id] = it }
+            }
+            out
+        }
+        ChannelWallArt.byChannel.clear()
+        ChannelWallArt.byChannel.putAll(art)
     }
 
     fun openWall(channel: WallChannel) {
@@ -183,6 +251,9 @@ fun ChannelWallScreen(nav: NavHostController) {
                 channels
                     .filter { ChannelWallChannels.matches(channel, it.name) || ChannelWallChannels.matches(channel, it.group) }
                     .distinctBy { it.url }
+            }
+            wallMatches.firstOrNull()?.artwork?.takeIf { it.isNotBlank() }?.let {
+                ChannelWallArt.byChannel[channel.id] = it
             }
             wallLoading = false
         }
@@ -261,9 +332,6 @@ fun ChannelWallScreen(nav: NavHostController) {
                 channel.keywords.any { it.contains(wallQuery, ignoreCase = true) }
         }
     }
-    val pinnedChannels = remember(pinnedIds) {
-        pinnedIds.mapNotNull(ChannelWallChannels::byId)
-    }
 
     Column(
         Modifier
@@ -278,16 +346,7 @@ fun ChannelWallScreen(nav: NavHostController) {
             IconButton(onClick = { nav.popBackStack() }) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
             }
-            Column(Modifier.weight(1f)) {
-                Text("Channel Wall", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Black)
-                Text(
-                    "${ChannelWallChannels.all.size} curated channels · your portals & playlists",
-                    color = Color.White.copy(alpha = 0.55f),
-                    fontSize = 11.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+            Spacer(Modifier.weight(1f))
             IconButton(onClick = { searchOpen = !searchOpen; if (!searchOpen) query = "" }) {
                 Icon(Icons.Filled.Search, contentDescription = "Search channels", tint = Color.White.copy(alpha = 0.85f))
             }
@@ -353,10 +412,20 @@ fun ChannelWallScreen(nav: NavHostController) {
                 }
                 item {
                     WallQuickRow(
-                        pinned = pinnedChannels,
-                        onOpen = { openWall(it) },
-                        onAdd = { quickPicker = true },
-                        onRemove = { persistPinned(pinnedIds - it.id) },
+                        custom = customChannels,
+                        onPlay = { custom ->
+                            playIptvChannel(
+                                context,
+                                IptvChannel(
+                                    name = custom.name,
+                                    url = custom.url,
+                                    logo = custom.logo,
+                                    providerId = "channel-wall",
+                                ),
+                            )
+                        },
+                        onAdd = { showAddCustom = true },
+                        onRemove = { custom -> saveCustomChannels(customChannels - custom) },
                     )
                 }
 
@@ -416,6 +485,7 @@ fun ChannelWallScreen(nav: NavHostController) {
             },
             onAddXtream = { showSources = false; openPortalDialog("xtream") },
             onAddM3u = { showSources = false; openPortalDialog("m3u") },
+            onGenerate = { showSources = false; showGenerator = true },
         )
     }
 
@@ -430,13 +500,31 @@ fun ChannelWallScreen(nav: NavHostController) {
         )
     }
 
-    if (quickPicker) {
-        WallQuickPicker(
-            pinned = pinnedIds,
-            onToggle = { id ->
-                persistPinned(if (id in pinnedIds) pinnedIds - id else pinnedIds + id)
+
+    if (showGenerator) {
+        PortalGeneratorDialog(
+            app = app,
+            onDismiss = {
+                showGenerator = false
+                reloadKey++
             },
-            onDismiss = { quickPicker = false },
+        )
+    }
+
+    if (showAddCustom) {
+        AddCustomChannelDialog(
+            onAdd = { name, url, logo ->
+                saveCustomChannels(
+                    customChannels + WallCustomChannel(
+                        id = "custom_" + System.currentTimeMillis(),
+                        name = name,
+                        url = url,
+                        logo = logo.takeIf { it.isNotBlank() },
+                    ),
+                )
+                showAddCustom = false
+            },
+            onDismiss = { showAddCustom = false },
         )
     }
 
@@ -475,7 +563,9 @@ private fun WallHero(channels: List<WallChannel>, onOpen: (WallChannel) -> Unit)
                     .background(Brush.linearGradient(colors.ifEmpty { listOf(Color(0xFF24104F), Color(0xFF0B0B10)) })),
             ) {
                 AsyncImage(
-                    model = channel.backdropUrl ?: channel.iconUrl,
+                    model = channel.backdropUrl
+                        ?: ChannelWallArt.byChannel[channel.id]
+                        ?: channel.iconUrl,
                     contentDescription = channel.name,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop,
@@ -537,67 +627,101 @@ private fun WallHero(channels: List<WallChannel>, onOpen: (WallChannel) -> Unit)
 
 @Composable
 private fun WallQuickRow(
-    pinned: List<WallChannel>,
-    onOpen: (WallChannel) -> Unit,
+    custom: List<WallCustomChannel>,
+    onPlay: (WallCustomChannel) -> Unit,
     onAdd: () -> Unit,
-    onRemove: (WallChannel) -> Unit,
+    onRemove: (WallCustomChannel) -> Unit,
 ) {
-    Column {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text("Quick Channels", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Black)
-                Text(
-                    if (pinned.isEmpty()) "Pin a channel for one-tap access" else "${pinned.size} pinned",
-                    color = Color.White.copy(alpha = 0.5f),
-                    fontSize = 11.sp,
-                )
-            }
-            IconButton(onClick = onAdd) {
-                Icon(Icons.Filled.Add, contentDescription = "Pin a channel", tint = Color(0xFF7C5CFF))
-            }
-        }
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            items(pinned, key = { "quick:${it.id}" }) { channel ->
-                Box(Modifier.width(138.dp)) {
-                    WallCard(channel) { onOpen(channel) }
-                    Box(
-                        Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(6.dp)
-                            .size(22.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xCCCC0000))
-                            .clickable { onRemove(channel) },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(Icons.Filled.Close, contentDescription = "Unpin", tint = Color.White, modifier = Modifier.size(13.dp))
-                    }
-                }
-            }
-            item {
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        items(custom, key = { "custom:${it.id}" }) { channel ->
+            Box(Modifier.width(138.dp)) {
+                WallCustomCard(channel) { onPlay(channel) }
                 Box(
                     Modifier
-                        .width(138.dp)
-                        .height(168.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(Color(0xFF0C0F17))
-                        .clickable(onClick = onAdd),
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .size(22.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xCCCC0000))
+                        .clickable { onRemove(channel) },
                     contentAlignment = Alignment.Center,
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Filled.Add, contentDescription = null, tint = Color(0xFF7C5CFF), modifier = Modifier.size(32.dp))
-                        Spacer(Modifier.height(5.dp))
-                        Text("Add Channel", color = Color(0xFF7C5CFF), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
+                    Icon(Icons.Filled.Close, contentDescription = "Remove channel", tint = Color.White, modifier = Modifier.size(13.dp))
                 }
             }
         }
+        item {
+            Box(
+                Modifier
+                    .width(138.dp)
+                    .height(168.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color(0xFF0C0F17))
+                    .clickable(onClick = onAdd),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Filled.Add, contentDescription = null, tint = Color(0xFF7C5CFF), modifier = Modifier.size(32.dp))
+                    Spacer(Modifier.height(5.dp))
+                    Text("Add Channel", color = Color(0xFF7C5CFF), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+/** A user-added stream: the wall's Add Channel writes one of these. */
+@Composable
+private fun WallCustomCard(channel: WallCustomChannel, onClick: () -> Unit) {
+    val palettes = listOf(
+        listOf(Color(0xFF2A155C), Color(0xFF0B0B10)),
+        listOf(Color(0xFF0B4F4F), Color(0xFF0B0B10)),
+        listOf(Color(0xFF5C2A15), Color(0xFF0B0B10)),
+        listOf(Color(0xFF1B3A6B), Color(0xFF0B0B10)),
+    )
+    val colors = remember(channel.id) { palettes[(channel.id.hashCode() and Int.MAX_VALUE) % palettes.size] }
+    Column(
+        Modifier
+            .width(138.dp)
+            .height(168.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(Brush.linearGradient(colors))
+            .clickable(onClick = onClick)
+            .padding(10.dp),
+    ) {
+        Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+            val initials = channel.name.trim().split(' ').take(2)
+                .mapNotNull { it.firstOrNull()?.uppercaseChar() }.joinToString("")
+                .ifBlank { channel.name.take(3).uppercase() }
+            if (!channel.logo.isNullOrBlank()) {
+                SubcomposeAsyncImage(
+                    model = channel.logo,
+                    contentDescription = channel.name,
+                    modifier = Modifier.size(60.dp),
+                    contentScale = ContentScale.Fit,
+                    loading = { WallCustomFallback(initials) },
+                    error = { WallCustomFallback(initials) },
+                    success = { SubcomposeAsyncImageContent() },
+                )
+            } else {
+                WallCustomFallback(initials)
+            }
+        }
+        Text(channel.name, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text("Custom stream", color = Color.White.copy(alpha = 0.6f), fontSize = 10.sp, maxLines = 1)
+    }
+}
+
+@Composable
+private fun WallCustomFallback(initials: String) {
+    Box(
+        Modifier.size(60.dp).clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha = 0.12f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(initials, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Black)
     }
 }
 
@@ -674,24 +798,44 @@ private fun WallGridCard(channel: WallChannel, onClick: () -> Unit) {
 
 @Composable
 private fun WallLogo(channel: WallChannel, size: Int) {
-    val icon = channel.iconUrl
+    val icon = ChannelWallArt.byChannel[channel.id] ?: channel.iconUrl
     if (!icon.isNullOrBlank()) {
-        AsyncImage(
+        SubcomposeAsyncImage(
             model = icon,
             contentDescription = channel.name,
             modifier = Modifier.size(size.dp),
             contentScale = ContentScale.Fit,
+            loading = { WallLogoFallback(channel, size) },
+            error = { WallLogoFallback(channel, size) },
+            success = { SubcomposeAsyncImageContent() },
         )
     } else {
-        Box(
-            Modifier
-                .size(size.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(Color.White.copy(alpha = 0.12f)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(channel.short, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Black, maxLines = 1)
-        }
+        WallLogoFallback(channel, size)
+    }
+}
+
+/** Every wall channel has a visible tile even when its logo URL is missing or dead. */
+@Composable
+private fun WallLogoFallback(channel: WallChannel, size: Int) {
+    val label = channel.short.ifBlank {
+        channel.name.trim().split(' ').take(2)
+            .mapNotNull { it.firstOrNull()?.uppercaseChar() }
+            .joinToString("")
+    }.ifBlank { channel.name.take(3).uppercase() }
+    Box(
+        Modifier
+            .size(size.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color.White.copy(alpha = 0.12f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            color = Color.White,
+            fontSize = (size / 3).coerceAtLeast(11).sp,
+            fontWeight = FontWeight.Black,
+            maxLines = 1,
+        )
     }
 }
 
@@ -798,6 +942,7 @@ private fun WallSourcesSheet(
     onBrowse: (IptvProvider) -> Unit,
     onAddXtream: () -> Unit,
     onAddM3u: () -> Unit,
+    onGenerate: () -> Unit,
 ) {
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
@@ -875,6 +1020,16 @@ private fun WallSourcesSheet(
                 }
             }
             Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = onGenerate,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00A3A3)),
+            ) {
+                Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Generate portals (Cloud Vault)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(8.dp))
             Text(
                 "Importing an M3U file from storage is done from IPTV → + → Playlist.",
                 color = Color.White.copy(alpha = 0.4f),
@@ -886,60 +1041,75 @@ private fun WallSourcesSheet(
 }
 
 @Composable
-private fun WallQuickPicker(
-    pinned: Set<String>,
-    onToggle: (String) -> Unit,
+private fun AddCustomChannelDialog(
+    onAdd: (name: String, url: String, logo: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var query by remember { mutableStateOf("") }
-    val list = remember(query) {
-        val q = query.trim()
-        if (q.isBlank()) ChannelWallChannels.all
-        else ChannelWallChannels.all.filter {
-            it.name.contains(q, ignoreCase = true) || it.category.contains(q, ignoreCase = true)
+    var name by remember { mutableStateOf("") }
+    var url by remember { mutableStateOf("") }
+    var logo by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    fun normalized(): String? {
+        var value = url.trim()
+        if (value.isBlank()) return null
+        if (!value.startsWith("http://", true) && !value.startsWith("https://", true)) {
+            value = "https://$value"
         }
+        val host = runCatching { java.net.URI(value).host }.getOrNull().orEmpty()
+        if (host.isBlank()) return null
+        return value
     }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Pin a channel") },
+        title = { Text("Add custom channel") },
         text = {
-            Column {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Search the wall…") },
-                    singleLine = true,
-                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Add a stream of your own to the wall. It plays in Hikari's player like any playlist channel.",
+                    color = Color.White.copy(alpha = 0.55f),
+                    fontSize = 11.sp,
                 )
-                Spacer(Modifier.height(8.dp))
-                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 380.dp)) {
-                    items(list, key = { it.id }) { channel ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { onToggle(channel.id) }
-                                .padding(vertical = 7.dp, horizontal = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            WallLogo(channel, 34)
-                            Spacer(Modifier.width(9.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(channel.name, color = Color.White, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(channel.category, color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp)
-                            }
-                            FilterChip(
-                                selected = channel.id in pinned,
-                                onClick = { onToggle(channel.id) },
-                                label = { Text(if (channel.id in pinned) "Pinned" else "Pin", fontSize = 10.sp) },
-                            )
-                        }
-                    }
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Channel name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = { Text("Stream URL (m3u8, mpd, mp4 or direct link)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = logo,
+                    onValueChange = { logo = it },
+                    label = { Text("Logo / thumbnail URL (optional)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                error?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val address = normalized()
+                    if (name.isBlank()) {
+                        error = "Give the channel a name."
+                    } else if (address == null) {
+                        error = "Enter a valid stream address."
+                    } else {
+                        onAdd(name.trim(), address, logo.trim())
+                    }
+                },
+            ) { Text("Add") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 

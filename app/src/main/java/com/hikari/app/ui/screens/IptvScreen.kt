@@ -13,6 +13,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -2510,11 +2511,102 @@ private fun tileMinFor(shape: String): Dp = when (TileShapes.normalize(shape)) {
  * Xtream saved accounts — shown at the top of the IPTV tab so the user can
  * jump to configured panels without hunting through Settings.
  */
+/**
+ * CH Wall / Region / CH / Validate pills. Horizontally scrollable so every
+ * action stays reachable on a portrait phone; the row is the same one used
+ * beside the "Quick Channels" title on wider screens.
+ */
+@Composable
+private fun QuickChannelActionRow(
+    onChWall: () -> Unit,
+    onAddRegion: () -> Unit,
+    onAddChannel: () -> Unit,
+    showValidate: Boolean,
+    validating: Boolean,
+    onValidate: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedButton(
+            onClick = onChWall,
+            shape = RoundedCornerShape(20.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = Color.White.copy(alpha = 0.85f),
+            ),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+            modifier = Modifier.height(32.dp),
+        ) {
+            Icon(Icons.Filled.GridView, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("CH Wall", fontSize = 12.sp)
+        }
+        OutlinedButton(
+            onClick = onAddRegion,
+            shape = RoundedCornerShape(20.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = Color.White.copy(alpha = 0.85f),
+            ),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+            modifier = Modifier.height(32.dp),
+        ) {
+            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("Region", fontSize = 12.sp)
+        }
+        OutlinedButton(
+            onClick = onAddChannel,
+            shape = RoundedCornerShape(20.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = Color.White.copy(alpha = 0.85f),
+            ),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+            modifier = Modifier.height(32.dp),
+        ) {
+            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("CH", fontSize = 12.sp)
+        }
+        if (showValidate) {
+            OutlinedButton(
+                onClick = onValidate,
+                enabled = !validating,
+                shape = RoundedCornerShape(20.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = Color.White.copy(alpha = 0.85f),
+                ),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                modifier = Modifier.height(32.dp),
+            ) {
+                if (validating) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = Color.White,
+                    )
+                } else {
+                    Icon(Icons.Default.VerifiedUser, contentDescription = null, modifier = Modifier.size(16.dp))
+                }
+                Spacer(Modifier.width(4.dp))
+                Text("Validate", fontSize = 12.sp)
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun XtreamAccountRow(app: HikariApp) {
     val scope = rememberCoroutineScope()
     val xtreamAccounts by app.store.xtreamAccountsFlow().collectAsState(initial = emptyList())
+    var showGenerator by remember { mutableStateOf(false) }
 
     Row(
         modifier = Modifier
@@ -2542,7 +2634,29 @@ private fun XtreamAccountRow(app: HikariApp) {
                     )
                 }
             }
+        } else {
+            Spacer(Modifier.weight(1f))
         }
+        OutlinedButton(
+            onClick = { showGenerator = true },
+            shape = RoundedCornerShape(20.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = Color.White.copy(alpha = 0.85f),
+            ),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+            modifier = Modifier.height(32.dp),
+        ) {
+            Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("Generate portals", fontSize = 12.sp)
+        }
+    }
+    if (showGenerator) {
+        PortalGeneratorDialog(
+            app = app,
+            onDismiss = { showGenerator = false },
+        )
     }
 }
 
@@ -2729,91 +2843,45 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
     }
 
     Column(Modifier.fillMaxWidth()) {
-        // Section header — top-right: "+ Region" and "+ CH" buttons to add
-        // custom region tabs and custom quick channels.
-        Row(
+        // CH Wall / Region / CH live in one horizontally scrolling action
+        // row. In portrait they get their own line below the title, so a
+        // narrow phone can slide to every button instead of clipping the last.
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                "Quick Channels",
-                color = Color.White,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                // The curated Live TV directory. Sits immediately left of
-                // "+ Region" as the user asked, at the top of the IPTV tab.
-                OutlinedButton(
-                    onClick = { nav.navigate(Routes.CHANNEL_WALL) },
-                    shape = RoundedCornerShape(20.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = Color.White.copy(alpha = 0.85f),
-                    ),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                    modifier = Modifier.height(32.dp),
-                ) {
-                    Icon(Icons.Filled.GridView, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("CH Wall", fontSize = 12.sp)
+            val actions: @Composable (Modifier) -> Unit = { actionModifier ->
+                QuickChannelActionRow(
+                    onChWall = { nav.navigate(Routes.CHANNEL_WALL) },
+                    onAddRegion = { showAddRegion = true },
+                    onAddChannel = { showAddChannel = true },
+                    showValidate = selectedQc != null,
+                    validating = qcValidating,
+                    onValidate = { runQcValidation() },
+                    modifier = actionModifier,
+                )
+            }
+            if (maxWidth < 600.dp) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Quick Channels",
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    actions(Modifier.fillMaxWidth())
                 }
-                OutlinedButton(
-                    onClick = { showAddRegion = true },
-                    shape = RoundedCornerShape(20.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = Color.White.copy(alpha = 0.85f),
-                    ),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                    modifier = Modifier.height(32.dp),
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Region", fontSize = 12.sp)
-                }
-                OutlinedButton(
-                    onClick = { showAddChannel = true },
-                    shape = RoundedCornerShape(20.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = Color.White.copy(alpha = 0.85f),
-                    ),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                    modifier = Modifier.height(32.dp),
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("CH", fontSize = 12.sp)
-                }
-                // Validate button — only shown when a quick channel is selected
-                if (selectedQc != null) {
-                    OutlinedButton(
-                        onClick = { runQcValidation() },
-                        enabled = !qcValidating,
-                        shape = RoundedCornerShape(20.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = Color.White.copy(alpha = 0.85f),
-                        ),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                        modifier = Modifier.height(32.dp),
-                    ) {
-                        if (qcValidating) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp,
-                                color = Color.White,
-                            )
-                        } else {
-                            Icon(Icons.Default.VerifiedUser, contentDescription = null, modifier = Modifier.size(16.dp))
-                        }
-                        Spacer(Modifier.width(4.dp))
-                        Text("Validate", fontSize = 12.sp)
-                    }
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Quick Channels",
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    actions(Modifier)
                 }
             }
         }
