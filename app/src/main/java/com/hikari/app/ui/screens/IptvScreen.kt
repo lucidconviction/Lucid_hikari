@@ -315,6 +315,7 @@ fun IptvScreen(nav: NavHostController) {
             adding = false
             result.fold(
                 onSuccess = { n ->
+                    IptvCardCache.invalidate()
                     app.providers.refresh()
                     val msg = when {
                         wantTorrent -> I18n.t("Added torrent stream")
@@ -430,6 +431,7 @@ addStream = false
     // a file another profile (or another provider) still uses must stay (the
     // same rule the Extensions screen's remove follows).
     fun removePlaylist(card: IptvCard) {
+        IptvCardCache.invalidate()
         scope.launch {
             val target = app.store.providers().firstOrNull { it.id == card.id }
             app.store.removeProvider(card.id)
@@ -465,6 +467,15 @@ addStream = false
     LaunchedEffect(ids) {
         if (playlists.isEmpty()) {
             cards = emptyList()
+            IptvCardCache.invalidate()
+            return@LaunchedEffect
+        }
+        // Returning to the tab should paint at once. The cached tiles carry
+        // the counts, groups, covers and error badges; Refresh still clears
+        // this cache and re-reads every playlist from disk/network.
+        IptvCardCache.get(ids)?.let { cached ->
+            cards = cached
+            reading = false
             return@LaunchedEffect
         }
         reading = true
@@ -475,6 +486,7 @@ addStream = false
             out += withContext(Dispatchers.IO) { chunk.map { readCard(it) } }
             cards = out.toList()
         }
+        IptvCardCache.put(ids, cards)
         reading = false
     }
 
@@ -558,6 +570,7 @@ addStream = false
     fun refreshPlaylists() {
         val ps = playlists
         if (ps.isEmpty() || refreshing) return
+        IptvCardCache.invalidate()
         refreshing = true
         scope.launch {
             try {
@@ -1862,6 +1875,44 @@ private data class IptvCard(
      *  case where removing the tile also deletes something. */
     val local: Boolean = false,
 )
+
+/**
+ * The IPTV tab's tiles, remembered between visits.
+ *
+ * [IptvProvider] already caches the parsed channels, but the tab rebuilt its
+ * cards (count, groups and cover) from scratch every time it was opened — and
+ * a provider recreate in between made that a full playlist read. The cards are
+ * cheap to hold, so they stay here for [TTL_MS]; returning to the tab paints
+ * immediately, while the header's Refresh still forces a real re-read.
+ */
+private object IptvCardCache {
+    private const val TTL_MS = 30 * 60 * 1000L
+    private var savedAt = 0L
+    private var savedIds: List<String> = emptyList()
+    private var cards: List<IptvCard> = emptyList()
+
+    @Synchronized
+    fun get(ids: List<String>): List<IptvCard>? {
+        if (cards.isEmpty() || ids != savedIds) return null
+        if (System.currentTimeMillis() - savedAt >= TTL_MS) return null
+        return cards
+    }
+
+    @Synchronized
+    fun put(ids: List<String>, list: List<IptvCard>) {
+        savedIds = ids
+        cards = list
+        savedAt = System.currentTimeMillis()
+    }
+
+    @Synchronized
+    fun invalidate() {
+        savedAt = 0L
+        savedIds = emptyList()
+        cards = emptyList()
+    }
+}
+
 
 /** One group inside a playlist. */
 private data class IptvGroupTile(

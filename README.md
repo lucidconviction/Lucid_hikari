@@ -2,7 +2,7 @@
 
 **Lucid Hikari** is a universal streaming app for Android phones and TV. One place for your extensions and add-ons, live TV, sports, YouTube, music, manga and downloads — with a polished, glassy interface that stays out of the way.
 
-Lucid Hikari is a fork of **Hikari** by **Hikari Drvs**. The original project and its developers deserve the credit for the foundation this app is built on.
+Lucid Hikari is a fork of **Hikari** by **Hikari Devs**. The original project and its developers deserve the credit for the foundation this app is built on.
 
 ---
 
@@ -81,13 +81,13 @@ Lucid Hikari is free and has no ads. If it is useful to you, you can buy me a te
 
 **<https://www.paypal.me/Robbdeeze>**
 
-There is also a dismissible donation banner on the Home page, directly above Continue Watching.
+There is also a donation banner on the Home page, directly above Continue Watching.
 
 ## Credits and thanks
 
 Lucid Hikari would not exist without developers who shared their work, their formats and their ideas. Thank you to:
 
-- **Hikari Drvs** and the Hikari project — @codegeasse1, @error-898-15, @noreply and the Hikari contributors — the app this fork is built from.
+- **Hikari Devs** and the Hikari project — @codegeasse1, @error-898-15, @noreply and the Hikari contributors — the app this fork is built from.
 - **Nuvio** — multi-window, scraper and player patterns.
 - **SkyStream** and **Anymex** — interface, navigation and focus-driven design inspiration.
 - **CloudStream** — extension format and plugin runtime.

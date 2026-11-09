@@ -461,14 +461,10 @@ private fun WallHero(channels: List<WallChannel>, onOpen: (WallChannel) -> Unit)
                     .clip(RoundedCornerShape(22.dp))
                     .background(Brush.linearGradient(colors.ifEmpty { listOf(Color(0xFF24104F), Color(0xFF0B0B10)) })),
             ) {
-                AsyncImage(
-                    model = channel.backdropUrl
-                        ?: ChannelWallArt.byChannel[channel.id]
-                        ?: channel.iconUrl,
-                    contentDescription = channel.name,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                )
+                // Full-bleed hero art: a backdrop/promo first, then the icon the
+                // playlist carries, then a generated initials poster. No hero is
+                // ever just a flat gradient with a small logo in the corner.
+                WallFullBleedArt(channel)
                 Box(
                     Modifier
                         .fillMaxSize()
@@ -574,45 +570,46 @@ private fun WallCustomCard(channel: WallCustomChannel, onClick: () -> Unit) {
         listOf(Color(0xFF1B3A6B), Color(0xFF0B0B10)),
     )
     val colors = remember(channel.id) { palettes[(channel.id.hashCode() and Int.MAX_VALUE) % palettes.size] }
-    Column(
+    Box(
         Modifier
             .width(138.dp)
             .height(168.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(Brush.linearGradient(colors))
-            .clickable(onClick = onClick)
-            .padding(10.dp),
+            .clickable(onClick = onClick),
     ) {
-        Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-            val initials = channel.name.trim().split(' ').take(2)
-                .mapNotNull { it.firstOrNull()?.uppercaseChar() }.joinToString("")
-                .ifBlank { channel.name.take(3).uppercase() }
-            if (!channel.logo.isNullOrBlank()) {
-                SubcomposeAsyncImage(
-                    model = channel.logo,
-                    contentDescription = channel.name,
-                    modifier = Modifier.size(60.dp),
-                    contentScale = ContentScale.Fit,
-                    loading = { WallCustomFallback(initials) },
-                    error = { WallCustomFallback(initials) },
-                    success = { SubcomposeAsyncImageContent() },
-                )
-            } else {
-                WallCustomFallback(initials)
-            }
+        // User tiles follow the same rule as curated ones: the channel's icon
+        // (or a generated initials promo) fills the whole card, not a small
+        // inset square.
+        val logo = channel.logo
+        if (!logo.isNullOrBlank()) {
+            SubcomposeAsyncImage(
+                model = logo,
+                contentDescription = channel.name,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+                loading = { WallPromoFallback(channel.name, Modifier.fillMaxSize()) },
+                error = { WallPromoFallback(channel.name, Modifier.fillMaxSize()) },
+                success = { SubcomposeAsyncImageContent() },
+            )
+        } else {
+            WallPromoFallback(channel.name)
         }
-        Text(channel.name, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Text("Custom stream", color = Color.White.copy(alpha = 0.6f), fontSize = 10.sp, maxLines = 1)
-    }
-}
-
-@Composable
-private fun WallCustomFallback(initials: String) {
-    Box(
-        Modifier.size(60.dp).clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha = 0.12f)),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(initials, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Black)
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color.Transparent,
+                        0.45f to Color(0x22000000),
+                        1f to Color(0xF2080A0F),
+                    ),
+                ),
+        )
+        Column(Modifier.align(Alignment.BottomStart).padding(10.dp)) {
+            Text(channel.name, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text("Custom stream", color = Color.White.copy(alpha = 0.65f), fontSize = 10.sp, maxLines = 1)
+        }
     }
 }
 
@@ -644,10 +641,59 @@ private fun WallSection(
     }
 }
 
+/**
+ * The artwork that fills an entire wall tile.
+ *
+ * A backdrop/promo is preferred, then whatever artwork the user's own playlist
+ * was found to carry for this channel, then the curated icon. All three are
+ * drawn edge-to-edge: there is no inset logo panel anywhere on the wall, and a
+ * channel with no image at all gets a generated initials poster rather than an
+ * empty gradient.
+ */
+@Composable
+private fun WallFullBleedArt(channel: WallChannel, modifier: Modifier = Modifier) {
+    val art = channel.backdropUrl
+        ?: ChannelWallArt.byChannel[channel.id]
+        ?: channel.iconUrl
+    if (!art.isNullOrBlank()) {
+        AsyncImage(
+            model = art,
+            contentDescription = channel.name,
+            modifier = modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop,
+        )
+    } else {
+        WallPromoFallback(channel.name, modifier.fillMaxSize())
+    }
+}
+
+/** A generated poster for a channel that shipped no artwork: its initials fill
+ *  the tile, so every tile still reads as a full-bleed promo rather than a gap. */
+@Composable
+private fun WallPromoFallback(name: String, modifier: Modifier = Modifier) {
+    val initials = name.trim().split(' ').take(2)
+        .mapNotNull { it.firstOrNull()?.uppercaseChar() }
+        .joinToString("")
+        .ifBlank { name.take(3).uppercase() }
+    Box(
+        modifier,
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            initials,
+            color = Color.White.copy(alpha = 0.22f),
+            fontSize = 58.sp,
+            fontWeight = FontWeight.Black,
+            letterSpacing = 2.sp,
+            maxLines = 1,
+        )
+    }
+}
+
 @Composable
 private fun WallCard(channel: WallChannel, onClick: () -> Unit) {
     val colors = remember(channel.gradient) { channel.gradient.map(::Color) }
-    val backdrop = channel.backdropUrl ?: ChannelWallArt.byChannel[channel.id]
+    val hasArt = !(channel.backdropUrl ?: ChannelWallArt.byChannel[channel.id] ?: channel.iconUrl).isNullOrBlank()
     Box(
         Modifier
             .width(138.dp)
@@ -657,20 +703,9 @@ private fun WallCard(channel: WallChannel, onClick: () -> Unit) {
             .clickable(onClick = onClick),
     ) {
         // The artwork is the tile: edge to edge, no inset logo panel. Channels
-        // without a backdrop keep their logo centred over the gradient, so the
-        // grid still reads as one wall rather than two different card types.
-        if (!backdrop.isNullOrBlank()) {
-            AsyncImage(
-                model = backdrop,
-                contentDescription = channel.name,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
-            )
-        } else {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                WallLogo(channel, 62)
-            }
-        }
+        // with no image at all get a generated initials poster (see
+        // WallFullBleedArt) so they still read as part of the same wall.
+        WallFullBleedArt(channel)
         Box(
             Modifier
                 .fillMaxSize()
@@ -682,7 +717,7 @@ private fun WallCard(channel: WallChannel, onClick: () -> Unit) {
                     ),
                 ),
         )
-        if (!backdrop.isNullOrBlank()) {
+        if (hasArt) {
             Box(Modifier.align(Alignment.TopStart).padding(8.dp)) {
                 WallLogo(channel, 32)
             }
@@ -697,7 +732,7 @@ private fun WallCard(channel: WallChannel, onClick: () -> Unit) {
 @Composable
 private fun WallGridCard(channel: WallChannel, onClick: () -> Unit) {
     val colors = remember(channel.gradient) { channel.gradient.map(::Color) }
-    val backdrop = channel.backdropUrl ?: ChannelWallArt.byChannel[channel.id]
+    val hasArt = !(channel.backdropUrl ?: ChannelWallArt.byChannel[channel.id] ?: channel.iconUrl).isNullOrBlank()
     Box(
         Modifier
             .fillMaxWidth()
@@ -706,18 +741,7 @@ private fun WallGridCard(channel: WallChannel, onClick: () -> Unit) {
             .background(Brush.linearGradient(colors.ifEmpty { listOf(Color(0xFF1A1A1A), Color(0xFF0B0B10)) }))
             .clickable(onClick = onClick),
     ) {
-        if (!backdrop.isNullOrBlank()) {
-            AsyncImage(
-                model = backdrop,
-                contentDescription = channel.name,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
-            )
-        } else {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                WallLogo(channel, 52)
-            }
-        }
+        WallFullBleedArt(channel)
         Box(
             Modifier
                 .fillMaxSize()
@@ -729,7 +753,7 @@ private fun WallGridCard(channel: WallChannel, onClick: () -> Unit) {
                     ),
                 ),
         )
-        if (!backdrop.isNullOrBlank()) {
+        if (hasArt) {
             Box(Modifier.align(Alignment.TopStart).padding(7.dp)) {
                 WallLogo(channel, 28)
             }

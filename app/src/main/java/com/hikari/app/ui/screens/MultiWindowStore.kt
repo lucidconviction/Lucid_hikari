@@ -183,7 +183,7 @@ object MultiWindowStore {
                     runCatching {
                         Toast.makeText(
                             HikariApp.instance,
-                            "Portrait MultiView is limited to $limit windows. Rotate the phone for more.",
+                            "Phone portrait MultiView is limited to $limit windows. A tablet can use up to nine.",
                             Toast.LENGTH_SHORT,
                         ).show()
                     }
@@ -218,11 +218,15 @@ object MultiWindowStore {
         if (_currentLayout.value == null) _layoutLocked.value = false
     }
 
-    /** How many windows the current orientation allows. */
+    /** How many windows the current device and orientation allow. */
     fun maxSlots(): Int = runCatching {
         val app = HikariApp.instance
-        val portrait = app.resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
-        if (portrait) 4 else MAX_SLOTS
+        val config = app.resources.configuration
+        val portrait = config.orientation == Configuration.ORIENTATION_PORTRAIT
+        // A phone in portrait gets four; a tablet (smallest width 600dp) can
+        // use the full nine even when held upright.
+        val tablet = config.smallestScreenWidthDp >= 600
+        if (portrait && !tablet) 4 else MAX_SLOTS
     }.getOrDefault(MAX_SLOTS)
 
     fun removeSlot(slotIndex: Int) {

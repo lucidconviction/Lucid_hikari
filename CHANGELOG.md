@@ -42,6 +42,12 @@
 - IPTV channel loading is bounded so large playlists stay usable on low-memory devices.
 
 ### Other fixes
+- The Home donation banner is now permanent, so the support link cannot be dismissed away.
+- IPTV playlist tiles are cached between visits, so returning to Live TV paints the tile counts, groups and artwork immediately; Refresh still forces a full re-read.
+- Channel Wall now gives every curated and user-added tile full-bleed artwork, using a promo/backdrop where available and a generated initials poster where there is no image.
+- Web Apps opens Google when the address bar contains a search phrase instead of a URL.
+- MultiView tutorials and limits now distinguish a phone in portrait (four windows) from a tablet (up to nine).
+- Home thumbnails now rise, scale and brighten as they scroll into view, across Continue Watching and every shelf.
 
 - Bounded IPTV caches and safer Xtream error handling: a panel that answers with an error page no longer appears as a single fake channel.
 - Large Xtream exports no longer stall the playlist list.

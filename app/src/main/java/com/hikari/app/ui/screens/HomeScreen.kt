@@ -812,13 +812,6 @@ fun HomeScreen(nav: NavHostController) {
     val historyFlow = remember { app.store.historyFlow() }
     val hideContinueFlow = remember { app.store.hideContinueFlow() }
     val history by historyFlow.collectAsState(initial = emptyList())
-    // The tip jar banner above Continue Watching. It is dismissible for good:
-    // a request to support the app must never become a permanent fixture the
-    // user cannot get rid of.
-    val bannerPrefs = remember {
-        context.getSharedPreferences("home_banner", android.content.Context.MODE_PRIVATE)
-    }
-    var showDonation by remember { mutableStateOf(!bannerPrefs.getBoolean("donation_dismissed", false)) }
     // Settings → "Continue Watching": lets the user hide the shelf entirely.
     val hideContinue by hideContinueFlow.collectAsState(initial = false)
     // Settings → App Layout → Featured banner: which shape the banner takes and
@@ -1015,10 +1008,10 @@ fun HomeScreen(nav: NavHostController) {
     // shelves stream in differently ordered, shimmer placeholders come and go,
     // or Continue Watching changes. The order and conditions must stay the
     // same as the feed itself.
-    val feedKeys = remember(uniqueRows, continueEntries, collectionFolderRows, loading, hideContinue, rows.isEmpty(), showDonation) {
+    val feedKeys = remember(uniqueRows, continueEntries, collectionFolderRows, loading, hideContinue, rows.isEmpty()) {
         buildList {
             add("home-header")
-            if (showDonation) add("donate-banner")
+            add("donate-banner")
             if (!hideContinue && continueEntries.isNotEmpty()) add("continue-watching")
             collectionFolderRows.forEach { c -> add("collection-folders|${c.id}") }
             if (loading && collectionFolderRows.isEmpty()) repeat(4) { i -> add("home-shimmer|$i") }
@@ -1163,18 +1156,12 @@ fun HomeScreen(nav: NavHostController) {
                     }
                 }
             }
-            if (showDonation) {
-                item(key = "donate-banner") {
-                    DonationBanner(
-                        onDonate = {
-                            com.hikari.app.ui.openCommunity(context, com.hikari.app.ui.PAYPAL_DONATE_URL)
-                        },
-                        onDismiss = {
-                            showDonation = false
-                            bannerPrefs.edit().putBoolean("donation_dismissed", true).apply()
-                        },
-                    )
-                }
+            item(key = "donate-banner") {
+                DonationBanner(
+                    onDonate = {
+                        com.hikari.app.ui.openCommunity(context, com.hikari.app.ui.PAYPAL_DONATE_URL)
+                    },
+                )
             }
             if (!hideContinue && continueEntries.isNotEmpty()) {
                 item(key = "continue-watching") {
@@ -4195,13 +4182,14 @@ private fun HomeGenreStrip(onPick: (name: String, genresText: String, keywordsTe
 /**
  * The tip jar above Continue Watching.
  *
- * A single quiet line, not a store banner: it says what it is, links to PayPal
- * and can be dismissed for good (see the `home_banner` pref in the feed). The
- * link opens in the user's own browser/ PayPal app rather than the embedded
- * WebView, because PayPal's checkout refuses to run inside an app browser.
+ * A single quiet line, not a store banner: it says what it is and links to
+ * PayPal. It is a permanent part of Home (no close button and no dismissed
+ * pref) so the support link cannot disappear from the app. The link opens in
+ * the user's own browser / PayPal app rather than the embedded WebView,
+ * because PayPal's checkout refuses to run inside an app browser.
  */
 @Composable
-private fun DonationBanner(onDonate: () -> Unit, onDismiss: () -> Unit) {
+private fun DonationBanner(onDonate: () -> Unit) {
     val accent = MaterialTheme.colorScheme.primary
     Surface(
         modifier = Modifier
@@ -4241,14 +4229,6 @@ private fun DonationBanner(onDonate: () -> Unit, onDismiss: () -> Unit) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
-                    Icon(
-                        Icons.Filled.Close,
-                        contentDescription = tr("Dismiss"),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp),
                     )
                 }
             }

@@ -1856,7 +1856,7 @@ private fun AboutAppCard() {
         )
         Spacer(Modifier.height(12.dp))
         Text(
-            tr("Lucid Hikari is a fork of Hikari Drvs' Hikari. Huge thanks to @codegeasse1, @error-898-15, @noreply and every Hikari contributor, and to every developer whose work — open or ported — made this app possible."),
+            tr("Lucid Hikari is a fork of Hikari Devs' Hikari. Huge thanks to @codegeasse1, @error-898-15, @noreply and every Hikari contributor, and to every developer whose work — open or ported — made this app possible."),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurface,
         )
@@ -2099,7 +2099,7 @@ private val aboutGuideSections = listOf(
         "Add an M3U link, a file, a single stream, or an Xtream portal. Portals are checked before they are saved and show their channel and group counts.\n" +
             "Each Xtream account carries its expiry date; the pill turns amber within a week and red when it has passed. The On now strip reads the panel's own XMLTV guide and shows what is airing now, with the panel's description.\n" +
             "In the player, Channels lists the playlist in order, CH− / CH+ step through it, and Quick Ch jumps to a category and pattern without scrolling hundreds of rows.\n" +
-            "MultiView shows several channels at once. Portrait holds four windows; rotate for larger grids.",
+            "MultiView shows several channels at once. A phone in portrait holds four windows; rotate it or open MultiView on a tablet for grids of up to nine.",
     ),
     GuideSection(
         "Sports",
@@ -2207,7 +2207,7 @@ private fun CreditsCard() {
         )
         Spacer(Modifier.height(8.dp))
         listOf(
-            "Hikari Drvs — @codegeasse1, @error-898-15, @noreply and the Hikari contributors — the app this project is forked from",
+            "Hikari Devs — @codegeasse1, @error-898-15, @noreply and the Hikari contributors — the app this project is forked from",
             "Nuvio — multi-window, scraper and player patterns",
             "SkyStream and Anymex — interface and navigation inspiration",
             "CloudStream — extension format and plugin runtime",

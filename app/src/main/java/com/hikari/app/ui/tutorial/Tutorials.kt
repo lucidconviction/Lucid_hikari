@@ -151,7 +151,7 @@ object Tutorials {
                 ),
                 TutorialPage(
                     "Quick Ch and MultiView",
-                    "In the player, Quick Ch jumps to a curated pattern (news, sports, a network) inside the playlist you are watching. MultiView puts up to four channels on screen in portrait.",
+                    "In the player, Quick Ch jumps to a curated pattern (news, sports, a network) inside the playlist you are watching. MultiView shows four channels on a phone in portrait, and a tablet view can use up to nine windows.",
                 ),
             ),
         ),
@@ -166,7 +166,7 @@ object Tutorials {
                 ),
                 TutorialPage(
                     "Full-bleed artwork",
-                    "Cards use the channel's own backdrop when one exists, so the wall reads as a wall of programmes rather than a list of logos. Tap a tile to see every source found for it.",
+                    "Every tile — curated or one you add — uses a full-bleed channel icon or promo image behind its name, so the wall reads as a wall of programmes rather than a list of logos. Tap a tile to see every source found for it.",
                 ),
             ),
         ),
@@ -236,16 +236,16 @@ object Tutorials {
         ),
         Tutorial(
             "websites",
-            "Websites",
+            "Web Apps",
             listOf(Routes.WEBSITES),
             listOf(
                 TutorialPage(
-                    "Your own sites",
-                    "Save any site for one-tap access. Pages open in Hikari's in-app browser, with ad blocking, redirect protection and the same cookies as extension playback.",
+                    "Turn sites into web apps",
+                    "Save the sites you use as web apps for one-tap access — turn any site into an app to watch more media your way. Pages open in Hikari's in-app browser, with ad blocking, redirect protection and the same cookies as extension playback.",
                 ),
                 TutorialPage(
                     "At home in the browser",
-                    "The ⋯ menu has the address bar, desktop mode, a video detector and Open in browser for pages that need a full browser.",
+                    "The address bar opens a URL, or searches Google when you type a phrase instead of an address. The ⋯ menu adds desktop mode, a video detector and Open in browser for pages that need a full browser.",
                 ),
             ),
         ),
@@ -293,7 +293,7 @@ object Tutorials {
             listOf(
                 TutorialPage(
                     "Several channels at once",
-                    "Tap a cell to change its stream, mute it or make it fullscreen. Portrait holds four windows; turn the phone sideways for larger grids.",
+                    "Tap a cell to change its stream, mute it or make it fullscreen. A phone in portrait holds four windows; rotate it or open MultiView on a tablet for grids of up to nine.",
                 ),
             ),
         ),

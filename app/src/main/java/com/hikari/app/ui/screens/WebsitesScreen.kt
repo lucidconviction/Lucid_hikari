@@ -144,6 +144,24 @@ fun WebsitesScreen(nav: NavController) {
         addError = null
     }
 
+    /**
+     * What the address bar opens.
+     *
+     * A real address opens as usual. Anything that is not one — a search phrase,
+     * a bare word, or an empty bar — goes to Google instead of failing as an
+     * "https://" URL, which is what made the bar look broken for ordinary
+     * searches.
+     */
+    fun barTarget(raw: String): String {
+        val value = raw.trim()
+        if (value.isBlank()) return "https://www.google.com"
+        normalizeSiteUrl(value)?.let { return it }
+        val query = runCatching {
+            java.net.URLEncoder.encode(value, "UTF-8")
+        }.getOrDefault(value)
+        return "https://www.google.com/search?q=$query"
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -176,7 +194,7 @@ fun WebsitesScreen(nav: NavController) {
                 OutlinedTextField(
                     value = urlInput,
                     onValueChange = { urlInput = it },
-                    placeholder = { Text(tr("Paste any URL or search"), color = Color.White.copy(alpha = 0.5f)) },
+                    placeholder = { Text(tr("Paste a URL or search Google"), color = Color.White.copy(alpha = 0.5f)) },
                     modifier = Modifier
                         .weight(1f)
                         .testTag("websites_url_input"),
@@ -198,14 +216,10 @@ fun WebsitesScreen(nav: NavController) {
                     keyboardActions = KeyboardActions(
                         onGo = {
                             val raw = urlInput.trim()
-                            if (raw.isEmpty()) return@KeyboardActions
-                            val normalized = if (raw.startsWith("http://", ignoreCase = true) ||
-                                raw.startsWith("https://", ignoreCase = true)
-                            ) raw else "https://$raw"
                             urlInput = ""
                             context.startActivity(
                                 Intent(context, WebViewActivity::class.java).apply {
-                                    putExtra("url", normalized)
+                                    putExtra("url", barTarget(raw))
                                     putExtra("title", I18n.t("Go"))
                                 }
                             )
@@ -234,14 +248,10 @@ fun WebsitesScreen(nav: NavController) {
                         .background(Color.White.copy(alpha = 0.15f), RoundedCornerShape(22.dp))
                         .clickable {
                             val raw = urlInput.trim()
-                            if (raw.isEmpty()) return@clickable
-                            val normalized = if (raw.startsWith("http://", ignoreCase = true) ||
-                                raw.startsWith("https://", ignoreCase = true)
-                            ) raw else "https://$raw"
                             urlInput = ""
                             context.startActivity(
                                 Intent(context, WebViewActivity::class.java).apply {
-                                    putExtra("url", normalized)
+                                    putExtra("url", barTarget(raw))
                                     putExtra("title", I18n.t("Go"))
                                 }
                             )

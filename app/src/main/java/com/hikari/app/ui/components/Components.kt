@@ -108,6 +108,34 @@ import com.hikari.app.tv.tvTextFieldKeys
  *  hiccup without hammering an image that is genuinely gone. */
 private const val POSTER_RETRIES = 2
 
+/**
+ * The Home rails' scrolling focus effect.
+ *
+ * A card that is only peeking in from the edge is drawn a little smaller,
+ * dimmer and lower; as it scrolls into view it rises to full size and
+ * brightness. The values live in a graphicsLayer block, so they are read on
+ * the draw pass rather than recomposing the whole row on every scroll step.
+ */
+private fun androidx.compose.foundation.lazy.LazyListState.posterScrollEffect(key: Any): Modifier =
+    Modifier.graphicsLayer {
+        val info = layoutInfo
+        val item = info.visibleItemsInfo.firstOrNull { it.key == key } ?: return@graphicsLayer
+        if (item.size <= 0) return@graphicsLayer
+        val visible = (
+            minOf(info.viewportEndOffset, item.offset + item.size) -
+                maxOf(info.viewportStartOffset, item.offset)
+            ).coerceAtLeast(0)
+        val fraction = (visible.toFloat() / item.size).coerceIn(0f, 1f)
+        // Smoothstep: the lift starts and ends gently instead of snapping when
+        // a card crosses the viewport edge.
+        val eased = fraction * fraction * (3f - 2f * fraction)
+        val scale = 0.92f + 0.08f * eased
+        scaleX = scale
+        scaleY = scale
+        alpha = 0.66f + 0.34f * eased
+        translationY = (1f - eased) * 10.dp.toPx()
+    }
+
 @Composable
 fun MediaRow(
     title: String,
@@ -194,14 +222,20 @@ fun MediaRow(
         // shelves — and applying it here rather than in the stores is what makes
         // the Settings switch take effect on the next frame, with no re-fetch and
         // no stale cached row to trip over.
+        val rowState = if (keeperKey.isBlank()) {
+            androidx.compose.foundation.lazy.rememberLazyListState()
+        } else {
+            keptListState(keeperKey, itemKeys = rowKeys)
+        }
         LazyRow(
-            state = if (keeperKey.isBlank()) androidx.compose.foundation.lazy.rememberLazyListState()
-            else keptListState(keeperKey, itemKeys = rowKeys),
+            state = rowState,
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             items(uniqueItems, key = { it.uniqueId }) { item ->
-                PosterCard(item, style, onClick = { onClick(item) }, onQuickPlay = onQuickPlay)
+                Box(rowState.posterScrollEffect(item.uniqueId)) {
+                    PosterCard(item, style, onClick = { onClick(item) }, onQuickPlay = onQuickPlay)
+                }
             }
         }
     }
@@ -1516,13 +1550,15 @@ fun ContinueWatchingRow(
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(shown, key = { it.uniqueKey }) { h ->
-                    ContinueWatchingCard(
-                        h = h,
-                        backdrop = backdropOf(h),
-                        removable = onRemove != null,
-                        onClick = { onClick(h) },
-                        onRemove = { onRemove?.invoke(h) },
-                    )
+                    Box(tvRowState.posterScrollEffect(h.uniqueKey)) {
+                        ContinueWatchingCard(
+                            h = h,
+                            backdrop = backdropOf(h),
+                            removable = onRemove != null,
+                            onClick = { onClick(h) },
+                            onRemove = { onRemove?.invoke(h) },
+                        )
+                    }
                 }
             }
         }
@@ -1538,18 +1574,22 @@ fun ContinueWatchingRow(
             modifier = Modifier.padding(horizontal = 16.dp)
         )
         Spacer(Modifier.height(8.dp))
+        val rowState = androidx.compose.foundation.lazy.rememberLazyListState()
         LazyRow(
+            state = rowState,
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             items(shown, key = { it.uniqueKey }) { h ->
-                ContinueWatchingCard(
-                    h = h,
-                    backdrop = backdropOf(h),
-                    removable = onRemove != null,
-                    onClick = { onClick(h) },
-                    onRemove = { onRemove?.invoke(h) },
-                )
+                Box(rowState.posterScrollEffect(h.uniqueKey)) {
+                    ContinueWatchingCard(
+                        h = h,
+                        backdrop = backdropOf(h),
+                        removable = onRemove != null,
+                        onClick = { onClick(h) },
+                        onRemove = { onRemove?.invoke(h) },
+                    )
+                }
             }
         }
     }
