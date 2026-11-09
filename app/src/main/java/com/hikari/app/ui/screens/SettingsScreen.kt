@@ -82,6 +82,8 @@ import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Timer
@@ -116,6 +118,8 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Wallpaper
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -180,6 +184,7 @@ import com.hikari.app.net.AdBlocker
 import com.hikari.app.net.DnsProviders
 import com.hikari.app.net.DohDns
 import com.hikari.app.net.NetTuning
+import com.hikari.app.net.Updater
 import com.hikari.app.player.EnhancePreset
 import com.hikari.app.player.CustomEnhancePreset
 import com.hikari.app.player.PlayerSkins
@@ -204,6 +209,11 @@ import com.hikari.app.data.Profiles
 import com.hikari.app.ui.components.LocalHideHelp
 import com.hikari.app.ui.screens.MultiViewLayout
 import com.hikari.app.ui.components.TrackerLoginDialog
+import com.hikari.app.ui.components.UpdateDialog
+import com.hikari.app.ui.tutorial.Tutorial
+import com.hikari.app.ui.tutorial.TutorialDialog
+import com.hikari.app.ui.tutorial.TutorialStore
+import com.hikari.app.ui.tutorial.Tutorials
 import com.hikari.app.ui.components.helpShown
 import com.hikari.app.ui.LanguageManager
 import com.hikari.app.ui.navigation.BottomTab
@@ -408,7 +418,7 @@ private enum class SettingsFolder(
     ABOUT(
         "about",
         "About & Updates",
-        "Version, links & roadmap",
+        "Version, credits, updates & tutorials",
         Icons.Filled.Info,
     ),
     // The one irreversible action in Settings, in a folder of its own. It used
@@ -1162,26 +1172,12 @@ fun SettingsScreen(nav: NavHostController) {
                     item { SettingsCard(top = 2.dp) { BackupCard(app, onPair = { showPair = true }) } }
                 }
                 SettingsFolder.ABOUT -> {
-                    item {
-                        SettingsCard(top = 2.dp) {
-                            Column {
-                                ListItem(
-                                    leadingContent = {
-                                        Icon(
-                                            Icons.Filled.CheckCircle,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
-                                    },
-                                    headlineContent = { Text(tr("Version")) },
-                                    supportingContent = {
-                                        Text(BuildConfig.VERSION_NAME + I18n.t(" (build ") + BuildConfig.VERSION_CODE + ")")
-                                    }
-                                )
-                            }
-                        }
-                    }
-                    item { SettingsCard { AboutCard() } }
+                    item { SettingsCard(top = 2.dp) { AboutAppCard() } }
+                    item { SettingsCard { UpdatesCard() } }
+                    item { SettingsCard { DonationCard() } }
+                    item { SettingsCard { TutorialsCard() } }
+                    item { SettingsCard { FeatureGuideCard() } }
+                    item { SettingsCard { CreditsCard() } }
                 }
                 // Deleting the app's data lives here, and only here. The card
                 // spells out what goes, the note under it says it cannot be
@@ -1822,19 +1818,411 @@ private fun AdultContentCard(app: HikariApp) {
 }
 
 @Composable
-private fun AboutCard() {
+private fun AboutAppCard() {
+    val context = LocalContext.current
+    Column(Modifier.padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(46.dp)
+                    .clip(GlassShape)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Filled.Favorite,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                Text(
+                    "Lucid Hikari",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    "Version ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Text(
+            tr("A universal streaming app: your extensions and add-ons for films, series and anime, plus live IPTV, sports, YouTube, music, downloads and a private in-app browser — all in one place."),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(12.dp))
+        Text(
+            tr("Lucid Hikari is a fork of Hikari Drvs' Hikari. Huge thanks to @codegeasse1, @error-898-15 and every Hikari contributor, and to every developer whose work — open or ported — made this app possible."),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            TextButton(onClick = {
+                com.hikari.app.ui.openInAppBrowser(
+                    context,
+                    "https://github.com/codegeasse1",
+                    "codegeasse1 on GitHub",
+                )
+            }) { Text("codegeasse1") }
+            TextButton(onClick = {
+                com.hikari.app.ui.openInAppBrowser(
+                    context,
+                    "https://github.com/error-898-15",
+                    "error-898-15 on GitHub",
+                )
+            }) { Text("error-898-15") }
+            TextButton(onClick = {
+                com.hikari.app.ui.openInAppBrowser(
+                    context,
+                    "https://github.com/lucidconviction/Lucid_hikari",
+                    "Lucid Hikari on GitHub",
+                )
+            }) { Text(tr("Lucid Hikari")) }
+        }
+    }
+}
+
+@Composable
+private fun UpdatesCard() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var auto by remember { mutableStateOf(Updater.autoCheckEnabled(context)) }
+    var checking by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf<Updater.UpdateStatus?>(null) }
+    var showDialog by remember { mutableStateOf(false) }
+
+    Column(Modifier.padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Filled.Refresh,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                Text(tr("App updates"), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Text(
+                    tr("Downloads come straight from the GitHub releases page."),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(tr("Check automatically"), style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    tr("Once a day at launch. Nothing is downloaded without asking."),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = auto,
+                onCheckedChange = { on ->
+                    auto = on
+                    Updater.setAutoCheckEnabled(context, on)
+                },
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = {
+                    if (checking) return@Button
+                    checking = true
+                    scope.launch {
+                        status = Updater.checkForUpdate()
+                        checking = false
+                        showDialog = true
+                    }
+                },
+                enabled = !checking,
+            ) {
+                if (checking) {
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(if (checking) tr("Checking…") else tr("Check for updates"))
+            }
+            TextButton(onClick = {
+                com.hikari.app.ui.openInAppBrowser(
+                    context,
+                    Updater.RELEASES_URL,
+                    "Hikari releases",
+                )
+            }) { Text(tr("Open releases")) }
+        }
+        status?.let { s ->
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (s.available) {
+                    tr("Version %s is available.").replace("%s", s.latestVersion)
+                } else {
+                    tr("You are on the latest version (%s).").replace("%s", s.currentVersion)
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = if (s.available) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+    if (showDialog) {
+        UpdateDialog(
+            context = context,
+            onDismiss = { showDialog = false },
+            initialStatus = status,
+        )
+    }
+}
+
+@Composable
+private fun DonationCard() {
+    val context = LocalContext.current
+    Column(Modifier.padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(42.dp)
+                    .clip(GlassShape)
+                    .background(Brush.linearGradient(listOf(Color(0xFFFFB74D), Color(0xFFE91E63)))),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Filled.Favorite,
+                    contentDescription = null,
+                    tint = Color.White,
+                )
+            }
+            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                Text(tr("Support Lucid Hikari"), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Text(
+                    tr("The app is free and has no ads. If it is useful, you can buy me a tea."),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Button(
+            onClick = { com.hikari.app.ui.openCommunity(context, com.hikari.app.ui.PAYPAL_DONATE_URL) },
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+            ),
+        ) { Text(tr("Donate with PayPal")) }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            com.hikari.app.ui.PAYPAL_DONATE_URL,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun TutorialsCard() {
+    val context = LocalContext.current
+    var replay by remember { mutableStateOf<Tutorial?>(null) }
+    Column(Modifier.padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Filled.Lightbulb,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                Text(tr("Interactive tutorials"), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Text(
+                    tr("A short tour appears the first time you open each page. Replay one here any time."),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Tutorials.all.forEach { tutorial ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { replay = tutorial }
+                    .padding(horizontal = 4.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Filled.PlayArrow,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp),
+                )
+                Text(
+                    tutorial.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f).padding(start = 10.dp),
+                )
+                Text(
+                    tr("%d steps").replace("%d", tutorial.pages.size.toString()),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        val resetMessage = tr("Tutorials will show again the next time you open each page.")
+        TextButton(onClick = {
+            TutorialStore.resetAll(context)
+            Toast.makeText(context, resetMessage, Toast.LENGTH_SHORT).show()
+        }) { Text(tr("Reset first-visit tutorials")) }
+    }
+    replay?.let { tutorial ->
+        TutorialDialog(tutorial) { replay = null }
+    }
+}
+
+private data class GuideSection(val title: String, val body: String)
+
+private val aboutGuideSections = listOf(
+    GuideSection(
+        "Getting started",
+        "1. Add a source. Extensions is for CloudStream plugins, Nuvio scrapers and Stremio add-ons; Live TV is for M3U playlists and Xtream portals.\n" +
+            "2. Search from Home or the Search tab. Results come from every enabled provider at once.\n" +
+            "3. Open a title and press Play. Pick the server that suits you; Hikari remembers your choice.\n" +
+            "4. Follow a series to keep new episodes together, and use the heart to save a title to My Stuff.",
+    ),
+    GuideSection(
+        "Live TV, portals and guides",
+        "Add an M3U link, a file, a single stream, or an Xtream portal. Portals are checked before they are saved and show their channel and group counts.\n" +
+            "Each Xtream account carries its expiry date; the pill turns amber within a week and red when it has passed. The On now strip reads the panel's own XMLTV guide and shows what is airing now, with the panel's description.\n" +
+            "In the player, Channels lists the playlist in order, CH− / CH+ step through it, and Quick Ch jumps to a category and pattern without scrolling hundreds of rows.\n" +
+            "MultiView shows several channels at once. Portrait holds four windows; rotate for larger grids.",
+    ),
+    GuideSection(
+        "Sports",
+        "Follow leagues and teams with the star, or use the Scores rail to browse every league. A live or upcoming game page has broadcasters, a Watch on search across all your playlists and add-ons, and the streams that actually match the fixture.\n" +
+            "A finished game shows no Watch on — there is nothing left to watch live — and offers replays and highlights instead. The Replays tab keeps recent fight cards, football, racing and more.\n" +
+            "If the feed looks stale, reopen the Sports tab: it retries by itself.",
+    ),
+    GuideSection(
+        "YouTube",
+        "Home, Live, Music, Gaming, News, Sports and Shorts work without signing in. Signing in adds Subscriptions, History, Playlists and Channels, and keeps your position in YouTube's own history.\n" +
+            "The ⋮ menu on a video card saves it to Watch later or likes it. Those two lists are stored on this device and collected on the You tab, together with your account playlists when signed in.\n" +
+            "Videos play in Hikari's player with quality, subtitles and SponsorBlock. The Home page's filters can hide Shorts, upcoming videos, watched videos and channels or words you never want to see.",
+    ),
+    GuideSection(
+        "Downloads, music and browsing",
+        "The download button on a detail page keeps a title offline. Downloads resume, keep their place, and use My Stuff's Downloads section.\n" +
+            "The Music tab has charts, search, radio and a local library; the mini player follows you around the app.\n" +
+            "Every web page the app opens uses the in-app browser, with ad blocking, popup and redirect protection and the same cookies as extension playback. The ⋯ menu has desktop mode, a video detector and Open in browser for pages that need a full browser.",
+    ),
+    GuideSection(
+        "Appearance and navigation",
+        "Settings → Appearance & Theme has the theme (Dark, Dark Glass, AMOLED, Light), the accent colour and a custom background. The accent repaints the app live.\n" +
+            "Settings → App Layout changes the taskbar style, button labels, poster shape and the featured banner. The taskbar scrolls sideways and keeps the selected tab in view.\n" +
+            "Settings → Taskbar buttons chooses which tabs appear. Extra pages such as Live TV, Sports, Stats and Telegram are off until you switch them on.",
+    ),
+    GuideSection(
+        "Privacy, safety and playback",
+        "Settings → Privacy & Browsing controls ad blocking, redirect protection, popups and the WebView user agent.\n" +
+            "Settings → Servers & Playback decides server order, autoplay, subtitle and audio behaviour, and the player's controls.\n" +
+            "Settings → Integrations connects AniList, Simkl, TMDB and MDBList. Settings → Backup & Restore writes your whole setup to one file.",
+    ),
+    GuideSection(
+        "When something goes wrong",
+        "Settings → Logs & Diagnostics has shareable app logs and crash reports; they stay on the device until you share them.\n" +
+            "If an extension's site shows a challenge, open its own site with the globe button, clear it, then retry. Check for updates here in About & Updates if a provider changed its site.",
+    ),
+)
+
+@Composable
+private fun FeatureGuideCard() {
+    var open by remember { mutableStateOf<String?>(null) }
     Column(Modifier.padding(16.dp)) {
         Text(
-            tr("About"),
+            tr("Feature guide"),
             style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.primary
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Text(
+            tr("What every part of the app does, and how to set it up."),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(6.dp))
+        aboutGuideSections.forEach { section ->
+            val expanded = open == section.title
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { open = if (expanded) null else section.title }
+                    .padding(vertical = 9.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        tr(section.title),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Icon(
+                        Icons.Filled.ExpandMore,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                if (expanded) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        section.body,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CreditsCard() {
+    Column(Modifier.padding(16.dp)) {
+        Text(
+            tr("Credits & thanks"),
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
         )
         Spacer(Modifier.height(6.dp))
         Text(
-            tr("A universal streaming app built from scratch."),
+            tr("Lucid Hikari stands on the work of developers who shared their apps, libraries and ideas. Thank you:"),
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        Spacer(Modifier.height(8.dp))
+        listOf(
+            "Hikari Drvs — @codegeasse1, @error-898-15 and the Hikari contributors — the app this project is forked from",
+            "Nuvio — multi-window, scraper and player patterns",
+            "SkyStream and Anymex — interface and navigation inspiration",
+            "CloudStream — extension format and plugin runtime",
+            "Stremio — add-on protocol and catalog model",
+            "SmartTube / MediaServiceCore — the YouTube engine",
+            "Aniyomi — manga and reader patterns",
+            "TMDB, MDBList, AniList and Simkl — metadata and tracking",
+        ).forEach { line ->
+            Text(
+                "•  $line",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 2.dp),
+            )
+        }
     }
 }
 

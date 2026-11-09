@@ -4,6 +4,9 @@ package com.hikari.app.ui.screens
 
 import android.content.Context
 import android.widget.Toast
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -24,6 +27,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
@@ -72,6 +76,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -94,6 +99,7 @@ import com.hikari.app.ui.navigation.Routes
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -172,8 +178,6 @@ fun ChannelWallScreen(nav: NavHostController) {
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     var customChannels by remember { mutableStateOf<List<WallCustomChannel>>(emptyList()) }
     var showAddCustom by remember { mutableStateOf(false) }
-    var showSources by remember { mutableStateOf(false) }
-    var showGenerator by remember { mutableStateOf(false) }
     var selectedWall by remember { mutableStateOf<WallChannel?>(null) }
     var wallMatches by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
     var wallLoading by remember { mutableStateOf(false) }
@@ -181,15 +185,6 @@ fun ChannelWallScreen(nav: NavHostController) {
     var channelsLoading by remember { mutableStateOf(false) }
     var channelsJob by remember { mutableStateOf<Deferred<List<IptvChannel>>?>(null) }
     var reloadKey by remember { mutableIntStateOf(0) }
-
-    // A portal/M3U dialog: "xtream" or "m3u", null when closed.
-    var portalMode by remember { mutableStateOf<String?>(null) }
-    var portalName by remember { mutableStateOf("") }
-    var portalUrl by remember { mutableStateOf("") }
-    var portalUser by remember { mutableStateOf("") }
-    var portalPass by remember { mutableStateOf("") }
-    var portalBusy by remember { mutableStateOf(false) }
-    var portalError by remember { mutableStateOf<String?>(null) }
 
     fun toast(message: String) {
         Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
@@ -264,65 +259,6 @@ fun ChannelWallScreen(nav: NavHostController) {
         playIptvChannel(context, channel)
     }
 
-    fun openPortalDialog(mode: String) {
-        portalMode = mode
-        portalName = ""
-        portalUrl = ""
-        portalUser = ""
-        portalPass = ""
-        portalError = null
-    }
-
-    fun addPortal() {
-        if (portalBusy) return
-        val mode = portalMode ?: return
-        val url = portalUrl.trim()
-        val name = portalName.trim()
-        if (url.isBlank()) {
-            portalError = "Enter the portal/playlist address."
-            return
-        }
-        portalBusy = true
-        portalError = null
-        scope.launch {
-            try {
-                val result = if (mode == "xtream") {
-                    val creds = XtreamCredentials(
-                        baseUrl = url,
-                        username = portalUser.trim(),
-                        password = portalPass.trim(),
-                    )
-                    val credError = creds.validate()
-                    if (credError != null) {
-                        portalError = credError
-                        return@launch
-                    }
-                    val preview = IptvProvider.previewXtream(creds).getOrElse {
-                        portalError = it.message ?: "Could not reach that Xtream portal."
-                        return@launch
-                    }
-                    addIptvPlaylist(app, preview.m3uUrl, null, name.ifBlank { preview.serverName })
-                } else {
-                    addIptvPlaylist(app, url, null, name)
-                }
-                result.fold(
-                    onSuccess = { count ->
-                        app.providers.refresh()
-                        reloadKey++
-                        portalMode = null
-                        toast(
-                            if (mode == "xtream") "Xtream portal added ($count channels)"
-                            else "M3U playlist added ($count channels)",
-                        )
-                    },
-                    onFailure = { portalError = it.message ?: "Could not save that playlist." },
-                )
-            } finally {
-                portalBusy = false
-            }
-        }
-    }
-
     val wallQuery = query.trim()
     val searchResults = remember(wallQuery) {
         if (wallQuery.isBlank()) emptyList()
@@ -349,9 +285,6 @@ fun ChannelWallScreen(nav: NavHostController) {
             Spacer(Modifier.weight(1f))
             IconButton(onClick = { searchOpen = !searchOpen; if (!searchOpen) query = "" }) {
                 Icon(Icons.Filled.Search, contentDescription = "Search channels", tint = Color.White.copy(alpha = 0.85f))
-            }
-            IconButton(onClick = { showSources = true }) {
-                Icon(Icons.Filled.LiveTv, contentDescription = "IPTV portals & playlists", tint = Color.White.copy(alpha = 0.85f))
             }
             IconButton(onClick = { reloadKey++ }) {
                 if (channelsLoading) {
@@ -475,20 +408,6 @@ fun ChannelWallScreen(nav: NavHostController) {
         }
     }
 
-    if (showSources) {
-        WallSourcesSheet(
-            playlists = playlists,
-            onDismiss = { showSources = false },
-            onBrowse = { provider ->
-                showSources = false
-                nav.navigate(Routes.iptvPlaylist(provider.config.id))
-            },
-            onAddXtream = { showSources = false; openPortalDialog("xtream") },
-            onAddM3u = { showSources = false; openPortalDialog("m3u") },
-            onGenerate = { showSources = false; showGenerator = true },
-        )
-    }
-
     selectedWall?.let { channel ->
         WallMatchSheet(
             channel = channel,
@@ -496,18 +415,6 @@ fun ChannelWallScreen(nav: NavHostController) {
             loading = wallLoading,
             onDismiss = { selectedWall = null },
             onPlay = { playChannel(it) },
-            onSources = { selectedWall = null; showSources = true },
-        )
-    }
-
-
-    if (showGenerator) {
-        PortalGeneratorDialog(
-            app = app,
-            onDismiss = {
-                showGenerator = false
-                reloadKey++
-            },
         )
     }
 
@@ -527,24 +434,6 @@ fun ChannelWallScreen(nav: NavHostController) {
             onDismiss = { showAddCustom = false },
         )
     }
-
-    if (portalMode != null) {
-        AddPortalDialog(
-            xtream = portalMode == "xtream",
-            name = portalName,
-            url = portalUrl,
-            user = portalUser,
-            pass = portalPass,
-            busy = portalBusy,
-            error = portalError,
-            onName = { portalName = it },
-            onUrl = { portalUrl = it },
-            onUser = { portalUser = it },
-            onPass = { portalPass = it },
-            onConfirm = ::addPortal,
-            onDismiss = { if (!portalBusy) portalMode = null },
-        )
-    }
 }
 
 @Composable
@@ -555,10 +444,20 @@ private fun WallHero(channels: List<WallChannel>, onOpen: (WallChannel) -> Unit)
         HorizontalPager(state = pager, modifier = Modifier.fillMaxWidth().height(230.dp)) { page ->
             val channel = channels[page]
             val colors = remember(channel.gradient) { channel.gradient.map(::Color) }
+            val pageOffset = ((pager.currentPage - page) + pager.currentPageOffsetFraction).let { if (it < 0f) -it else it }
             Box(
                 Modifier
                     .fillMaxSize()
                     .padding(horizontal = 12.dp)
+                    .graphicsLayer {
+                        // A neighbour peeks in slightly smaller and dimmer than
+                        // the page in front, so swiping reads as a carousel
+                        // rather than a row of unrelated images.
+                        val p = pageOffset.coerceIn(0f, 1f)
+                        alpha = 1f - p * 0.35f
+                        scaleX = 1f - p * 0.05f
+                        scaleY = 1f - p * 0.05f
+                    }
                     .clip(RoundedCornerShape(22.dp))
                     .background(Brush.linearGradient(colors.ifEmpty { listOf(Color(0xFF24104F), Color(0xFF0B0B10)) })),
             ) {
@@ -595,14 +494,6 @@ private fun WallHero(channels: List<WallChannel>, onOpen: (WallChannel) -> Unit)
                                     Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color(0xFF080A0F), modifier = Modifier.size(17.dp))
                                     Text("Watch now", color = Color(0xFF080A0F), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                 }
-                            }
-                            OutlinedButton(
-                                onClick = { onOpen(channel) },
-                                shape = RoundedCornerShape(50),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.5f)),
-                                contentPadding = PaddingValues(horizontal = 13.dp, vertical = 6.dp),
-                            ) {
-                                Text("Sources", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }
@@ -742,9 +633,11 @@ private fun WallSection(
             contentPadding = PaddingValues(horizontal = 14.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            items(channels, key = { it.id }) { channel ->
-                Box(Modifier.width(138.dp)) {
-                    WallCard(channel) { onOpen(channel) }
+            itemsIndexed(channels, key = { _, channel -> channel.id }) { index, channel ->
+                RiseIn(index) {
+                    Box(Modifier.width(138.dp)) {
+                        WallCard(channel) { onOpen(channel) }
+                    }
                 }
             }
         }
@@ -754,46 +647,127 @@ private fun WallSection(
 @Composable
 private fun WallCard(channel: WallChannel, onClick: () -> Unit) {
     val colors = remember(channel.gradient) { channel.gradient.map(::Color) }
-    Column(
+    val backdrop = channel.backdropUrl ?: ChannelWallArt.byChannel[channel.id]
+    Box(
         Modifier
             .width(138.dp)
             .height(168.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(Brush.linearGradient(colors.ifEmpty { listOf(Color(0xFF1A1A1A), Color(0xFF0B0B10)) }))
-            .clickable(onClick = onClick)
-            .padding(10.dp),
+            .clickable(onClick = onClick),
     ) {
+        // The artwork is the tile: edge to edge, no inset logo panel. Channels
+        // without a backdrop keep their logo centred over the gradient, so the
+        // grid still reads as one wall rather than two different card types.
+        if (!backdrop.isNullOrBlank()) {
+            AsyncImage(
+                model = backdrop,
+                contentDescription = channel.name,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
+        } else {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                WallLogo(channel, 62)
+            }
+        }
         Box(
             Modifier
-                .fillMaxWidth()
-                .weight(1f),
-            contentAlignment = Alignment.Center,
-        ) {
-            WallLogo(channel, 60)
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color.Transparent,
+                        0.45f to Color(0x22000000),
+                        1f to Color(0xF2080A0F),
+                    ),
+                ),
+        )
+        if (!backdrop.isNullOrBlank()) {
+            Box(Modifier.align(Alignment.TopStart).padding(8.dp)) {
+                WallLogo(channel, 32)
+            }
         }
-        Text(channel.name, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Text(channel.category, color = Color.White.copy(alpha = 0.6f), fontSize = 10.sp, maxLines = 1)
+        Column(Modifier.align(Alignment.BottomStart).padding(10.dp)) {
+            Text(channel.name, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(channel.category, color = Color.White.copy(alpha = 0.65f), fontSize = 10.sp, maxLines = 1)
+        }
     }
 }
 
 @Composable
 private fun WallGridCard(channel: WallChannel, onClick: () -> Unit) {
     val colors = remember(channel.gradient) { channel.gradient.map(::Color) }
-    Column(
+    val backdrop = channel.backdropUrl ?: ChannelWallArt.byChannel[channel.id]
+    Box(
         Modifier
             .fillMaxWidth()
             .aspectRatio(0.82f)
             .clip(RoundedCornerShape(14.dp))
             .background(Brush.linearGradient(colors.ifEmpty { listOf(Color(0xFF1A1A1A), Color(0xFF0B0B10)) }))
-            .clickable(onClick = onClick)
-            .padding(8.dp),
+            .clickable(onClick = onClick),
     ) {
-        Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-            WallLogo(channel, 50)
+        if (!backdrop.isNullOrBlank()) {
+            AsyncImage(
+                model = backdrop,
+                contentDescription = channel.name,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
+        } else {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                WallLogo(channel, 52)
+            }
         }
-        Text(channel.name, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Text(channel.category, color = Color.White.copy(alpha = 0.6f), fontSize = 9.sp, maxLines = 1)
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color.Transparent,
+                        0.45f to Color(0x22000000),
+                        1f to Color(0xF2080A0F),
+                    ),
+                ),
+        )
+        if (!backdrop.isNullOrBlank()) {
+            Box(Modifier.align(Alignment.TopStart).padding(7.dp)) {
+                WallLogo(channel, 28)
+            }
+        }
+        Column(Modifier.align(Alignment.BottomStart).padding(8.dp)) {
+            Text(channel.name, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(channel.category, color = Color.White.copy(alpha = 0.65f), fontSize = 9.sp, maxLines = 1)
+        }
     }
+}
+
+/**
+ * A short staggered rise used by the wall's horizontal rails.
+ *
+ * Lazy rows create their items as they scroll into range, so every card that
+ * arrives from the right gets the same small lift-and-fade — a scrolling
+ * effect that is felt rather than a layout animation that reflows the rail.
+ */
+@Composable
+private fun RiseIn(index: Int, content: @Composable () -> Unit) {
+    var entered by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        delay((index % 8) * 42L)
+        entered = true
+    }
+    val progress by animateFloatAsState(
+        targetValue = if (entered) 1f else 0f,
+        animationSpec = tween(durationMillis = 420, easing = FastOutSlowInEasing),
+        label = "wallRise",
+    )
+    Box(
+        Modifier.graphicsLayer {
+            alpha = progress
+            translationY = (1f - progress) * 38.dp.toPx()
+            scaleX = 0.96f + 0.04f * progress
+            scaleY = 0.96f + 0.04f * progress
+        },
+    ) { content() }
 }
 
 @Composable
@@ -846,7 +820,6 @@ private fun WallMatchSheet(
     loading: Boolean,
     onDismiss: () -> Unit,
     onPlay: (IptvChannel) -> Unit,
-    onSources: () -> Unit,
 ) {
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
@@ -877,7 +850,7 @@ private fun WallMatchSheet(
                     )
                     Spacer(Modifier.height(10.dp))
                     Text(
-                        "Add an Xtream portal or an M3U playlist from Sources, then tap refresh.",
+                        "Add an Xtream portal or an M3U playlist in the IPTV tab, then tap refresh.",
                         color = Color.White.copy(alpha = 0.45f),
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -927,115 +900,9 @@ private fun WallMatchSheet(
             }
             Spacer(Modifier.height(6.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(onClick = onSources) { Text("Manage portals") }
                 TextButton(onClick = onDismiss) { Text("Close") }
             }
             Spacer(Modifier.height(10.dp))
-        }
-    }
-}
-
-@Composable
-private fun WallSourcesSheet(
-    playlists: List<IptvProvider>,
-    onDismiss: () -> Unit,
-    onBrowse: (IptvProvider) -> Unit,
-    onAddXtream: () -> Unit,
-    onAddM3u: () -> Unit,
-    onGenerate: () -> Unit,
-) {
-    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
-        Column(Modifier.fillMaxWidth().heightIn(max = 620.dp).padding(horizontal = 16.dp)) {
-            Text("IPTV Portals & Playlists", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Black)
-            Text(
-                "Xtream portals and M3U playlists are managed by Hikari: the same validation, channel lists and player the IPTV tab uses.",
-                color = Color.White.copy(alpha = 0.55f),
-                fontSize = 11.sp,
-            )
-            Spacer(Modifier.height(12.dp))
-            if (playlists.isEmpty()) {
-                Text(
-                    "No portals or playlists yet. Add an Xtream portal or paste an M3U link below.",
-                    color = Color.White.copy(alpha = 0.6f),
-                    fontSize = 13.sp,
-                )
-            } else {
-                LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false), contentPadding = PaddingValues(vertical = 4.dp)) {
-                    items(playlists, key = { it.config.id }) { provider ->
-                        val count = IptvProvider.channelCounts[provider.config.id] ?: 0
-                        val isXtream = provider.config.url.contains("get.php", true) ||
-                            provider.config.url.contains("player_api", true) ||
-                            provider.config.url.contains("type=m3u", true)
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable { onBrowse(provider) }
-                                .padding(vertical = 8.dp, horizontal = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Box(
-                                Modifier.size(42.dp).clip(RoundedCornerShape(9.dp)).background(Color(0xFF7C5CFF).copy(alpha = 0.18f)),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(Icons.Filled.LiveTv, contentDescription = null, tint = Color(0xFF9B84FF))
-                            }
-                            Spacer(Modifier.width(10.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(provider.config.name, color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(
-                                    buildString {
-                                        append(if (isXtream) "Xtream" else "M3U")
-                                        if (count > 0) append(" · $count channels")
-                                        val host = runCatching { java.net.URI(provider.config.url).host }.getOrNull()
-                                        if (!host.isNullOrBlank()) append(" · $host")
-                                    },
-                                    color = Color.White.copy(alpha = 0.5f),
-                                    fontSize = 11.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                            Text("Browse", color = Color(0xFF00D2EF), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = onAddXtream,
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C5CFF)),
-                ) {
-                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(5.dp))
-                    Text("Xtream portal", fontSize = 12.sp)
-                }
-                OutlinedButton(onClick = onAddM3u, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(5.dp))
-                    Text("M3U playlist", fontSize = 12.sp)
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-            Button(
-                onClick = onGenerate,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00A3A3)),
-            ) {
-                Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Generate portals (Cloud Vault)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            }
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Importing an M3U file from storage is done from IPTV → + → Playlist.",
-                color = Color.White.copy(alpha = 0.4f),
-                fontSize = 10.sp,
-            )
-            Spacer(Modifier.height(12.dp))
         }
     }
 }
@@ -1110,79 +977,5 @@ private fun AddCustomChannelDialog(
             ) { Text("Add") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
-}
-
-@Composable
-private fun AddPortalDialog(
-    xtream: Boolean,
-    name: String,
-    url: String,
-    user: String,
-    pass: String,
-    busy: Boolean,
-    error: String?,
-    onName: (String) -> Unit,
-    onUrl: (String) -> Unit,
-    onUser: (String) -> Unit,
-    onPass: (String) -> Unit,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (xtream) "Add Xtream portal" else "Add M3U playlist") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    if (xtream) "The panel is validated before it is saved; its channels appear in the wall immediately."
-                    else "Hikari downloads and parses the playlist, then its channels join the wall.",
-                    color = Color.White.copy(alpha = 0.55f),
-                    fontSize = 11.sp,
-                )
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = onName,
-                    label = { Text("Name (optional)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = url,
-                    onValueChange = onUrl,
-                    label = { Text(if (xtream) "Portal URL (http://host:port)" else "M3U / M3U8 URL") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (xtream) {
-                    OutlinedTextField(
-                        value = user,
-                        onValueChange = onUser,
-                        label = { Text("Username") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = pass,
-                        onValueChange = onPass,
-                        label = { Text("Password") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                error?.let {
-                    Text(it, color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onConfirm, enabled = !busy) {
-                if (busy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                else Text(if (xtream) "Validate & add" else "Add playlist")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") }
-        },
     )
 }

@@ -156,8 +156,10 @@ fun UpdateDialog(
             } else if (!checking && downloading == null) {
                 TextButton(onClick = {
                     if (s?.available == true) {
-                        context.startActivity(
-                            Intent(Intent.ACTION_VIEW, Uri.parse(Updater.RELEASES_URL))
+                        com.hikari.app.ui.openInAppBrowser(
+                            context,
+                            Updater.RELEASES_URL,
+                            "Hikari releases",
                         )
                     }
                     onDismiss()

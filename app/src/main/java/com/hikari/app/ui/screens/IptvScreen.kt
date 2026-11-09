@@ -625,6 +625,8 @@ addStream = false
 
         // Xtream accounts quick access row
         XtreamAccountRow(app = app)
+        // The panel's own guide: what is on right now, straight from XMLTV.
+        XtreamNowSection(app = app)
 
         // Portals found by the generator: visible here, added to the real
         // playlist list only on request (five full Xtream exports at once
@@ -2762,10 +2764,25 @@ private fun GeneratedPortalsRow(app: HikariApp) {
 
 @Composable
 private fun XtreamAccountPill(account: com.hikari.app.data.XtreamAccount, onClick: () -> Unit) {
-    val expText = if (account.expDate != null && account.expDate > 0L) {
-        val d = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date(account.expDate))
-        "Exp: $d"
-    } else null
+    val now = System.currentTimeMillis()
+    val exp = account.expDate?.takeIf { it > 0L }
+    val daysLeft = exp?.let { ((it - now) / 86_400_000L).toInt() }
+    val expDate = exp?.let {
+        java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault())
+            .format(java.util.Date(it))
+    }
+    val expText = when {
+        expDate == null -> null
+        daysLeft != null && daysLeft < 0 -> "Expired $expDate"
+        daysLeft != null && daysLeft <= 7 -> "Expires $expDate · ${daysLeft.coerceAtLeast(0)}d left"
+        else -> "Expires $expDate"
+    }
+    val expColor = when {
+        daysLeft == null -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+        daysLeft < 0 -> MaterialTheme.colorScheme.error
+        daysLeft <= 7 -> Color(0xFFFFB300)
+        else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+    }
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(9999.dp),
@@ -2781,7 +2798,14 @@ private fun XtreamAccountPill(account: com.hikari.app.data.XtreamAccount, onClic
                 modifier = Modifier
                     .size(6.dp)
                     .clip(CircleShape)
-                    .background(if (account.isWorking) Color(0xFF4CAF50) else MaterialTheme.colorScheme.error),
+                    .background(
+                        when {
+                            account.status.equals("Expired", true) || (daysLeft != null && daysLeft < 0) ->
+                                MaterialTheme.colorScheme.error
+                            account.isWorking -> Color(0xFF4CAF50)
+                            else -> Color(0xFFFFB300)
+                        }
+                    ),
             )
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -2795,7 +2819,7 @@ private fun XtreamAccountPill(account: com.hikari.app.data.XtreamAccount, onClic
                 if (expText != null) {
                     Text(
                         expText,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        color = expColor,
                         fontSize = 8.sp,
                         maxLines = 1,
                     )
@@ -2804,6 +2828,193 @@ private fun XtreamAccountPill(account: com.hikari.app.data.XtreamAccount, onClic
         }
     }
 }
+
+/**
+ * "Portal guide" — the Xtream panel's own XMLTV feed, reduced to what is on
+ * now. This is the piece the IPTV page was missing: the channels and the
+ * account's expiry were visible, but not what the panel is actually showing.
+ *
+ * It is a compact horizontal strip, not a full guide grid, because the point
+ * is a glanceable "what can I put on right now" — the same job the quick
+ * channels do for the user's own patterns. Tapping a card opens the programme
+ * details, including the panel's description.
+ */
+@Composable
+private fun XtreamNowSection(app: HikariApp) {
+    val context = LocalContext.current
+    val accounts by app.store.xtreamAccountsFlow().collectAsState(initial = emptyList())
+    if (accounts.isEmpty()) return
+    var programmes by remember { mutableStateOf<List<com.hikari.app.data.XtreamEpg.Programme>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var failed by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf<com.hikari.app.data.XtreamEpg.Programme?>(null) }
+
+    LaunchedEffect(accounts) {
+        loading = true
+        failed = false
+        val merged = ArrayList<com.hikari.app.data.XtreamEpg.Programme>()
+        // Two panels at most: enough to be useful, and it keeps a page that
+        // already parses playlists from also downloading every guide at once.
+        for (account in accounts.take(2)) {
+            val creds = com.hikari.app.data.XtreamCredentials(
+                baseUrl = account.baseUrl,
+                username = account.username,
+                password = account.password,
+            )
+            val snapshot = runCatching {
+                com.hikari.app.data.XtreamEpg.load(creds)
+            }.getOrNull()
+            snapshot?.onNow()?.take(64)?.let { merged += it }
+        }
+        programmes = merged
+            .distinctBy { it.channelId + "|" + it.title }
+            .take(64)
+        failed = programmes.isEmpty()
+        loading = false
+    }
+
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "On now",
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                when {
+                    loading -> "Reading portal guide…"
+                    failed -> "Guide unavailable"
+                    else -> "${programmes.size} live programmes"
+                },
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 10.sp,
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        when {
+            loading -> androidx.compose.material3.LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth().height(2.dp),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant,
+            )
+            failed -> Text(
+                "This panel did not return an XMLTV guide. Channels and playback still work.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 11.sp,
+            )
+            else -> LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(programmes, key = { "${it.channelId}|${it.startMs}|${it.title}" }) { programme ->
+                    XtreamEpgCard(programme) { selected = programme }
+                }
+            }
+        }
+    }
+
+    selected?.let { programme ->
+        val use24h = android.text.format.DateFormat.is24HourFormat(context)
+        val pattern = if (use24h) "HH:mm" else "h:mm a"
+        val format = remember(pattern) { java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault()) }
+        AlertDialog(
+            onDismissRequest = { selected = null },
+            title = { Text(programme.channelName) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        programme.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        "${format.format(java.util.Date(programme.startMs))} – ${format.format(java.util.Date(programme.stopMs))}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    programme.description?.takeIf { it.isNotBlank() }?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { selected = null }) { Text("Close") }
+            },
+        )
+    }
+}
+
+@Composable
+private fun XtreamEpgCard(
+    programme: com.hikari.app.data.XtreamEpg.Programme,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
+        ),
+        modifier = Modifier.width(244.dp),
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF4CAF50)),
+                )
+                Spacer(Modifier.width(5.dp))
+                Text(
+                    programme.channelName.uppercase(),
+                    color = MaterialTheme.colorScheme.primary,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Text("LIVE", color = Color(0xFF4CAF50), fontSize = 8.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(5.dp))
+            Text(
+                programme.title,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            programme.description?.takeIf { it.isNotBlank() }?.let {
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    it,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            androidx.compose.material3.LinearProgressIndicator(
+                progress = { programme.progress },
+                modifier = Modifier.fillMaxWidth().height(2.dp),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
+            )
+        }
+    }
+}
+
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable

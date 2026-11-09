@@ -350,6 +350,13 @@
               android:text="@string/player_channels" />
 
           <TextView
+              android:id="@+id/quick_ch_btn"
+              style="@style/HikariPill"
+              android:drawableStart="@drawable/ic_quick_ch"
+              android:maxWidth="160dp"
+              android:text="@string/player_quick_ch" />
+
+          <TextView
               android:id="@+id/quality_btn"
               style="@style/HikariPill"
               android:drawableStart="@drawable/ic_quality"

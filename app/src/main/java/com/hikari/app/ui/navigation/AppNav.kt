@@ -6,9 +6,16 @@ import android.widget.Toast
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,6 +30,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.CircleShape
@@ -73,6 +81,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -100,6 +109,9 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.hikari.app.HikariApp
 import com.hikari.app.data.MediaType
+import com.hikari.app.net.Updater
+import com.hikari.app.ui.components.UpdateDialog
+import com.hikari.app.ui.tutorial.FirstVisitTutorial
 import com.hikari.app.ui.screens.AnimeCalendarScreen
 import com.hikari.app.ui.screens.CatalogScreen
 import com.hikari.app.ui.screens.CollectionGridScreen
@@ -178,7 +190,8 @@ object Routes {
      *  Playlists" tile). */
     const val IPTV_ALL_PLAYLISTS = "iptv-all-playlists"
     /** F4 — multi-view screen with a grid of ExoPlayer windows. */
-    const val MULTI_VIEW = "multi-view?{sessions}&layout={layout}"
+    const val MULTI_VIEW_BASE = "multi-view"
+    const val MULTI_VIEW = "$MULTI_VIEW_BASE?{sessions}&layout={layout}"
 
     /**
      * The Manga tab — the same kind of extra page as [IPTV]: OFF by default and
@@ -574,6 +587,7 @@ object Routes {
         return when (base) {
             SEARCH_QUERY_BASE -> SEARCH
             MANGA_SEARCH_BASE -> MANGA
+            MULTI_VIEW_BASE -> MULTI_VIEW
             // History and Downloads are sections of the ONE merged taskbar
             // button ("My Stuff"), so they highlight it and keep the bar on
             // screen exactly as the scoped search route highlights Search.
@@ -694,26 +708,16 @@ object NavStyles {
  */
 object BarMetrics {
     /** The seamless layout's plate. */
-    val classicHeight = 50.dp
-    /** The floating bars' resting height. The bar is very nearly as wide as
-     *  the screen, so its height is what decides whether it reads as a capsule
-     *  or as a sliver: at 46dp over a 360dp screen it was a 1:8 strip and the
-     *  icons and their names had almost no room above or below them. 54dp gives
-     *  the same proportion the reference bar wears — measured off a screenshot
-     *  of it, its height is a seventh of its length — while staying clearly
-     *  shorter than a full navigation bar, so it still reads as a small pill
-     *  floating over the artwork rather than as a band across the page. */
-    val fullHeight = 54.dp
-    /** The animation layout's size once the user scrolls back up. This is a real
-     *  step down, not a nudge: at the resting size the drawn-in bar was the same
-     *  width, the same height and wore the same labels as the plain floating
-     *  bar, so the animation could not be seen at all. Here the bar also drops
-     *  its button names and pulls its ends in (see AppBottomBar), leaving the
-     *  compact icon pill the reference client scrolls with — still a stadium
-     *  capsule with the same icons, so it is plainly the same bar. It sits a
-     *  step under the resting pill rather than half its size, so the two states
-     *  are the same bar seen smaller — not two different bars. */
-    val midHeight = 46.dp
+    val classicHeight = 62.dp
+    /** The floating bars' resting height. Taller than the old 54dp pill
+     *  because the taskbar icons are deliberately twice their old size: the
+     *  labels still need their own line under a 40dp glyph, and squeezing both
+     *  into a 54dp strip left the icons touching the pill's edges. */
+    val fullHeight = 70.dp
+    /** The animated layout's scrolled-in size: the same 40dp icons, with the
+     *  labels set aside, so the pill gets shorter without shrinking the thing
+     *  the user is actually aiming at. */
+    val midHeight = 58.dp
     /** Gap between the bar and the bottom of the screen — and, with [hPad], the
      *  room around the pill on every side, which is what makes it float over
      *  the page instead of spanning it. */
@@ -836,7 +840,7 @@ private fun AppBottomBar(
         },
         label = "barHeight",
     )
-    val labelHeight by animateDpAsState(if (withLabels) 15.dp else 0.dp, label = "barLabelH")
+    val labelHeight by animateDpAsState(if (withLabels) 16.dp else 0.dp, label = "barLabelH")
     val labelAlpha by animateFloatAsState(if (withLabels) 1f else 0f, label = "barLabelA")
     // The button cell fills the bar's inner height (the Row below insets itself
     // by 5dp top and bottom, and the label is drawn inside this cell), so the
@@ -845,19 +849,11 @@ private fun AppBottomBar(
     // it now leaves the cell real space above and below its contents, which is
     // what stops the icons from looking squeezed against the pill's edges.
     val tabHeight = (barHeight - 10.dp)
-    val iconSize by animateDpAsState(
-        if (edgeToEdge) {
-            22.dp
-        } else {
-            // One icon size for both floating states: the drawn-in bar is the
-            // same bar smaller, and it shrinks by dropping the names and pulling
-            // its frame in (see [hPad] and [labelHeight]) — the icons themselves
-            // stay the size the user is used to, so the taskbar never looks like
-            // a different control after a scroll.
-            20.dp
-        },
-        label = "barIcon",
-    )
+    // 40dp: exactly twice the 20dp glyph the bar used to draw. The requirement
+    // is a taskbar you can aim at from across the room, not a decorative pill;
+    // the horizontally scrolling row below is what gives every one of those
+    // bigger buttons its own room instead of shrinking them back into slivers.
+    val iconSize by animateDpAsState(40.dp, label = "barIcon")
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -918,24 +914,33 @@ private fun AppBottomBar(
                             }
                         )
                 ) {
-                    // Equal slots are not much room, and the labels
-                    // ("Downloads", "Extensions") are the longest text in the
-                    // app: on a narrow screen, or with the accessibility Font
-                    // size / Display size turned up, they overran their slots
-                    // and butted straight up against each other ("Extensions"
-                    // running into "Downloads", tails cut off). Rather than
-                    // guess a size, MEASURE the widest label and scale the font
-                    // so it fits its slot with a gutter either side. The result
-                    // is divided by the font scale when it is drawn, so the
-                    // label always renders at this computed size no matter what
-                    // the phone's font-size setting is — it can never grow out
-                    // of its slot. (With "In-app UI scale" on, fontScale is 1
-                    // and the scale rides on the density, so the labels still
-                    // scale with that setting.)
-                    val slotDp = maxWidth / tabs.size
-                    val availDp = (slotDp - 8.dp).coerceAtLeast(12.dp)
+                    // The bar is now a horizontally scrolling strip of FIXED
+                    // cells rather than equal-weight slots. Equal slots only
+                    // worked while every button had a share of the screen; with
+                    // 40dp icons and a dozen tabs, a share is narrower than the
+                    // icon itself. A fixed cell gives each button the same
+                    // target, and the row scrolls to bring the selected tab into
+                    // view (see the LaunchedEffect below).
+                    val cellWidth = if (withLabels) 96.dp else 74.dp
+                    val availDp = (cellWidth - 12.dp).coerceAtLeast(12.dp)
                     val densityNow = LocalDensity.current
                     val availPx = with(densityNow) { availDp.toPx() }
+                    val scrollState = rememberScrollState()
+                    // Bring the active tab to the middle of the bar when the
+                    // strip is wider than the screen. Scrolling to an absolute
+                    // X rather than animating a highlight is what keeps every
+                    // tab reachable: the selected one never sits off-screen
+                    // after a deep link or a restored navigation state.
+                    LaunchedEffect(currentRoute, tabs, cellWidth, maxWidth) {
+                        val index = tabs.indexOfFirst { it.route == currentRoute }
+                        if (index < 0) return@LaunchedEffect
+                        val cellPx = with(densityNow) { cellWidth.toPx() }
+                        val viewportPx = with(densityNow) { maxWidth.toPx() }
+                        val target = (index * cellPx - (viewportPx - cellPx) / 2f)
+                            .toInt()
+                            .coerceAtLeast(0)
+                        scrollState.animateScrollTo(target)
+                    }
                     // The style the label is actually drawn with, taken from
                     // the ambient typography: the app font (Settings → Appearance & Theme → App font)
                     // and the theme's own metrics are part of the width, and
@@ -981,22 +986,38 @@ private fun AppBottomBar(
                         val fontScale = densityNow.fontScale.coerceAtLeast(0.5f)
                         // 0.97 leaves a hair of slack in the slot, so the text
                         // never sits edge to edge in its cell.
-                        (availPx * 0.97f * 100f * fontScale / widestRef).coerceIn(6f, 11.5f)
+                        (availPx * 0.97f * 100f * fontScale / widestRef).coerceIn(7f, 12.5f)
                     }
                     val labelScale = densityNow.fontScale.coerceAtLeast(0.5f)
+                    val contentWidth = cellWidth * tabs.size
                     Row(
                         Modifier
                             .fillMaxWidth()
                             .height(barHeight)
-                            .padding(horizontal = 2.dp, vertical = 5.dp),
+                            .horizontalScroll(scrollState)
+                            .padding(horizontal = 4.dp, vertical = 5.dp),
+                        horizontalArrangement = if (contentWidth <= maxWidth) {
+                            Arrangement.SpaceEvenly
+                        } else {
+                            Arrangement.Start
+                        },
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         tabs.forEach { tab ->
                             val selected = currentRoute == tab.route
+                            // The selected button lifts a touch. It is the only
+                            // moving part in the bar, so the eye lands on the
+                            // right tab without a second colour cue.
+                            val selectedScale by animateFloatAsState(
+                                targetValue = if (selected) 1.08f else 1f,
+                                animationSpec = spring(dampingRatio = 0.55f, stiffness = 700f),
+                                label = "tabPop",
+                            )
                             Column(
                                 Modifier
-                                    .weight(1f)
+                                    .width(cellWidth)
                                     .height(tabHeight)
+                                    .scale(selectedScale)
                                     // A fully round pill, not a rounded square — that
                                     // is what marks the active tab in the reference
                                     // design.
@@ -1468,6 +1489,18 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
                 NavHost(
                     navController = nav,
                     startDestination = Routes.HOME,
+                    // A page change slides in a hair from the right and fades;
+                    // Back mirrors it. Deliberately short (a quarter second):
+                    // a streaming app is mostly navigation, so anything slower
+                    // turns every tap into a wait.
+                    enterTransition = {
+                        fadeIn(tween(200)) + slideInHorizontally(tween(260)) { it / 12 }
+                    },
+                    exitTransition = { fadeOut(tween(150)) },
+                    popEnterTransition = {
+                        fadeIn(tween(200)) + slideInHorizontally(tween(260)) { -it / 12 }
+                    },
+                    popExitTransition = { fadeOut(tween(150)) },
                     modifier = Modifier
                         .padding(padding)
                         // A page with no bottom bar (a detail page, a grid)
@@ -1795,17 +1828,46 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
         // hard-to-focus target stays reachable from the sofa.
         TvMouseCursorOverlay()
 
+        // First-visit tours, one per page. The overlay sits above the page and
+        // the taskbar, and marks itself seen the moment it is dismissed — the
+        // Settings → About & Updates card can replay any of them afterwards.
+        FirstVisitTutorial(route = currentRoute)
+
+        // GitHub update check: once a day, quietly, only when there is a newer
+        // release. Settings → About & Updates owns the switch and the manual
+        // check; this is the same dialog on the same Updater so both agree.
+        var updateStatus by remember { mutableStateOf<Updater.UpdateStatus?>(null) }
+        var updateOpen by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) {
+            if (!Updater.shouldAutoCheck(context)) return@LaunchedEffect
+            Updater.markChecked(context)
+            val status = runCatching {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    Updater.checkForUpdate()
+                }
+            }.getOrNull() ?: return@LaunchedEffect
+            if (status.available) {
+                updateStatus = status
+                updateOpen = true
+            }
+        }
+        if (updateOpen) {
+            UpdateDialog(
+                context = context,
+                onDismiss = { updateOpen = false },
+                initialStatus = updateStatus,
+            )
+        }
+
         // Global MultiView quick-nav FAB — ported from Nuvio's MW pill.
-        // Visible on every screen EXCEPT the MultiView tab itself, as long as
-        // at least one stream is queued in the multi-window store. Tapping it
-        // navigates to the MultiView tab. The count badge shows how many slots
-        // are occupied so the user knows what they have open at a glance.
+        // Floats over every page, INCLUDING the MultiView page itself: the
+        // count badge is the one place that shows how many windows are open,
+        // and hiding it exactly when you are managing those windows made it
+        // vanish at the moment it was most useful. Tapping it while already on
+        // the page leaves the page alone.
         val mwStreams = MultiWindowStore.allStreams
         val isOnMultiView = tabRoute == Routes.MULTI_VIEW
-        // As long as any multi-window stream is alive this floats over EVERY
-        // page (not just the tabs with the bottom bar): translucent dark disc,
-        // white outline, and only the RED count inside.
-        if (mwStreams.isNotEmpty() && !isOnMultiView) {
+        if (mwStreams.isNotEmpty()) {
             val mwCount = mwStreams.size
             Box(
                 modifier = Modifier
@@ -1819,7 +1881,9 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
                         color = Color.White.copy(alpha = 0.92f),
                         shape = CircleShape,
                     )
-                    .clickable { Routes.navigateTab(nav, Routes.MULTI_VIEW) },
+                    .clickable {
+                        if (!isOnMultiView) Routes.navigateTab(nav, Routes.MULTI_VIEW)
+                    },
                 contentAlignment = Alignment.Center,
             ) {
                 Text(

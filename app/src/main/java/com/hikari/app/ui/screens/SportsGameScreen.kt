@@ -102,8 +102,16 @@ fun SportsGameScreen(nav: androidx.navigation.NavHostController, eventId: String
 
     LaunchedEffect(event?.id, event?.state, watchReload) {
         val ev = event ?: return@LaunchedEffect
-        // Every state searches now: a finished game still has replays,
-        // highlights and full-game archives in the app's addons/playlists.
+        // "Watch on" answers "where can I watch this?" — a question that only
+        // exists before or during the game. Searching every provider for a
+        // finished fixture returned podcasts, old highlights and unrelated
+        // uploads, so past events skip the search entirely; the Replays tab and
+        // the YouTube highlights row are the right places for them.
+        if (ev.state == GameState.POST) {
+            watchStreams = emptyList()
+            watchLoading = false
+            return@LaunchedEffect
+        }
         watchLoading = true
         watchStreams = SportsWatch.search(ev)
         watchLoading = false
@@ -222,6 +230,10 @@ fun SportsGameScreen(nav: androidx.navigation.NavHostController, eventId: String
             }
 
             // ---- channels
+            // Live and upcoming fixtures only: a finished game has no "watch
+            // on" channel, and offering one sent the user looking for a
+            // broadcast that had already ended.
+            if (event.state != GameState.POST) {
             val found = matches[event.id].orEmpty()
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -303,6 +315,7 @@ fun SportsGameScreen(nav: androidx.navigation.NavHostController, eventId: String
             }
             items(watchStreams, key = { "w:${it.key}" }) { link ->
                 WatchStreamRow(link) { SportsWatch.play(context, link) }
+            }
             }
 
             // ---- YouTube: build-up before the event, highlights after it.

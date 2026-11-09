@@ -39,7 +39,7 @@ data class YtItem(
     val channelId: String?,
     /** How much YouTube says you've watched (0-100), from your account. */
     val percentWatched: Int,
-    internal val source: MediaItem
+    internal val source: MediaItem? = null
 )
 
 data class YtRow(
@@ -63,7 +63,9 @@ enum class YtTab(val title: String, val needsSignIn: Boolean = false, val grid: 
     NEWS("News"),
     SPORTS("Sports"),
     SHORTS("Shorts", grid = true),
-    CHANNELS("Channels", needsSignIn = true, grid = true)
+    CHANNELS("Channels", needsSignIn = true, grid = true),
+    /** What this device has saved: Watch later, Liked videos and — when signed in — playlists. */
+    YOU("You", grid = true)
 }
 
 data class YtUiState(
@@ -146,6 +148,10 @@ class YouTubeViewModel (private val context: Context) : ViewModel() {
         channelBlockOn = true
         YouTubeSettings.setLastTab(context, tab)
         _state.update { YtUiState(tab = tab, signedIn = it.signedIn, loading = true) }
+        if (tab == YtTab.YOU) {
+            loadYou()
+            return
+        }
         val rowsSource: (() -> io.reactivex.Observable<List<MediaGroup>>)? = when (tab) {
             YtTab.HOME -> { { content.homeObserve } }
             YtTab.LIVE -> { { content.liveObserve } }
@@ -176,10 +182,69 @@ class YouTubeViewModel (private val context: Context) : ViewModel() {
                 YtTab.CHANNELS -> grid(content.subscribedChannelsObserve.blockingFirst())
                 YtTab.HISTORY -> grid(content.historyObserve.blockingFirst())
                 YtTab.PLAYLISTS -> grid(content.playlistsObserve.blockingFirst())
+                YtTab.YOU -> Feed.Nothing
             }
             }
         }
     }
+
+    /**
+     * The You tab: what this device saved, plus your YouTube playlists when
+     * signed in. Watch later and Liked are local by design (the engine has no
+     * API for them); the account part is loaded best-effort, so a signed-out
+     * user still gets a useful page instead of a sign-in wall.
+     */
+    private fun loadYou() {
+        refreshHidden()
+        loadJob?.cancel()
+        currentGroup = null
+        loadJob = viewModelScope.launch {
+            val signed = withContext(Dispatchers.IO) {
+                runCatching { service.signInService.isSigned }.getOrDefault(false)
+            }
+            val local = withContext(Dispatchers.IO) {
+                val later = YouTubeLibrary.entries(context, YouTubeLibrary.Shelf.WATCH_LATER).map(::libraryItem)
+                val liked = YouTubeLibrary.entries(context, YouTubeLibrary.Shelf.LIKED).map(::libraryItem)
+                buildList {
+                    if (later.isNotEmpty()) add(YtRow("Watch later", later))
+                    if (liked.isNotEmpty()) add(YtRow("Liked videos", liked))
+                }
+            }
+            val playlists = if (!signed) emptyList() else withContext(Dispatchers.IO) {
+                runCatching {
+                    val group = content.playlistsObserve.blockingFirst()
+                    listOf(YtRow(group.title.orEmpty().ifBlank { "Your playlists" }, toItems(group), group, group.nextPageKey != null))
+                }.getOrDefault(emptyList()).filter { it.items.isNotEmpty() }
+            }
+            _state.update {
+                it.copy(
+                    signedIn = signed,
+                    loading = false,
+                    error = null,
+                    rows = local + playlists,
+                    grid = emptyList(),
+                    canLoadMore = false,
+                )
+            }
+        }
+    }
+
+    /** Re-reads the local shelves after a save/like, when the You tab is showing. */
+    fun refreshYou() {
+        if (_state.value.tab == YtTab.YOU && _state.value.subTitle == null) loadYou()
+    }
+
+    private fun libraryItem(entry: YouTubeLibrary.Entry): YtItem = YtItem(
+        kind = YtKind.VIDEO,
+        videoId = entry.videoId,
+        title = entry.title,
+        author = entry.author,
+        thumbnail = entry.thumbnail,
+        badge = null,
+        isLive = false,
+        channelId = entry.channelId,
+        percentWatched = 0,
+    )
 
     fun search(query: String) {
         if (query.isBlank()) return
@@ -203,12 +268,14 @@ class YouTubeViewModel (private val context: Context) : ViewModel() {
                 subTitle = item.title)
         }
         load(item.title) {
+            val source = item.source
+                ?: return@load Feed.Nothing
             when (item.kind) {
                 // A channel from the Channels list opens its uploads by its reload key; any other by its id.
                 YtKind.CHANNEL ->
-                    if (item.channelId == null && item.source.reloadPageKey != null) grid(content.getGroupObserve(item.source).blockingFirst())
-                    else rows(content.getChannelObserve(item.source).blockingFirst())
-                else -> grid(content.getGroupObserve(item.source).blockingFirst())
+                    if (item.channelId == null && source.reloadPageKey != null) grid(content.getGroupObserve(source).blockingFirst())
+                    else rows(content.getChannelObserve(source).blockingFirst())
+                else -> grid(content.getGroupObserve(source).blockingFirst())
             }
         }
     }
@@ -284,12 +351,13 @@ class YouTubeViewModel (private val context: Context) : ViewModel() {
     /** Shows [channel]'s videos beside the list. Waits a moment, so scrolling past channels doesn't ask for each one. */
     fun previewChannel(channel: YtItem) {
         previewJob?.cancel()
+        val source = channel.source ?: return
         previews[channel.title]?.let { _preview.value = it; return }
         _preview.value = ChannelPreview(title = channel.title, loading = true)
         previewJob = viewModelScope.launch {
             delay(350)
             val group = withContext(Dispatchers.IO) {
-                runCatching { content.getGroupObserve(channel.source).blockingFirst() }.getOrNull()
+                runCatching { content.getGroupObserve(source).blockingFirst() }.getOrNull()
             }
             val result = ChannelPreview(
                 title = channel.title,
@@ -731,12 +799,13 @@ class YouTubeViewModel (private val context: Context) : ViewModel() {
 
     /** Where to start: if your account says you stopped part-way through, resume from there. */
     private fun resumeMs(item: YtItem): Long {
-        val durationMs = item.source.durationMs
-        if (item.isLive || durationMs <= 0) return 0L
+        if (item.isLive) return 0L
         // This device's own place wins (nearly finished or barely started means from the top); then the account's.
         YouTubeProgress.localState(context, item.videoId)?.let { (pos, dur) ->
-            return if ((pos * 100 / dur).toInt() in 3..94) pos else 0L
+            return if (dur > 0 && (pos * 100 / dur).toInt() in 3..94) pos else 0L
         }
+        val durationMs = item.source?.durationMs ?: 0
+        if (durationMs <= 0) return 0L
         if (item.percentWatched !in 3..94) return 0L
         return durationMs * item.percentWatched / 100
     }

@@ -8957,24 +8957,10 @@ private fun formatCount(n: Long): String {
     return sb.toString()
 }
 
-/** Opens a rating site in whatever the device uses for links, falling back to
- *  the in-app web view when nothing answers. The browser launch is stamped
- *  trusted (see ExternalLinks.launch): our own UI, never an extension. */
+/** Opens a rating site in Hikari's in-app WebView (see [openInAppBrowser]) —
+ *  the page is a quick look, not a separate browsing session. */
 private fun openRatingPage(context: android.content.Context, url: String, title: String) {
-    val opened = runCatching {
-        com.hikari.app.net.ExtensionUiGuard.runTrusted {
-            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-        }
-    }.isSuccess
-    if (opened) return
-    runCatching {
-        context.startActivity(
-            Intent(context, WebViewActivity::class.java).apply {
-                putExtra("url", url)
-                putExtra("title", title)
-            }
-        )
-    }
+    com.hikari.app.ui.openInAppBrowser(context, url, title)
 }
 
 /** Circular-headshot Cast row, matching the Nuvio/Stremio detail page. Tapping

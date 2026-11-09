@@ -53,6 +53,7 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.PushPin
@@ -811,6 +812,13 @@ fun HomeScreen(nav: NavHostController) {
     val historyFlow = remember { app.store.historyFlow() }
     val hideContinueFlow = remember { app.store.hideContinueFlow() }
     val history by historyFlow.collectAsState(initial = emptyList())
+    // The tip jar banner above Continue Watching. It is dismissible for good:
+    // a request to support the app must never become a permanent fixture the
+    // user cannot get rid of.
+    val bannerPrefs = remember {
+        context.getSharedPreferences("home_banner", android.content.Context.MODE_PRIVATE)
+    }
+    var showDonation by remember { mutableStateOf(!bannerPrefs.getBoolean("donation_dismissed", false)) }
     // Settings → "Continue Watching": lets the user hide the shelf entirely.
     val hideContinue by hideContinueFlow.collectAsState(initial = false)
     // Settings → App Layout → Featured banner: which shape the banner takes and
@@ -1007,9 +1015,10 @@ fun HomeScreen(nav: NavHostController) {
     // shelves stream in differently ordered, shimmer placeholders come and go,
     // or Continue Watching changes. The order and conditions must stay the
     // same as the feed itself.
-    val feedKeys = remember(uniqueRows, continueEntries, collectionFolderRows, loading, hideContinue, rows.isEmpty()) {
+    val feedKeys = remember(uniqueRows, continueEntries, collectionFolderRows, loading, hideContinue, rows.isEmpty(), showDonation) {
         buildList {
             add("home-header")
+            if (showDonation) add("donate-banner")
             if (!hideContinue && continueEntries.isNotEmpty()) add("continue-watching")
             collectionFolderRows.forEach { c -> add("collection-folders|${c.id}") }
             if (loading && collectionFolderRows.isEmpty()) repeat(4) { i -> add("home-shimmer|$i") }
@@ -1152,6 +1161,19 @@ fun HomeScreen(nav: NavHostController) {
                             genreScope = GenreScopePick(name, genresText, keywordsText, ext)
                         }
                     }
+                }
+            }
+            if (showDonation) {
+                item(key = "donate-banner") {
+                    DonationBanner(
+                        onDonate = {
+                            com.hikari.app.ui.openCommunity(context, com.hikari.app.ui.PAYPAL_DONATE_URL)
+                        },
+                        onDismiss = {
+                            showDonation = false
+                            bannerPrefs.edit().putBoolean("donation_dismissed", true).apply()
+                        },
+                    )
                 }
             }
             if (!hideContinue && continueEntries.isNotEmpty()) {
@@ -4164,6 +4186,75 @@ private fun HomeGenreStrip(onPick: (name: String, genresText: String, keywordsTe
                             onPick(g.name, g.genresText, g.keywordsText)
                         },
                     )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The tip jar above Continue Watching.
+ *
+ * A single quiet line, not a store banner: it says what it is, links to PayPal
+ * and can be dismissed for good (see the `home_banner` pref in the feed). The
+ * link opens in the user's own browser/ PayPal app rather than the embedded
+ * WebView, because PayPal's checkout refuses to run inside an app browser.
+ */
+@Composable
+private fun DonationBanner(onDonate: () -> Unit, onDismiss: () -> Unit) {
+    val accent = MaterialTheme.colorScheme.primary
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        shape = RoundedCornerShape(18.dp),
+        color = accent.copy(alpha = 0.10f),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.30f)),
+    ) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(Brush.linearGradient(listOf(Color(0xFFFFB74D), Color(0xFFE91E63)))),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Filled.Favorite,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                    Text(
+                        tr("If you like the app, buy me a tea"),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        tr("Lucid Hikari is free, ad-free and built in the open."),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = tr("Dismiss"),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onDonate) {
+                    Text(tr("Buy me a tea"), fontWeight = FontWeight.SemiBold)
                 }
             }
         }

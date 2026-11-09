@@ -58,10 +58,11 @@ object SportsWatch {
         val score: Int,
     )
 
-    private const val SEARCH_BUDGET_MS = 20_000L
+    private const val SEARCH_BUDGET_MS = 22_000L
     private const val RESOLVE_BUDGET_MS = 7_000L
-    private const val MAX_TITLES = 16
-    private const val MAX_LINKS = 40
+    private const val MAX_QUERIES = 10
+    private const val MAX_TITLES = 20
+    private const val MAX_LINKS = 48
 
     suspend fun search(event: SportsEvent): List<StreamLink> = withContext(Dispatchers.IO) {
         val app = runCatching { HikariApp.instance }.getOrNull() ?: return@withContext emptyList()
@@ -132,33 +133,48 @@ object SportsWatch {
         out.sortedWith(compareByDescending<StreamLink> { it.score }.thenBy { it.title })
     }
 
-    /** The event's own words, plus the words each state's streams use. */
+    /** The event's own words, plus the words live/upcoming streams use.
+     *
+     *  Every provider phrases a fixture differently: a scraper indexes
+     *  "Arsenal vs Chelsea", an addon uses the league's own title, an IPTV
+     *  playlist search answers a bare team name. The query list walks those
+     *  shapes in order of precision, so the first results are the best ones
+     *  even when a slow provider never answers before the shared deadline.
+     */
     private fun queriesFor(event: SportsEvent): List<String> {
         val base = event.title.trim().takeIf { it.isNotBlank() } ?: return emptyList()
         val names = listOfNotNull(event.home, event.away)
-            .flatMap { listOf(it.team.name, it.team.fullName) }
+            .flatMap { listOf(it.team.name, it.team.fullName, it.team.abbr) }
             .map { it.trim() }
             .filter { it.isNotBlank() }
             .distinct()
+        val home = event.home?.team?.name?.trim().orEmpty()
+        val away = event.away?.team?.name?.trim().orEmpty()
         val league = SportsCatalog.league(event.leagueId)?.name?.takeIf { it.isNotBlank() }
         val out = LinkedHashSet<String>()
         out += base
-        if (names.isNotEmpty()) out += names.joinToString(" ")
-        if (league != null) out += "$league $base"
-        if (event.state == GameState.POST) {
-            out += "$base highlights"
-            out += "$base replay"
-            out += "$base full game"
-        } else {
-            out += "$base live stream"
+        if (home.isNotBlank() && away.isNotBlank()) {
+            out += "$home vs $away"
+            out += "$away vs $home"
         }
-        return out.toList()
+        if (names.isNotEmpty()) out += names.joinToString(" ")
+        if (league != null) {
+            out += "$league $base"
+            out += "$league live"
+        }
+        out += "$base live"
+        out += "$base live stream"
+        out += "$base stream"
+        event.broadcasts.firstOrNull()?.takeIf { it.isNotBlank() }?.let { out += "$base $it" }
+        return out.toList().take(MAX_QUERIES)
     }
 
     /**
      * How much a search result looks like THIS fixture. Both teams named is the
-     * strongest signal; one team plus the league or an action word is enough
-     * to list it; an event without sides needs two distinctive title words.
+     * strongest signal; one team plus the league, the broadcast network or an
+     * action word is enough to list it; an event without sides needs two
+     * distinctive title words. Results that read as an old highlight are held
+     * back: "Watch on" is answering a live/upcoming question, not a replay one.
      */
     private fun relevance(candidate: String, event: SportsEvent): Int {
         val text = SportsCatalog.norm(candidate)
@@ -169,22 +185,35 @@ object SportsWatch {
                 .filter { it.length >= 3 }
                 .toSet()
         }
+        fun mentions(names: Set<String>): Boolean = names.any { name ->
+            // Three-letter abbreviations must match a whole word; "lal" inside
+            // "final" is not a team.
+            if (name.trim().length <= 3) text.contains(" ${name.trim()} ") else text.contains(name)
+        }
+        val leagueHit = SportsCatalog.league(event.leagueId)?.name
+            ?.let { SportsCatalog.norm(it) }?.takeIf { it.isNotBlank() }
+            ?.let { text.contains(it) } == true
+        val networkHit = event.broadcasts.any { network ->
+            val n = SportsCatalog.norm(network).trim()
+            n.isNotBlank() && text.contains(" $n ")
+        }
+        val action = listOf(" live ", " stream", " vs ", " v ", " watch", " game ").any { text.contains(it) }
+        val replay = listOf("highlight", "replay", "recap", "full game", "classic").any { text.contains(it) }
         if (sides.isNotEmpty()) {
-            val hits = sides.count { names -> names.any { text.contains(it) } }
+            val hits = sides.count { names -> mentions(names) }
             val both = sides.size >= 2 && hits >= 2
-            val league = SportsCatalog.league(event.leagueId)?.name
-                ?.let { SportsCatalog.norm(it) }?.takeIf { it.isNotBlank() }
-                ?.let { text.contains(it) } == true
-            val action = listOf(
-                "live", "stream", " vs ", "vs.", "highlights", "highlight",
-                "replay", "full game", "watch",
-            ).any { text.contains(it) }
-            return when {
-                both -> 120
-                hits == 1 && (league || action) -> 55
+            var score = when {
+                both && action -> 160
+                both -> 130
+                hits == 1 && (leagueHit || networkHit || action) -> 60
                 hits == 1 -> 35
                 else -> 0
             }
+            if (score == 0) return 0
+            if (action) score += 10
+            if (networkHit) score += 15
+            if (replay) score -= 25
+            return score.coerceAtLeast(1)
         }
         val tokens = SportsCatalog.norm(event.title)
             .split(' ')
@@ -192,7 +221,11 @@ object SportsWatch {
             .distinct()
         if (tokens.isEmpty()) return 0
         val hits = tokens.count { text.contains(it) }
-        return if (hits >= minOf(2, tokens.size)) 40 + hits * 10 else 0
+        if (hits < minOf(2, tokens.size)) return 0
+        var score = 40 + hits * 10
+        if (action) score += 10
+        if (replay) score -= 25
+        return score.coerceAtLeast(1)
     }
 
     /**

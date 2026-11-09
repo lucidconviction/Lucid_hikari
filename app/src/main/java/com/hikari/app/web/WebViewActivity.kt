@@ -20,6 +20,7 @@ import android.webkit.RenderProcessGoneDetail
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceError
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -86,6 +87,14 @@ class WebViewActivity : ComponentActivity() {
     private lateinit var videoChip: TextView
     private lateinit var rootView: LinearLayout
     private var contentFrame: FrameLayout? = null
+    // Main-frame load failure panel. A blank black page with no explanation was
+    // the whole "it didn't load" experience: a dead host, a dropped connection
+    // and a rejected certificate all looked identical. The panel says what
+    // happened and offers a retry without leaving the page.
+    private var errorPanel: LinearLayout? = null
+    private var errorDetail: TextView? = null
+    private var lastFailedUrl: String? = null
+    private var loadFailed = false
     // Remote-mouse cursor (Home header toggle): a D-pad-driven ring over the
     // page. Arrows move it, OK taps the page AT the ring by dispatching a real
     // touch to the WebView — so a Cloudflare "I'm not a robot" checkbox and
@@ -831,6 +840,55 @@ class WebViewActivity : ComponentActivity() {
                     Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
                 ).apply { bottomMargin = dp(28) }
             )
+            val panel = LinearLayout(this@WebViewActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setBackgroundColor(Color.BLACK)
+                visibility = View.GONE
+                setPadding(dp(28), dp(28), dp(28), dp(28))
+                addView(
+                    TextView(this@WebViewActivity).apply {
+                        text = I18n.t("This page couldn't load")
+                        textSize = 20f
+                        setTextColor(Color.WHITE)
+                        gravity = Gravity.CENTER
+                    },
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ),
+                )
+                addView(
+                    TextView(this@WebViewActivity).apply {
+                        text = I18n.t("Check your connection and try again.")
+                        textSize = 14f
+                        setTextColor(0xFFB0B0B8.toInt())
+                        gravity = Gravity.CENTER
+                        setPadding(0, dp(12), 0, dp(18))
+                    },
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ),
+                )
+                addView(
+                    Button(this@WebViewActivity).apply {
+                        text = I18n.t("Try again")
+                        setOnClickListener { retryLoad() }
+                    },
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply { gravity = Gravity.CENTER_HORIZONTAL },
+                )
+                isClickable = true
+            }
+            addView(panel, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            ))
+            errorPanel = panel
+            errorDetail = (panel.getChildAt(1) as? TextView)
         }
 
         rootView = LinearLayout(this).apply {
@@ -1162,8 +1220,22 @@ class WebViewActivity : ComponentActivity() {
                 return null
             }
 
+            override fun onReceivedError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                error: WebResourceError?,
+            ) {
+                // Only the page itself, never an ad iframe or a failed poster:
+                // those are expected and the page still works around them.
+                if (request?.isForMainFrame != true) return
+                val description = runCatching { error?.description?.toString() }.getOrNull()
+                showLoadError(request.url?.toString(), description)
+            }
+
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 pageUrl = url
+                loadFailed = false
+                errorPanel?.visibility = View.GONE
                 // A new navigation invalidates the capture still queued for the
                 // page that was on screen (see scheduleScreenshot).
                 shotToken++
@@ -1189,6 +1261,9 @@ class WebViewActivity : ComponentActivity() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 pageUrl = url
                 progressBar.visibility = View.GONE
+                // A failed load also finishes. Keep the retry panel up instead
+                // of letting the blank error document hide it.
+                if (loadFailed) return
                 // The popup relay child (if any) served its purpose — free it.
                 popupChild?.let { runCatching { it.destroy() } }
                 popupChild = null
@@ -1524,6 +1599,39 @@ class WebViewActivity : ComponentActivity() {
         customView = null
         customViewCallback?.let { runCatching { it.onCustomViewHidden() } }
         customViewCallback = null
+    }
+
+    /**
+     * Shows the load-failure panel for a main-frame error and remembers the
+     * URL so Retry reloads the page the user actually asked for.
+     *
+     * Verification views never show it: their only job is to pass a challenge,
+     * and a challenge that could not load closes rather than covering itself
+     * in app UI the caller cannot dismiss.
+     */
+    private fun showLoadError(url: String?, description: String? = null) {
+        if (autoCloseWhenCloudflarePassed) return
+        val failed = url?.takeIf { it.isNotBlank() } ?: pageUrl ?: startUrl
+        if (failed.startsWith("about:") || failed.startsWith("data:") ||
+            failed.startsWith("javascript:")
+        ) return
+        lastFailedUrl = failed
+        loadFailed = true
+        errorDetail?.text = buildString {
+            append(I18n.t("Check your connection and try again."))
+            if (!description.isNullOrBlank()) append("\n").append(description)
+        }
+        errorPanel?.visibility = View.VISIBLE
+        progressBar.visibility = View.GONE
+    }
+
+    /** Retry the page that failed, without leaving the WebView. */
+    private fun retryLoad() {
+        errorPanel?.visibility = View.GONE
+        loadFailed = false
+        runCatching {
+            webView.loadUrl(lastFailedUrl ?: pageUrl ?: startUrl)
+        }
     }
 
     // The ⋯ pill opens this tiny menu — the app draws NO header bar, so the

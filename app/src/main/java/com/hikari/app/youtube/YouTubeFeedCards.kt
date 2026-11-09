@@ -22,7 +22,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -127,6 +131,62 @@ internal fun YtItem.thumbnailOrFallback(): String? =
         ?: videoId?.takeIf { it.isNotBlank() }?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" }
 
 /**
+ * The ⋮ menu every video card carries: Watch later and Like.
+ *
+ * Both lists are this device's own ([YouTubeLibrary]) because the signed-out
+ * engine has no endpoint for them. The menu reads its state when it opens, so
+ * it always reflects the shelf rather than a stale composition value.
+ */
+@Composable
+internal fun YouTubeSaveMenu(item: YtItem, modifier: Modifier = Modifier) {
+    val videoId = item.videoId
+    if (item.kind != YtKind.VIDEO || videoId == null) return
+    val context = LocalContext.current.applicationContext
+    var expanded by remember { mutableStateOf(false) }
+    var inLater by remember(videoId) {
+        mutableStateOf(YouTubeLibrary.isSaved(context, YouTubeLibrary.Shelf.WATCH_LATER, videoId))
+    }
+    var liked by remember(videoId) {
+        mutableStateOf(YouTubeLibrary.isSaved(context, YouTubeLibrary.Shelf.LIKED, videoId))
+    }
+    Box(modifier) {
+        IconButton(
+            onClick = {
+                inLater = YouTubeLibrary.isSaved(context, YouTubeLibrary.Shelf.WATCH_LATER, videoId)
+                liked = YouTubeLibrary.isSaved(context, YouTubeLibrary.Shelf.LIKED, videoId)
+                expanded = true
+            },
+            modifier = Modifier
+                .size(32.dp)
+                .background(Color(0x99000000), CircleShape),
+        ) {
+            Icon(
+                Icons.Filled.MoreVert,
+                contentDescription = "Save or like",
+                tint = Color.White,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text(if (inLater) "Remove from Watch later" else "Save to Watch later") },
+                onClick = {
+                    inLater = YouTubeLibrary.toggle(context, YouTubeLibrary.Shelf.WATCH_LATER, item)
+                    expanded = false
+                },
+            )
+            DropdownMenuItem(
+                text = { Text(if (liked) "Unlike" else "Like") },
+                onClick = {
+                    liked = YouTubeLibrary.toggle(context, YouTubeLibrary.Shelf.LIKED, item)
+                    expanded = false
+                },
+            )
+        }
+    }
+}
+
+/**
  * A full-width card like the YouTube app's: the whole thumbnail, then the channel's initial, the title and the
  * details. When [active] and [resolvePreview] finds a stream, a muted preview plays over the thumbnail.
  */
@@ -179,6 +239,7 @@ internal fun BigVideoCard(
                     Box(Modifier.fillMaxWidth(watched.coerceIn(0, 100) / 100f).height(3.dp).background(Color(0xFFE53935)))
                 }
             }
+            YouTubeSaveMenu(item, Modifier.align(Alignment.TopEnd).padding(8.dp))
         }
         Row(Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 18.dp, start = 4.dp, end = 4.dp)) {
             Box(

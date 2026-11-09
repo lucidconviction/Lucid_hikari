@@ -375,7 +375,10 @@ private fun MultiViewContent(
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val isPortrait = maxWidth < maxHeight
         val isTablet = maxWidth >= 600.dp
-        val maxSlots = 9
+        // Portrait on a phone holds four windows. The store already refuses a
+        // fifth request, and this keeps the layout picker from drawing a
+        // six-cell grid with four windows in it.
+        val maxSlots = MultiWindowStore.maxSlots()
         val count = streams.size.coerceAtMost(maxSlots)
         val layout = MultiWindowStore.resolveLayout(count, isPortrait, isTablet)
         val slots = layout.calculateSlots(count)

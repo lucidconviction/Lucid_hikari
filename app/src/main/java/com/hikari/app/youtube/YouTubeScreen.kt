@@ -226,6 +226,8 @@ fun YouTubeScreen(modifier: Modifier = Modifier, onPlay: (YouTubePlayRequest) ->
                         state.error != null -> state.error!!
                         state.tab == YtTab.HOME && !state.signedIn ->
                             "Home is picked for you. YouTube only fills it once you sign in. Try Live, Music or Gaming above, or sign in."
+                        state.tab == YtTab.YOU ->
+                            "Videos you save to Watch later or like appear here. Tap the ⋮ menu on any video card to add one."
                         state.tab.needsSignIn && !state.signedIn -> "Sign in to see your ${state.tab.title.lowercase()}."
                         else -> "Nothing here yet."
                     },
@@ -523,6 +525,7 @@ private fun VideoCard(item: YtItem, modifier: Modifier, onClick: () -> Unit) {
                     Box(Modifier.fillMaxWidth(watched.coerceIn(0, 100) / 100f).height(3.dp).background(Color(0xFFE53935)))
                 }
             }
+            YouTubeSaveMenu(item, Modifier.align(Alignment.TopEnd).padding(6.dp))
         }
         Spacer(Modifier.height(6.dp))
         Text(item.title, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)

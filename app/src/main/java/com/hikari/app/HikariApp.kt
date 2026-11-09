@@ -317,12 +317,14 @@ class HikariApp : Application() {
      * [ExtensionVerifyGuard].
      */
     override fun startActivity(intent: android.content.Intent) {
-        if (com.hikari.app.net.ExtensionUiGuardMixins.startAllowed(this, intent)) super.startActivity(intent)
+        if (com.hikari.app.net.ExtensionUiGuardMixins.startAllowed(this, intent)) {
+            super.startActivity(com.hikari.app.ui.routeWebIntent(this, intent))
+        }
     }
 
     override fun startActivity(intent: android.content.Intent, options: android.os.Bundle?) {
         if (com.hikari.app.net.ExtensionUiGuardMixins.startAllowed(this, intent, options)) {
-            super.startActivity(intent, options)
+            super.startActivity(com.hikari.app.ui.routeWebIntent(this, intent), options)
         }
     }
 

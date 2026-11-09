@@ -1,295 +1,107 @@
-# Hikari
+# Lucid Hikari
 
-**Hikari** (光) — a universal streaming app. One player, every ecosystem:
+**Lucid Hikari** is a universal streaming app for Android phones and TV. One place for your extensions and add-ons, live TV, sports, YouTube, music, manga and downloads — with a polished, glassy interface that stays out of the way.
 
-- **Stremio addons** — add any addon URL, browse catalogs, search, play.
-- **Universal scrapers** — JSON-rule site scrapers, no code needed.
-- **CloudStream .cs3 plugins** — Stage 2 ✅ — your existing `.cs3` extensions run unchanged.
-- **SkyStream extensions** — Stage 3.
-- **Vega providers** — the [Vega](https://github.com/Zenda-Cross/vega-providers) scraper ecosystem, run in-app (see [`docs/VEGA.md`](docs/VEGA.md)).
+Lucid Hikari is a fork of **Hikari** by **Hikari Drvs**. The original project and its developers deserve the credit for the foundation this app is built on.
 
-Modern Material 3 UI, HLS/DASH playback with per-source headers and subtitles, built in pure Kotlin + Compose.
+---
 
-## Support & community
+## What it does
 
-Need help, found a bug, or want to request a feature? Join the **Hikari Telegram group** — the fastest way to reach me and get support:
+### Films, series and anime
+- CloudStream `.cs3` plugins, Nuvio scrapers, Stremio add-ons and Hikari extensions in one library.
+- Global search across every enabled source at once, with results that stream in as each source answers.
+- Per-title servers, quality and codec details, subtitles, audio tracks and resume points.
+- Saved titles, collections, personal catalogs and a watch history that follows you across sources.
 
-- **Telegram:** <https://t.me/CodegeasseHikari>
-- Telegram channel: https://t.me/DiscussionHikari
-- Discord: https://discord.gg/FR3FZ6wgF
-- Reddit: https://www.reddit.com/r/HikariApp/
+### Live TV and IPTV
+- M3U playlists, local files and Xtream portals.
+- Xtream panels show their channel and group counts, account status and **expiry date**, with a warning when renewal is close.
+- The panel's own XMLTV guide powers an **On now** strip — see what is airing before opening a channel.
+- Channel surfing with CH− / CH+, a full Channels list, and **Quick Ch** for jumping straight to news, sports or a network pattern.
+- **Channel Wall**: a curated, full-bleed wall of channels. Tap a tile to see every matching source in your playlists.
 
-Everyone is welcome — post your questions, bug reports, and feature requests there and I'll help you out.
+### Sports
+- Follow leagues and teams, and get their fixtures on one page.
+- Live and upcoming games show broadcasters and a **Watch on** search across every playlist, extension and add-on.
+- Finished games stop asking where to watch and offer **replays and highlights** instead.
+- Scores, standings, game details and scoring plays.
 
-### Reporting a bug — no screenshot needed
+### YouTube
+- Home, Live, Music, Gaming, News, Sports and Shorts without signing in.
+- Sign in for Subscriptions, History, Playlists and Channels, and to sync your position with YouTube.
+- **Watch later** and **Liked videos** work locally from the ⋮ menu on any video card — no account needed. Both are collected on the **You** tab alongside your account playlists.
+- Videos play in Hikari's own player with quality, subtitles and SponsorBlock.
 
-Hikari records its own logs on the device, so a report can carry the real error
-text instead of a photo of the screen:
+### Music, manga and more
+- Music charts, search, radio, a local library and a mini player that follows you around the app.
+- Manga browsing, following, reading and chapter downloads.
+- Offline downloads that resume and remember their place.
+- Telegram public channels, radio-style websites and a private in-app browser.
 
-1. Open **Settings → Logs & diagnostics**.
-2. Tap **Share all** (or Share on the one file you were asked for) and send it
-   along with your message.
+### A browser that stays in the app
+- Every web page the app opens uses the built-in browser, with ad blocking, popup and redirect protection and shared cookies for extension playback.
+- A clear retry panel when a page cannot load, instead of a blank screen.
+- Native hand-off only where it is genuinely needed (YouTube, Telegram, Reddit, Discord, Google sign-in and PayPal).
 
-Two rolling app logs and one crash log are kept. A crash log holds the full stack
-trace plus the last 300 log lines before the crash, which is usually enough to
-identify the cause without reproducing it. Nothing is uploaded until you tap
-Share or Save, and there is a **Clear all logs** button on the same page.
+### Made to feel good
+- Dark, Dark Glass, AMOLED and Light themes with a live accent colour.
+- A larger, horizontally scrolling taskbar that keeps the selected tab in view.
+- Glass panels, springy icon feedback, sliding page transitions and focus-driven menus.
+- MultiView for watching several channels at once. On a phone in portrait it holds **four windows**; rotate for larger grids.
+- First-visit tours on every page, replayable from Settings → About & Updates, plus a built-in feature guide.
 
-## Screenshots
+### Updates and support
+- Automatic update checks against this repository's GitHub releases, once a day, with a manual check in Settings → About & Updates.
+- Shareable app logs and crash reports that stay on the device until you choose to share them.
 
-| Home | Search | Add sources |
-|---|---|---|
-| <img src="https://user.uploads.dev/file/c66f351e2488a6ac4b289525edbb42f6.jpg" width="240"/> | <img src="https://user.uploads.dev/file/d43f5aed39cb44e3f680395ad95cfa69.jpg" width="240"/> | <img src="https://user.uploads.dev/file/8b3dadf41c34b28fb67b74cb0618285d.jpg" width="240"/> |
+---
 
-| Manga | IPTV | Settings |
-|---|---|---|
-| <img src="https://user.uploads.dev/file/bd25246bc02e01cc0b98e0463d333077.jpg" width="240"/> | <img src="https://user.uploads.dev/file/caac3f4d80a8598b9bf737b2a37647d2.jpg" width="240"/> | <img src="https://user.uploads.dev/file/ba7f07dd3a8d04b7a7c181326e8ff728.jpg" width="240"/> |
+## Install
 
-<!-- Earlier screenshots, kept (not deleted) in case they are wanted again:
-     Home             https://user.uploads.dev/file/4c8cf9302ff9f189a7ae931b817c4e5e.jpg
-     Extensions       https://user.uploads.dev/file/63660b0117b875606e0bd26532f801cc.jpg
-     Extension repo   https://user.uploads.dev/file/3abef8ccd845e097495b8d28e82190da.jpg
-     Choose a source  https://user.uploads.dev/file/61555fdf433dbe85a8960677e6279923.jpg
-     Player           https://user.uploads.dev/file/fb99309c5e1a41a6048cb602e211c774.jpg
--->
+Download the latest signed APK from the **releases page**:
 
-## Installing the app
+**<https://github.com/lucidconviction/Lucid_hikari/releases/latest>**
 
-The latest signed APK is on the **latest release** page:
+Open the downloaded file on your phone and allow installing unknown apps when prompted.
 
-- **Latest release:** <https://github.com/codegeasse1/hikari/releases/latest>
+The release page carries a universal APK and separate 64-bit and 32-bit builds. The in-app updater picks the right one for your device.
 
-Download it on the phone and open it (allow "install unknown apps").
+## First setup
 
-## Add extensions
+1. **Add your sources** — open **Extensions** to add a repository, a CloudStream plugin, a Stremio add-on or a scraper.
+2. **Add live TV** — open **Live TV** and use **+** for an M3U link, a file or an Xtream portal.
+3. **Make it yours** — Settings → Appearance & Theme for the theme and accent; Settings → Taskbar buttons to choose your tabs.
+4. **Take the tour** — every page explains itself the first time you open it. Replay any tour in Settings → About & Updates.
 
-### Official repos — add all sources in one tap
+## Support the project
 
-The quickest way to load sources is to add our two official extension repos. Each is a single URL that installs a whole collection of extensions.
+Lucid Hikari is free and has no ads. If it is useful to you, you can buy me a tea:
 
-**Hikari extensions repo** (native .hiki extensions)
+**<https://www.paypal.me/Robbdeeze>**
 
-```
-https://raw.githubusercontent.com/codegeasse1/hikari-extensions/builds/repo.json
-```
+There is also a dismissible donation banner on the Home page, directly above Continue Watching.
 
-That URL is a `repo.json` listing every official extension (trimmed here):
+## Credits and thanks
 
-```json
-{
-  "name": "Hikari Extensions",
-  "description": "Official .hiki extensions for Hikari.",
-  "plugins": [
-    { "name": "Anime4i",  "url": "https://github.com/codegeasse1/hikari-extensions/releases/download/continuous/anime4i.hiki",  "version": 2, "tvTypes": ["series", "movie"] },
-    { "name": "Anime",     "url": "https://github.com/codegeasse1/hikari-extensions/releases/download/continuous/anime.hiki",      "version": 1, "tvTypes": ["movie", "tv"] },
-    { "name": "Castle TV", "url": "https://github.com/codegeasse1/hikari-extensions/releases/download/continuous/castle.hiki",   "version": 3, "tvTypes": ["movie", "tv"] },
-    { "name": "Anikoto",   "url": "https://github.com/codegeasse1/hikari-extensions/releases/download/continuous/anikoto.hiki", "version": 3, "tvTypes": ["movie", "tv"] }
-  ]
-}
-```
-
-**Codegeasse CloudStream repo** (.cs3 plugins)
-
-```
-https://raw.githubusercontent.com/codegeasse1/codegeasse-cloudstream-repos/builds/repo.json
-```
-
-Its `repo.json` points at the plugin list:
-
-```json
-{"name": "Codegeasse Repo", "description": "Anime4i CloudStream extensions", "manifestVersion": 1, "pluginLists": ["https://raw.githubusercontent.com/codegeasse1/codegeasse-cloudstream-repos/builds/plugins.json"]}
-```
-
-#### Add the Hikari repo, step by step
-
-1. Open **Hikari** and go to the **Extensions** tab (puzzle-piece icon at the bottom).
-2. Tap **Add Hikari repo** (the top-left button with the puzzle-piece icon).
-3. Paste this URL and tap **Add**:
-
-   `https://raw.githubusercontent.com/codegeasse1/hikari-extensions/builds/repo.json`
-
-4. Tap the **Hikari Extensions** card that appears, then tap **Install** next to any extension you want (Anime4i, Anime, Castle TV, …).
-
-#### Add the CloudStream repo, step by step
-
-1. Open **Hikari** → **Extensions** tab.
-2. Tap **Add CloudStream repo** (the top-left **+** button).
-3. Paste this URL and tap **Add**:
-
-   `https://raw.githubusercontent.com/codegeasse1/codegeasse-cloudstream-repos/builds/repo.json`
-
-4. Tap the **Codegeasse Repo** card, then **Install** the providers you want (Anime4i, Anikoto, Anineko, …).
-
-> You can even paste a plain `github.com/owner/repo` link instead of the full raw URL — Hikari automatically finds the correct `repo.json`. Installed providers appear in **Home** and **Search** right away.
-
-**Stremio addon:** Extensions → *Add Stremio addon* → paste the addon URL (it must serve `manifest.json`).
-
-**Universal scraper:** Extensions → *Add scraper* → paste a JSON config. Two modes — **HTML mode** for classic sites with server-rendered pages, and **JSON-API mode** for single-page apps that only serve data through a JSON API.
-
-### HTML mode — selector rules
-
-```json
-{
-  "name": "MySite",
-  "baseUrl": "https://example.com",
-  "homeUrl": "/",
-  "catalogs": [ { "id": "home", "name": "Home", "type": "movie" } ],
-  "search": {
-    "url": "/search?q={query}&page={page}",
-    "item": ".result-item",
-    "title": ".title",
-    "href": "a@href",
-    "poster": "img@src"
-  },
-  "detail": {
-    "title": "h1",
-    "poster": ".poster img@src",
-    "overview": ".desc",
-    "type": "series"
-  },
-  "episodes": {
-    "url": "{href}",
-    "item": ".episode",
-    "number": "data-ep",
-    "href": "a@href"
-  },
-  "streams": {
-    "video": "video@src",
-    "m3u8": "source[type*=m3u8]@src",
-    "iframe": "iframe@src"
-  }
-}
-```
-
-Rules use CSS selectors; `element@attr` means read an attribute instead of text. `{query}`, `{page}`, `{href}` are substituted at runtime. Streams can be direct `video`/m3u8 or hidden inside an `iframe` (followed recursively).
-
-### JSON-API mode — for SPA / API-only sites
-
-Many modern streaming sites (JustAnime, etc.) are React/Vue single-page apps: their pages return an empty `<div id="root">`, so there is no HTML to scrape. Everything comes from a JSON API. For those, add an `"api"` block — the scraper talks to the API instead of parsing HTML. It sends the configured `headers` on every call (many APIs reject requests without the right `Origin`/`Referer`/`User-Agent`), and can route through the site's own proxy when the API is Cloudflare-gated.
-
-```json
-{
-  "name": "JustAnime",
-  "baseUrl": "https://justanime.to",
-  "api": {
-    "base": "https://core.justanime.to/api",
-    "proxy": "https://neko.justanime.to/m3u8-proxy",
-    "headers": {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-      "Accept": "application/json, text/plain, */*",
-      "Referer": "https://justanime.to/",
-      "Origin": "https://justanime.to"
-    },
-    "catalogs": [
-      { "id": "trending", "name": "Trending", "type": "series" },
-      { "id": "popular", "name": "Popular", "type": "series" },
-      { "id": "latestEpisode", "name": "Latest Episodes", "type": "series" },
-      { "id": "airing", "name": "Airing Now", "type": "series" },
-      { "id": "upcoming", "name": "Upcoming", "type": "series" },
-      { "id": "favourite", "name": "Favourites", "type": "series" }
-    ],
-    "homePath": "/home",
-    "searchPath": "/search",
-    "searchResults": "results",
-    "detailPath": "/anime/{id}",
-    "detailData": "data",
-    "episodesPath": "/anime/{id}/episodes",
-    "episodesPageParam": "page",
-    "episodesItems": "episodes",
-    "episodesHasNext": "hasNextPage",
-    "episodesMaxPages": 30,
-    "episodeNumber": "number",
-    "episodeName": "title",
-    "streamsPath": "/watch/{id}/episode/{ep}/anineko/{lang}/hd1",
-    "streamsLangs": "sub,dub",
-    "streamsSources": "sources",
-    "streamsUrl": "url",
-    "streamsQuality": "quality",
-    "streamsIsM3u8": "isM3U8",
-    "streamsSubtitles": "subtitles",
-    "streamsSubUrl": "url",
-    "streamsSubLang": "lang",
-    "streamsHeaders": "headers",
-    "proxyStreams": true
-  }
-}
-```
-
-This is a working config — paste it into *Add scraper* and JustAnime appears in Home/Search.
-
-#### `api` field reference
-
-| field | default | meaning |
-|---|---|---|
-| `base` | — (required) | API root URL, e.g. `https://core.justanime.to/api`. |
-| `proxy` | — | Optional URL that fetches the API on the site's behalf. The scraper tries `base` directly first, then falls back to `proxy?url=…&headers=…` (twice). Also used to wrap stream URLs when `proxyStreams` is on. |
-| `headers` | — | HTTP headers sent with every API call — include `Origin`, `Referer`, `User-Agent`, `Accept`. |
-| `catalogs` | — | Array of `{ id, name, type }` (`type`: `movie` or `series`) shown as Home rows. |
-| `homePath` | `/home` | Endpoint that returns each home section as a keyed array; the catalog `id` is used as the array key. |
-| `searchPath` | `/search` | Search endpoint. |
-| `searchResults` | `results` | Response key holding the results array. |
-| `searchQueryParam` / `searchPageParam` | `query` / `page` | Query and page parameter names. |
-| `detailPath` | `/anime/{id}` | Detail endpoint (`{id}` = the item's numeric/string id). |
-| `detailData` | — | Optional wrapper key the detail object sits under (e.g. `data`). |
-| `episodesPath` | `/anime/{id}/episodes` | Paginated episode endpoint. |
-| `episodesPageParam` | `page` | Page parameter name. |
-| `episodesItems` | `episodes` | Response key holding the episode array. |
-| `episodesHasNext` | `hasNextPage` | Boolean key that says "there's another page". |
-| `episodesMaxPages` | `30` | Maximum pages to walk before giving up. |
-| `episodeNumber` / `episodeName` | `number` / `title` | Episode fields for the number and name. |
-| `streamsPath` | `/watch/{id}/episode/{ep}/anineko/{lang}/hd1` | Watch endpoint; placeholders `{id}`, `{ep}`, `{lang}`. |
-| `streamsLangs` | `sub,dub` | Comma-separated language keys to try (each becomes a watch request). |
-| `streamsSources` | `sources` | Response key holding the sources array. |
-| `streamsUrl` / `streamsQuality` / `streamsIsM3u8` | `url` / `quality` / `isM3U8` | Fields on each source object. |
-| `streamsSubtitles` | `subtitles` | Response key holding subtitles. |
-| `streamsSubUrl` / `streamsSubLang` | `url` / `lang` | Subtitle fields. |
-| `streamsHeaders` | `headers` | Key of an object of per-stream headers (e.g. `Referer`/`Origin`) the player must send to the CDN. |
-| `proxyStreams` | `true` | Also emit each stream wrapped through `proxy` — for CDNs that only serve the site's own player. |
-
-#### API-mode conventions
-
-- List items carry `id`, `title` (either a string or `{ "english": …, "romaji": … }`), and a poster found from `cover` → `coverImage.extraLarge` → `bannerImage` (first hit wins).
-- Detail responses use `format` (or `type`): `MOVIE` → movie, anything else → series. `description`, `genres`, `seasonYear`/`year` and `bannerImage` are picked up automatically.
-- Episode ids are built as `{animeId}|{episodeNumber}` — used to fetch streams.
-- Streams get the per-source `headers` attached (plus `User-Agent`), so hotlink-protected CDNs still play. Subtitles ride along on every source.
-
-**CloudStream .cs3 plugins (repos):** Extensions → *Add plugin repo* → paste a CloudStream-style `repo.json` URL, e.g.:
-
-```
-https://raw.githubusercontent.com/codegeasse1/codegeasse-cloudstream-repos/builds/repo.json
-```
-
-Hikari fetches the repo's `pluginLists`, shows every plugin (icon, description, author, version, checksum-verified install), and each gets a one-tap *Install* / *Uninstall*. Your saved repos persist across restarts.
-
-You can also install a single `.cs3` directly: Extensions → *Install .cs3 from URL* (or *Pick .cs3 file*), e.g.:
-
-```
-https://github.com/codegeasse1/codegeasse-cloudstream-repos/raw/builds/JustAnimeProvider.cs3
-```
-
-The plugin's providers appear in Home/Search and play like any other source. One `.cs3` can register several providers (each gets its own card, toggle and delete). The plugin files are stored in the app's private `filesDir/cs3/`, so they survive app restarts.
-
-**Vega providers:** Extensions → **Vega repos** → the official repo (`Zenda-Cross/vega-providers`) is already there; open it, then tap **Install** next to a provider (AniKoto, 4KHDHub, Showbox, …). Adding another Vega repo means pasting its `manifest.json` URL (or the short name `vega`) into **Add repository**. Vega providers are scrapers written as CommonJS modules, and Hikari runs them in an embedded engine — details in [`docs/VEGA.md`](docs/VEGA.md).
-
-## Roadmap
-
-- **Stage 1 (done):** app core, Material 3 UI, Stremio addons, universal scrapers, Media3 player with headers + subtitles.
-- **Stage 2 (done):** CloudStream `.cs3` plugin loader (native cloudstream3 API compatibility layer: MainAPI, models, factories, nicehttp `app`, M3u8Helper, loadExtractor, WebViewResolver, CloudflareKiller).
-- **Stage 3 (in progress):** ✅ downloads (offline + export), ✅ favourites /
-  continue-watching, ✅ new UI everywhere, ✅ customisable player controls /
-  video-enhance presets / accent theming. Still to come: SkyStream shims,
-  torrent engine (Stremio infoHash streams), Trakt.
-
-## Changelog
-
-Every release's notes live in [`CHANGELOG.md`](CHANGELOG.md) and on the
-[releases page](https://github.com/codegeasse1/hikari/releases).
-
-## Build
-
-```bash
-# CI builds the debug + signed release APKs on every push to main, and can be
-# run manually from the Actions tab for any branch (see .github/workflows/build.yml)
-# locally:
-gradle assembleDebug
-```
+Lucid Hikari would not exist without developers who shared their work, their formats and their ideas. Thank you to:
+
+- **Hikari Drvs** and the Hikari project — @codegeasse1, @error-898-15 and the Hikari contributors — the app this fork is built from.
+- **Nuvio** — multi-window, scraper and player patterns.
+- **SkyStream** and **Anymex** — interface, navigation and focus-driven design inspiration.
+- **CloudStream** — extension format and plugin runtime.
+- **Stremio** — add-on protocol and catalog model.
+- **SmartTube / MediaServiceCore** — the YouTube engine.
+- **Aniyomi** — manga and reader patterns.
+- **TMDB, AniList, Simkl and MDBList** — metadata, artwork and tracking.
+- Everyone in the Hikari, CloudStream, Stremio and Nuvio communities whose reports, fixes and extensions keep these projects alive.
+
+## Community
+
+- Telegram: <https://t.me/CodegeasseHikari>
+- Discord: <https://discord.gg/hdwB78Ahq>
+- Reddit: <https://www.reddit.com/r/HikariApp>
+
+## License
+
+Lucid Hikari follows the licence of the upstream Hikari project. See [LICENSE](LICENSE) for the full text.

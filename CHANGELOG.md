@@ -1,3 +1,50 @@
+## 0.12.0 — 9 November 2026
+
+### A big interface and quality update
+
+- **A new look and feel**: glass panels, springy taskbar icons, sliding page transitions and a cohesive accent colour across the app.
+- **A bigger taskbar**: navigation icons are twice their old size and the bar scrolls sideways, keeping the tab you are on in view.
+- **Channel Wall, reimagined**: full-bleed channel artwork, a scrolling rise effect as cards come into view, and no more Sources buttons on the wall itself. Portals and playlists are managed in Live TV.
+- **First-visit tutorials**: every page now introduces its main features the first time you open it. Skip at any time, or replay any tour from Settings → About & Updates.
+- **About & Updates**: a proper home for the version, credits, donation link, automatic GitHub update checks, a full feature guide and tutorial replay.
+
+### Sports
+
+- Finished games no longer search for “where to watch”. They show replays and highlights instead.
+- A much better **Watch on** search for live and upcoming games: it searches every installed extension, add-on and IPTV playlist, ranks the closest matches first and holds back old highlights.
+- Reopening the Sports tab retries a stale fixture list.
+
+### Live TV and Xtream
+
+- Xtream portals now show their **expiry date**, with an amber warning in the last week and a red state once expired.
+- The portal's own **EPG** is read into a compact “On now” strip, so you can see what is airing without opening a channel.
+- **Quick Ch** joins the player controls right after Channels: pick a category, then a channel pattern, and jump straight to a match inside the playlist you are watching.
+- MultiView is capped at **four windows on a phone in portrait**; rotate for larger grids.
+
+### YouTube
+
+- New **You** tab with **Watch later** and **Liked videos** — saved locally from the ⋮ menu on any video card, no sign-in required.
+- Account playlists appear on the You tab when signed in.
+- Watch later and Liked videos play in Hikari's own player and keep your progress.
+
+### Browser and links
+
+- Every web link opened from inside the app now opens in the **in-app browser**, including sports replay pages and rating-site links.
+- The in-app browser now explains a failed page load and offers a retry, instead of showing a blank screen.
+- The browser recovers more reliably after a page renderer crash.
+
+### Downloads and playback
+
+- Telegram videos now download through the app's download engine.
+- Portal generation searches more sources and handles large results without exhausting memory.
+- IPTV channel loading is bounded so large playlists stay usable on low-memory devices.
+
+### Other fixes
+
+- Bounded IPTV caches and safer Xtream error handling: a panel that answers with an error page no longer appears as a single fake channel.
+- Large Xtream exports no longer stall the playlist list.
+- The IPTV header shows a count that stays correct after refresh.
+
 ## 0.11.92 (continuous build only)
 
 ### Added (IPTV / Xtream / MultiView / player)

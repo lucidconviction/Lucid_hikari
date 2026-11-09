@@ -1,8 +1,11 @@
 package com.hikari.app.ui.screens
 
+import android.content.res.Configuration
+import android.widget.Toast
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import com.hikari.app.HikariApp
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -166,31 +169,61 @@ object MultiWindowStore {
     val allStreams: List<WindowStream> get() = streams
 
     fun addToSlot(name: String, url: String, logo: String? = null, slotIndex: Int) {
+        val limit = maxSlots()
+        val existingAtRequested = streams.indexOfFirst { it.slotIndex == slotIndex }
+        // Portrait holds four windows comfortably; past that each cell is too
+        // small to watch and the player pool starts competing for memory. A
+        // request for slot 5+ in portrait is redirected to the first free slot
+        // under the cap, and refused (with a reason) when all four are taken.
+        val effectiveSlot = if (slotIndex < limit) {
+            slotIndex
+        } else {
+            (0 until limit).firstOrNull { isSlotAvailable(it) } ?: run {
+                if (existingAtRequested < 0) {
+                    runCatching {
+                        Toast.makeText(
+                            HikariApp.instance,
+                            "Portrait MultiView is limited to $limit windows. Rotate the phone for more.",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                    return
+                }
+                slotIndex
+            }
+        }
         val id = "mw_${++idCounter}"
         val hasFocus = _audioFocusId == null
         volumes[id] = if (hasFocus) 1f else 0f
         if (hasFocus) _audioFocusId = id
-        val existingAtSlot = streams.indexOfFirst { it.slotIndex == slotIndex }
+        val existingAtSlot = streams.indexOfFirst { it.slotIndex == effectiveSlot }
         val existingUrl = streams.indexOfFirst { it.url == url }
         if (existingUrl >= 0 && existingUrl != existingAtSlot) {
             streams.removeAt(existingUrl)
-            val adjusted = streams.indexOfFirst { it.slotIndex == slotIndex }
+            val adjusted = streams.indexOfFirst { it.slotIndex == effectiveSlot }
             if (adjusted >= 0) {
                 val oldId = streams[adjusted].id
-                streams[adjusted] = WindowStream(id = id, name = name, url = url, slotIndex = slotIndex, logo = logo)
+                streams[adjusted] = WindowStream(id = id, name = name, url = url, slotIndex = effectiveSlot, logo = logo)
                 volumes.remove(oldId); playerIndexById.remove(oldId); paused.remove(oldId); resizeModes.remove(oldId)
             } else {
-                streams.add(WindowStream(id = id, name = name, url = url, slotIndex = slotIndex, logo = logo))
+                streams.add(WindowStream(id = id, name = name, url = url, slotIndex = effectiveSlot, logo = logo))
             }
         } else if (existingAtSlot >= 0) {
             val oldId = streams[existingAtSlot].id
-            streams[existingAtSlot] = WindowStream(id = id, name = name, url = url, slotIndex = slotIndex, logo = logo)
+            streams[existingAtSlot] = WindowStream(id = id, name = name, url = url, slotIndex = effectiveSlot, logo = logo)
             volumes.remove(oldId); playerIndexById.remove(oldId); paused.remove(oldId); resizeModes.remove(oldId)
         } else {
-            streams.add(WindowStream(id = id, name = name, url = url, slotIndex = slotIndex, logo = logo))
+            streams.add(WindowStream(id = id, name = name, url = url, slotIndex = effectiveSlot, logo = logo))
         }
         if (_currentLayout.value == null) _layoutLocked.value = false
     }
+
+    /** How many windows the current orientation allows. */
+    fun maxSlots(): Int = runCatching {
+        val app = HikariApp.instance
+        val portrait = app.resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
+        if (portrait) 4 else MAX_SLOTS
+    }.getOrDefault(MAX_SLOTS)
 
     fun removeSlot(slotIndex: Int) {
         streams.removeAll { it.slotIndex == slotIndex }
@@ -206,7 +239,7 @@ object MultiWindowStore {
     fun getStreamsForSlot(slotIndex: Int): WindowStream? = streams.find { it.slotIndex == slotIndex }
     fun getOccupiedSlots(): List<Int> = streams.map { it.slotIndex }
     fun isSlotAvailable(slotIndex: Int): Boolean = streams.none { it.slotIndex == slotIndex }
-    fun nextAvailableSlot(): Int? = (0 until MAX_SLOTS).firstOrNull { isSlotAvailable(it) }
+    fun nextAvailableSlot(): Int? = (0 until maxSlots()).firstOrNull { isSlotAvailable(it) }
 
     fun setVolume(streamId: String, volume: Float) { volumes[streamId] = volume.coerceIn(0f, 1f) }
     fun getVolume(streamId: String): Float = volumes[streamId] ?: 0f

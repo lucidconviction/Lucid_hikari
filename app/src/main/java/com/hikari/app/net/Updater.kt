@@ -14,7 +14,30 @@ import java.io.File
 
 object Updater {
 
-    const val REPO = "codegeasse1/hikari"
+    private const val PREFS = "updates"
+    private const val KEY_AUTO = "auto_check"
+    private const val KEY_LAST_CHECK = "last_check"
+    private const val CHECK_EVERY_MS = 24L * 60L * 60L * 1000L
+
+    private fun prefs(context: Context) =
+        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /** Check GitHub once a day at launch. On by default; the About page can turn it off. */
+    fun autoCheckEnabled(context: Context) = prefs(context).getBoolean(KEY_AUTO, true)
+
+    fun setAutoCheckEnabled(context: Context, enabled: Boolean) =
+        prefs(context).edit().putBoolean(KEY_AUTO, enabled).apply()
+
+    fun lastCheckedAt(context: Context) = prefs(context).getLong(KEY_LAST_CHECK, 0L)
+
+    fun markChecked(context: Context) =
+        prefs(context).edit().putLong(KEY_LAST_CHECK, System.currentTimeMillis()).apply()
+
+    fun shouldAutoCheck(context: Context): Boolean =
+        autoCheckEnabled(context) &&
+            System.currentTimeMillis() - lastCheckedAt(context) >= CHECK_EVERY_MS
+
+    const val REPO = "lucidconviction/Lucid_hikari"
     const val RELEASES_URL = "https://github.com/$REPO/releases/latest"
     const val UPDATE_URL = "https://github.com/$REPO/releases/download/continuous/hikari-signed.apk"
 

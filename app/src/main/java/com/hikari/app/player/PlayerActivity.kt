@@ -1241,6 +1241,7 @@ class PlayerActivity : ComponentActivity() {
     private var chPrevBtn: ImageButton? = null
     private var chNextBtn: ImageButton? = null
     private var channelsBtn: TextView? = null
+    private var quickChBtn: TextView? = null
     private var autoplayBtn: TextView? = null
     private var autoNextBtn: TextView? = null
     private var subsBtn: TextView? = null
@@ -1980,6 +1981,7 @@ class PlayerActivity : ComponentActivity() {
                 chPrevBtn?.visibility = chVis
                 chNextBtn?.visibility = chVis
                 channelsBtn?.visibility = chVis
+                quickChBtn?.visibility = chVis
                 // The pill row is a HorizontalScrollView. A focused pill (the
                 // media3 control view asks for focus, and a scroll view reveals
                 // a focused descendant) could pull the row to one end and leave
@@ -2030,6 +2032,8 @@ class PlayerActivity : ComponentActivity() {
         chPrevBtn = findViewById(R.id.ch_prev_btn)
         chNextBtn = findViewById(R.id.ch_next_btn)
         channelsBtn = findViewById(R.id.channels_btn)
+        quickChBtn = findViewById(R.id.quick_ch_btn)
+        quickChBtn?.setOnClickListener { showQuickChannelsDialog() }
         chPrevBtn?.setOnClickListener { lifecycleScope.launch { channelSurfController?.prev() } }
         chNextBtn?.setOnClickListener { lifecycleScope.launch { channelSurfController?.next() } }
         channelsBtn?.setOnClickListener { showChannelsDialog() }
@@ -2819,6 +2823,7 @@ class PlayerActivity : ComponentActivity() {
         chPrevBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
         chNextBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
         channelsBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
+        quickChBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
         multiWindowBtn?.visibility = View.VISIBLE
 
         sources = parseIntentSources()
@@ -2853,6 +2858,7 @@ class PlayerActivity : ComponentActivity() {
         chPrevBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
         chNextBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
         channelsBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
+        quickChBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
 
         // Cover the very first frames with the title card: the detail screen
         // showed the same card while it searched, so this keeps the "finding
@@ -8089,6 +8095,85 @@ class PlayerActivity : ComponentActivity() {
                         channelSurfController?.switch(which)
                     }
                 }
+            }
+        }
+    }
+
+    /**
+     * Quick Ch: the curated channel patterns (CNN, ESPN, Sky Sports, …) as a
+     * two-step picker — category first, then the pattern — with the matches
+     * found in the playlist that is currently playing.
+     *
+     * The Channels pill lists every channel in playlist order, which is the
+     * right tool when you know the number or the name. Quick Ch answers the
+     * other question: "put the game on" / "put the news on" without scrolling
+     * past hundreds of rows. It only ever switches inside [channelSurfController],
+     * so it cannot leave the playlist the user is watching.
+     */
+    private fun showQuickChannelsDialog() {
+        val channels = channelSurfController?.channels.orEmpty()
+        if (channels.isEmpty()) {
+            Toast.makeText(this, I18n.t("No active channel list"), Toast.LENGTH_SHORT).show()
+            return
+        }
+        val categories = com.hikari.app.data.QuickChannelList.categories
+        showGlassMenu(
+            I18n.t("Quick Ch"),
+            categories.map { GlassOption(it.title) },
+            hint = I18n.t("Pick a category, then a channel pattern."),
+            iconRes = R.drawable.ic_quick_ch,
+        ) { which ->
+            val category = categories.getOrNull(which) ?: return@showGlassMenu
+            val custom = com.hikari.app.data.QuickChannelList
+                .getCustomChannels(cacheDir, emptyList())
+            val base = com.hikari.app.data.QuickChannelList.getChannelsForCategory(category.id)
+            val quick = (base + if (category.id == "all" || category.id == "custom") {
+                custom
+            } else {
+                custom.filter { c ->
+                    category.id in c.tags || c.regions.any { it.equals(category.id, true) }
+                }
+            }).distinctBy { it.displayName }.take(48)
+            if (quick.isEmpty()) {
+                Toast.makeText(this, I18n.t("No quick channels in this category"), Toast.LENGTH_SHORT).show()
+                return@showGlassMenu
+            }
+            showQuickChannelMatches(category.title, quick, channels)
+        }
+    }
+
+    /** Step two of Quick Ch: pick the pattern, then the playlist match. */
+    private fun showQuickChannelMatches(
+        categoryTitle: String,
+        quick: List<com.hikari.app.data.QuickChannel>,
+        channels: List<com.hikari.app.data.IptvChannel>,
+    ) {
+        showGlassMenu(
+            I18n.t("Quick Ch") + " · " + categoryTitle,
+            quick.map { GlassOption(it.displayName) },
+            hint = I18n.t("The matching channels in this playlist come next."),
+            iconRes = R.drawable.ic_quick_ch,
+        ) { which ->
+            val pattern = quick.getOrNull(which) ?: return@showGlassMenu
+            val matches = channels.withIndex()
+                .filter { (_, ch) -> com.hikari.app.data.QuickChannelList.matches(pattern, ch) }
+            if (matches.isEmpty()) {
+                Toast.makeText(
+                    this,
+                    I18n.t("No channel in this playlist matches") + " ${pattern.displayName}",
+                    Toast.LENGTH_SHORT,
+                ).show()
+                return@showGlassMenu
+            }
+            val current = channelSurfController?.currentIndex ?: -1
+            showGlassMenu(
+                pattern.displayName,
+                matches.take(48).map { GlassOption(it.value.name, selected = it.index == current) },
+                hint = I18n.t("${matches.size} matching channels"),
+                iconRes = R.drawable.ic_quick_ch,
+            ) { pick ->
+                val match = matches.getOrNull(pick) ?: return@showGlassMenu
+                lifecycleScope.launch { channelSurfController?.switch(match.index) }
             }
         }
     }

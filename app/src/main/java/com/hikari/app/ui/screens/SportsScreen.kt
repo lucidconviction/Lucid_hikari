@@ -1412,9 +1412,7 @@ private fun playReplayUrl(
 
 private fun openInBrowser(context: Context, url: String) {
     if (url.isBlank()) return
-    runCatching {
-        context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))
-    }
+    com.hikari.app.ui.openInAppBrowser(context, url, "Replay")
 }
 
 // ------------------------------------------------------------------ playback

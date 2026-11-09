@@ -18,6 +18,9 @@ const val REDDIT_COMMUNITY_URL = "https://www.reddit.com/r/HikariApp"
 /** Hikari's Discord server — help, discussion and release news. */
 const val DISCORD_INVITE_URL = "https://discord.gg/hdwB78Ahq"
 
+/** The developer's tip jar, linked from Home and Settings → About & Updates. */
+const val PAYPAL_DONATE_URL = "https://www.paypal.me/Robbdeeze"
+
 /**
  * Opens a YouTube video in the YouTube app rather than Hikari's own WebView.
  *
@@ -98,36 +101,86 @@ private fun telegramHandle(url: String): String? {
 
 /**
  * Opens a community link (Reddit, Discord, …) in the matching app when it is
- * installed, else in the user's own browser — deliberately NEVER Hikari's own
- * WebView, which has no logins and mangles app hand-offs (see [openTelegram]).
+ * installed, else in whatever the device uses for links. Community links are
+ * app hand-offs, not pages to browse in Hikari, so they deliberately bypass
+ * [openInAppBrowser].
  */
-fun openCommunity(context: Context, url: String): Boolean = openUrl(context, url)
-
-/**
- * Opens an ordinary https page in the user's own browser.
- *
- * Used for the pages the user has to visit OUTSIDE Hikari — registering a
- * tracker app (Settings → Trackers) and the like: those are account pages with
- * logins and passwords, they are built for a real browser, and doing them in
- * Hikari's WebView would also mean the app's own redirect/cookie rules applying
- * to somebody else's sign-in flow.
- *
- * Never silent: false means "nothing was opened" (the launch threw) and every
- * caller must fall back or say so — a tap that dies inside here is the whole
- * class of "dead link" reports.
- *
- * Deliberately NO resolveActivity probe before firing: on API 30+ package
- * visibility reports "not installed" for a perfectly good browser unless it
- * is declared in `<queries>` (see openYouTubeVideo's note), while starting
- * the intent works regardless. A probe here turned every browser tap into a
- * false "Couldn't open the link" — exactly the regression it claimed to
- * prevent. The runCatching around the real launch is the only honest test.
- */
-fun openUrl(context: Context, url: String): Boolean {
+fun openCommunity(context: Context, url: String): Boolean {
     if (url.isBlank()) return false
     if (launch(context, Intent(Intent.ACTION_VIEW, Uri.parse(url)))) return true
     Toast.makeText(context, I18n.t("Couldn't open the link"), Toast.LENGTH_SHORT).show()
     return false
+}
+
+/**
+ * Opens a web page in Hikari's own WebView.
+ *
+ * Every "open page"/"read more"/"visit site" action inside the app lands here:
+ * the in-app browser keeps the user in Hikari, shares the app's cookies and
+ * ad-blocking rules, and cannot dump them into a different browser's UI for a
+ * page that was only meant to be a quick look. Only a launch that throws falls
+ * back to the system browser, and even that is reported honestly.
+ */
+fun openInAppBrowser(context: Context, url: String, title: String? = null): Boolean {
+    if (url.isBlank()) return false
+    val web = Intent(context, WebViewActivity::class.java).apply {
+        putExtra("url", url)
+        if (!title.isNullOrBlank()) putExtra("title", title)
+    }
+    if (launch(context, web)) return true
+    if (launch(context, Intent(Intent.ACTION_VIEW, Uri.parse(url)))) return true
+    Toast.makeText(context, I18n.t("Couldn't open the link"), Toast.LENGTH_SHORT).show()
+    return false
+}
+
+/**
+ * Opens an ordinary https page in the in-app browser.
+ *
+ * Kept as the short name used by the tracker/account dialogs. Those flows used
+ * to demand a real browser; the in-app WebView keeps its own cookie jar, so a
+ * login made there survives and the app's redirect/popup protection stays
+ * active for the page.
+ *
+ * Never silent: false means "nothing was opened" and every caller must fall
+ * back or say so — a tap that dies inside here is the whole class of "dead
+ * link" reports.
+ */
+fun openUrl(context: Context, url: String): Boolean = openInAppBrowser(context, url)
+
+/**
+ * Hosts that must keep their native-app hand-off instead of opening in the
+ * WebView: YouTube (its site redirects to m.youtube, which WebView safety
+ * blocks), Telegram and the community apps, plus sign-in/payment providers
+ * that refuse to run inside an embedded browser.
+ */
+private val EXTERNAL_HANDOFF_HOSTS = listOf(
+    "youtube.com", "youtu.be", "t.me", "telegram.me", "telegram.dog",
+    "reddit.com", "redd.it", "discord.gg", "discord.com",
+    "accounts.google.com", "paypal.me", "paypal.com",
+)
+
+/**
+ * Rewrites an implicit `ACTION_VIEW http(s)` intent into Hikari's WebView.
+ *
+ * This is the app-wide safety net behind [openInAppBrowser]: extensions,
+ * settings dialogs and any future "visit site" action that starts a plain
+ * browser intent still end up in the in-app browser. Explicit intents (a
+ * component or package is set), non-web schemes and the hand-off hosts above
+ * are returned untouched, so app links, the installer and WebViewActivity's
+ * own "Open in browser" menu keep working.
+ */
+fun routeWebIntent(context: Context, intent: Intent): Intent {
+    if (intent.action != Intent.ACTION_VIEW) return intent
+    if (intent.component != null || intent.`package` != null) return intent
+    val data = intent.data ?: return intent
+    val scheme = data.scheme?.lowercase() ?: return intent
+    if (scheme != "http" && scheme != "https") return intent
+    val host = data.host?.lowercase()?.trimEnd('.') ?: return intent
+    if (EXTERNAL_HANDOFF_HOSTS.any { host == it || host.endsWith(".$it") }) return intent
+    return Intent(context, WebViewActivity::class.java).apply {
+        putExtra("url", data.toString())
+        if (context !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
 }
 
 /** Starts [intent], tagging it with NEW_TASK when [context] is not an Activity
