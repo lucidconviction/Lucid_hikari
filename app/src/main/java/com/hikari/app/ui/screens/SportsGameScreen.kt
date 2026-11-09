@@ -24,6 +24,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsNone
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -36,6 +37,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -90,23 +92,21 @@ fun SportsGameScreen(nav: androidx.navigation.NavHostController, eventId: String
     // Live/upcoming: streams found by searching every installed extension,
     // addon and IPTV playlist for this fixture (the IPTV channel matches are
     // already shown directly below "Watch on").
-    var watchStreams by remember(eventId) { mutableStateOf<List<SportsWatch.Playable>>(emptyList()) }
+    var watchStreams by remember(eventId) { mutableStateOf<List<SportsWatch.StreamLink>>(emptyList()) }
     var watchLoading by remember(eventId) { mutableStateOf(false) }
+    var watchReload by remember(eventId) { mutableIntStateOf(0) }
     // Promotional clips before the event; highlights/interviews after it.
     // Both come from the YouTube tab's engine (SportsYouTube).
     var ytClips by remember(eventId) { mutableStateOf<List<SportsYouTube.Clip>>(emptyList()) }
     var ytLoading by remember(eventId) { mutableStateOf(false) }
 
-    LaunchedEffect(event?.id, event?.state) {
+    LaunchedEffect(event?.id, event?.state, watchReload) {
         val ev = event ?: return@LaunchedEffect
-        if (ev.state == GameState.PRE || ev.state == GameState.LIVE) {
-            watchLoading = true
-            watchStreams = SportsWatch.search(ev)
-            watchLoading = false
-        } else {
-            watchStreams = emptyList()
-            watchLoading = false
-        }
+        // Every state searches now: a finished game still has replays,
+        // highlights and full-game archives in the app's addons/playlists.
+        watchLoading = true
+        watchStreams = SportsWatch.search(ev)
+        watchLoading = false
     }
     LaunchedEffect(event?.id, event?.state) {
         val ev = event ?: return@LaunchedEffect
@@ -224,7 +224,23 @@ fun SportsGameScreen(nav: androidx.navigation.NavHostController, eventId: String
             // ---- channels
             val found = matches[event.id].orEmpty()
             item {
-                Text("Watch on", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Watch on",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (watchLoading) {
+                        androidx.compose.material3.CircularProgressIndicator(
+                            Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    }
+                    IconButton(onClick = { watchReload++ }) {
+                        Icon(Icons.Filled.Refresh, contentDescription = "Search again")
+                    }
+                }
             }
             if (event.broadcasts.isNotEmpty()) {
                 item {
@@ -256,38 +272,37 @@ fun SportsGameScreen(nav: androidx.navigation.NavHostController, eventId: String
                 }
             }
 
-            // Streams discovered by searching the app's extensions, addons and
-            // IPTV playlists for this fixture. Only a live/upcoming game asks:
-            // a finished one has no live server left to find.
-            if (event.state == GameState.PRE || event.state == GameState.LIVE) {
-                if (watchLoading || watchStreams.isNotEmpty()) {
-                    item {
+            // Everything the app found for this fixture: the IPTV channels
+            // above, then one clickable row per stream returned by every
+            // extension, Stremio addon and playlist. Finished games search
+            // highlights/replays too.
+            if (watchLoading || watchStreams.isNotEmpty()) {
+                item {
+                    Text(
+                        "From your apps & add-ons",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+            }
+            if (watchLoading) {
+                item {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        androidx.compose.material3.CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                         Text(
-                            "From your extensions & addons",
-                            style = MaterialTheme.typography.labelLarge,
+                            "Searching your playlists, apps and add-ons for this event…",
+                            style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 2.dp),
                         )
                     }
                 }
-                if (watchLoading) {
-                    item {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            androidx.compose.material3.CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                            Text(
-                                "Searching extensions and playlists for this event…",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-                items(watchStreams, key = { "w:${it.key}" }) { playable ->
-                    WatchStreamRow(playable) { SportsWatch.play(context, playable) }
-                }
+            }
+            items(watchStreams, key = { "w:${it.key}" }) { link ->
+                WatchStreamRow(link) { SportsWatch.play(context, link) }
             }
 
             // ---- YouTube: build-up before the event, highlights after it.
@@ -557,9 +572,9 @@ private fun ChannelRow(match: ChannelMatch) {
     }
 }
 
-/** A stream found by the app-wide event search (extensions / addons / IPTV). */
+/** One clickable stream found by the app-wide event search. */
 @Composable
-private fun WatchStreamRow(playable: SportsWatch.Playable, onClick: () -> Unit) {
+private fun WatchStreamRow(link: SportsWatch.StreamLink, onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         shape = RoundedCornerShape(12.dp),
@@ -572,9 +587,9 @@ private fun WatchStreamRow(playable: SportsWatch.Playable, onClick: () -> Unit) 
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            if (!playable.poster.isNullOrBlank()) {
+            if (!link.poster.isNullOrBlank()) {
                 AsyncImage(
-                    model = playable.poster,
+                    model = link.poster,
                     contentDescription = null,
                     modifier = Modifier.width(52.dp).height(32.dp).clip(RoundedCornerShape(5.dp)),
                     contentScale = androidx.compose.ui.layout.ContentScale.Crop,
@@ -584,16 +599,17 @@ private fun WatchStreamRow(playable: SportsWatch.Playable, onClick: () -> Unit) 
             }
             Column(Modifier.weight(1f)) {
                 Text(
-                    playable.title,
+                    link.title,
                     style = MaterialTheme.typography.bodyLarge,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    playable.provider + " · " + playable.sources.size +
-                        if (playable.sources.size == 1) " server" else " servers",
+                    listOf(link.provider, link.sourceLabel).filter { it.isNotBlank() }.joinToString(" · "),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             Icon(Icons.Filled.PlayArrow, contentDescription = "Play", tint = MaterialTheme.colorScheme.primary)
