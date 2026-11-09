@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -49,7 +50,6 @@ internal fun PortalGeneratorDialog(app: HikariApp, onDismiss: () -> Unit) {
     var added by remember { mutableIntStateOf(0) }
     var error by remember { mutableStateOf<String?>(null) }
     var results by remember { mutableStateOf<List<PortalGenerator.Generated>>(emptyList()) }
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     LaunchedEffect(runKey) {
         running = true
@@ -93,7 +93,7 @@ internal fun PortalGeneratorDialog(app: HikariApp, onDismiss: () -> Unit) {
                 )
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (running) {
-                        CircularProgressIndicator(Modifier.height(18.dp), strokeWidth = 2.dp)
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                     }
                     Text(
                         if (running) status else status.ifBlank { "Done." },
