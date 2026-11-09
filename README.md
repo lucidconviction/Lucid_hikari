@@ -86,7 +86,7 @@ There is also a dismissible donation banner on the Home page, directly above Con
 
 Lucid Hikari would not exist without developers who shared their work, their formats and their ideas. Thank you to:
 
-- **Hikari Drvs** and the Hikari project — @codegeasse1, @error-898-15 and the Hikari contributors — the app this fork is built from.
+- **Hikari Drvs** and the Hikari project — @codegeasse1, @error-898-15, @noreply and the Hikari contributors — the app this fork is built from.
 - **Nuvio** — multi-window, scraper and player patterns.
 - **SkyStream** and **Anymex** — interface, navigation and focus-driven design inspiration.
 - **CloudStream** — extension format and plugin runtime.

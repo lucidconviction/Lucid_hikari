@@ -1856,7 +1856,7 @@ private fun AboutAppCard() {
         )
         Spacer(Modifier.height(12.dp))
         Text(
-            tr("Lucid Hikari is a fork of Hikari Drvs' Hikari. Huge thanks to @codegeasse1, @error-898-15 and every Hikari contributor, and to every developer whose work — open or ported — made this app possible."),
+            tr("Lucid Hikari is a fork of Hikari Drvs' Hikari. Huge thanks to @codegeasse1, @error-898-15, @noreply and every Hikari contributor, and to every developer whose work — open or ported — made this app possible."),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurface,
         )
@@ -2207,7 +2207,7 @@ private fun CreditsCard() {
         )
         Spacer(Modifier.height(8.dp))
         listOf(
-            "Hikari Drvs — @codegeasse1, @error-898-15 and the Hikari contributors — the app this project is forked from",
+            "Hikari Drvs — @codegeasse1, @error-898-15, @noreply and the Hikari contributors — the app this project is forked from",
             "Nuvio — multi-window, scraper and player patterns",
             "SkyStream and Anymex — interface and navigation inspiration",
             "CloudStream — extension format and plugin runtime",
