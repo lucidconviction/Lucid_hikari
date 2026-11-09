@@ -17,7 +17,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
@@ -72,13 +74,59 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
         /** When each playlist was last read successfully (epoch ms). */
         private val loadedAt = ConcurrentHashMap<String, Long>()
 
+        /**
+         * A whole parsed playlist is kept per provider so Home, search and the
+         * player's server list do not download it again. That adds up fast:
+         * ten generated Xtream panels, each with tens of thousands of channels,
+         * exhausted the 512 MB heap. Playlists are therefore a bounded resource
+         * — the least recently used ones drop their channel list (the provider
+         * itself stays installed and simply re-reads on its next use).
+         */
+        private const val MAX_CACHED_CHANNELS = 20_000
+
+        /** At most this many playlists are downloaded and parsed at once. */
+        private val loadGate = Semaphore(2)
+
+        private val cacheLock = Any()
+        private val cacheOrder = LinkedHashMap<String, IptvProvider>(8, 0.75f, true)
+        private var cachedChannelTotal = 0
+
+        /** Stores a parsed list and evicts the oldest playlists over the budget. */
+        private fun putCache(provider: IptvProvider, list: List<IptvChannel>) {
+            synchronized(cacheLock) {
+                val before = provider.channelsCache?.size ?: 0
+                provider.channelsCache = list
+                cachedChannelTotal += list.size - before
+                cacheOrder[provider.config.id] = provider
+                val entries = cacheOrder.entries.iterator()
+                while (cachedChannelTotal > MAX_CACHED_CHANNELS && entries.hasNext()) {
+                    val entry = entries.next()
+                    if (entry.value === provider) continue
+                    cachedChannelTotal -= entry.value.channelsCache?.size ?: 0
+                    entry.value.channelsCache = null
+                    entries.remove()
+                }
+            }
+        }
+
+        /** Drops one provider's parsed list and its cache accounting. */
+        private fun dropCache(provider: IptvProvider) {
+            synchronized(cacheLock) {
+                cachedChannelTotal -= provider.channelsCache?.size ?: 0
+                provider.channelsCache = null
+                cacheOrder.remove(provider.config.id)
+            }
+        }
+
         /** How long a parsed playlist is trusted before it is re-read. */
         const val TTL_MS = 30 * 60 * 1000L
 
-        /** A playlist body is capped at this size before parsing — an Xtream
-         *  panel's full m3u_plus export is a few MB; anything far past that is
-         *  not a playlist a phone should hold in memory. */
-        private const val MAX_BYTES = 16 * 1024 * 1024
+        /** A playlist body is capped at this size before parsing. Xtream
+         *  exports can be 100+ MB (`superott.top` is 127 MB); reading one into
+         *  a String is not possible on a 512 MB heap. The first 8 MB still
+         *  carries thousands of channels and every group, and the connection is
+         *  closed at the cap instead of pulling the rest. */
+        private const val MAX_BYTES = 8 * 1024 * 1024
 
         /** One Home row / catalog page. */
         private const val PAGE = 240
@@ -207,10 +255,9 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
         private fun readSource(url: String): String? {
             val u = url.trim()
             if (u.startsWith("http://") || u.startsWith("https://")) {
-                val body = runCatching {
-                    Http.fetchStringRobust(u, HEADERS).getOrNull()
-                }.getOrNull() ?: return null
-                return if (body.length > MAX_BYTES) body.take(MAX_BYTES) else body
+                // Bounded read, not fetchStringRobust: that helper materialises
+                // the whole body before anyone can apply a cap.
+                return Http.fetchStringCapped(u, HEADERS, MAX_BYTES).getOrNull()
             }
             val f = File(u)
             if (!f.exists() || !f.isFile) return null
@@ -436,37 +483,48 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
                 return@withLock cached ?: emptyList()
             }
             iptvErrors.remove(config.id)
-            channelsCache = listOf(one)
+            putCache(this, listOf(one))
             loadedAt[config.id] = System.currentTimeMillis()
             channelCounts[config.id] = 1
             return@withLock listOf(one)
         }
-        val list = runCatching {
-            withTimeoutOrNull(FETCH_TIMEOUT_MS) {
-                withContext(Dispatchers.IO) {
-                    // F3 — Xtream panel detection: if the URL looks like an
-                    // Xtream panel login, fetch the m3u_plus export instead
-                    // of parsing the raw config directly.
-                    val xtream = com.hikari.app.data.XtreamCredentials.fromUrl(selfCheckUrl)
-                    if (xtream != null) {
-                        val xtreamUrl = xtream.m3uUrl()
-                        com.hikari.app.net.Http.fetchStringRobust(xtreamUrl, HEADERS).getOrNull()
-                            ?.let { IptvPlaylist.parse(it, base = xtreamUrl) }
-                    } else {
-                        val text = readSource(selfCheckUrl)
-                        // The playlist's own address is handed to the parser so a
-                        // relative `tvg-logo` resolves to a real URL (see
-                        // IptvPlaylist.resolveLogo). JSON playlists (plain or
-                        // TERAPLAY_ENC:-encrypted) parse by their own reader — and
-                        // stay JSON: falling through to the M3U reader would list
-                        // a config object as channels.
-                        if (text == null) null
-                        else com.hikari.app.data.JsonPlaylist.parse(text)?.channels
-                            ?: IptvPlaylist.parse(text, base = selfCheckUrl)
+        val xtreamCreds = com.hikari.app.data.XtreamCredentials.fromUrl(selfCheckUrl)
+        val list = loadGate.withPermit {
+            runCatching {
+                withTimeoutOrNull(FETCH_TIMEOUT_MS) {
+                    withContext(Dispatchers.IO) {
+                        // F3 — Xtream panel detection: if the URL looks like an
+                        // Xtream panel login, fetch the m3u_plus export instead
+                        // of parsing the raw config directly.
+                        if (xtreamCreds != null) {
+                            val xtreamUrl = xtreamCreds.m3uUrl()
+                            // Bounded: a panel can export 100+ MB. An HTML error
+                            // page parses as zero channels and must not be turned
+                            // into a one-channel "stream" below.
+                            val text = Http.fetchStringCapped(xtreamUrl, HEADERS, MAX_BYTES).getOrNull()
+                            if (text == null ||
+                                (!text.contains("#EXTM3U", true) && !text.contains("#EXTINF", true))
+                            ) {
+                                null
+                            } else {
+                                IptvPlaylist.parse(text, base = xtreamUrl)
+                            }
+                        } else {
+                            val text = readSource(selfCheckUrl)
+                            // The playlist's own address is handed to the parser so a
+                            // relative `tvg-logo` resolves to a real URL (see
+                            // IptvPlaylist.resolveLogo). JSON playlists (plain or
+                            // TERAPLAY_ENC:-encrypted) parse by their own reader — and
+                            // stay JSON: falling through to the M3U reader would list
+                            // a config object as channels.
+                            if (text == null) null
+                            else com.hikari.app.data.JsonPlaylist.parse(text)?.channels
+                                ?: IptvPlaylist.parse(text, base = selfCheckUrl)
+                        }
                     }
                 }
-            }
-        }.getOrNull()
+            }.getOrNull()
+        }
         if (list == null) {
             iptvErrors[config.id] = if (selfCheckUrl.startsWith("http")) {
                 "Could not download this playlist — the host may be down, or the link may have expired."
@@ -475,15 +533,23 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
             }
             return@withLock cached ?: emptyList()
         }
-        val resolved = if (list.isEmpty()) singleStreamChannel().let { if (it == null) emptyList() else listOf(it) } else list
+        val resolved = if (list.isEmpty() && xtreamCreds == null) {
+            singleStreamChannel().let { if (it == null) emptyList() else listOf(it) }
+        } else {
+            list
+        }
         if (resolved.isEmpty()) {
-            iptvErrors[config.id] = "No channels found in this playlist."
+            iptvErrors[config.id] = if (xtreamCreds != null) {
+                "This Xtream panel answered, but its playlist held no channels — it may have expired."
+            } else {
+                "No channels found in this playlist."
+            }
             return@withLock cached ?: emptyList()
         }
         // Tag each channel with this provider's ID so the player can resolve HLS streams
         val tagged = resolved.map { ch -> ch.copy(providerId = config.id) }
         iptvErrors.remove(config.id)
-        channelsCache = tagged
+        putCache(this, tagged)
         loadedAt[config.id] = System.currentTimeMillis()
         channelCounts[config.id] = tagged.size
         tagged
@@ -805,7 +871,7 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
     /** Re-reads the playlist on the next call. */
     fun invalidate() {
         loadedAt.remove(config.id)
-        channelsCache = null
+        dropCache(this)
     }
 }
 
@@ -825,21 +891,34 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
 suspend fun gatherIptvChannels(
     playlists: List<IptvProvider>,
     force: Boolean = false,
+    limit: Int = 60_000,
 ): List<IptvChannel> = withContext(Dispatchers.IO) {
-    if (force) {
-        val fresh = playlists.map { p ->
-            async { runCatching { p.channels(force = true) }.getOrNull() ?: emptyList() }
-        }.awaitAll()
-        fresh.flatten()
+    val out = ArrayList<IptvChannel>(minOf(limit, 2_048))
+    val cold = ArrayList<IptvProvider>(playlists.size)
+    if (!force) {
+        for (p in playlists) {
+            val cached = p.cachedChannels()
+            if (cached == null) {
+                cold += p
+            } else if (out.size < limit) {
+                out.addAll(cached.take(limit - out.size))
+            }
+        }
     } else {
-        val cached = playlists.mapNotNull { it.cachedChannels() }
-        val cold = playlists.filter { it.cachedChannels() == null }
-        if (cold.isEmpty()) cached.flatten()
-        else {
-            val fresh = cold.map { p ->
-                async { runCatching { p.channels(force = true) }.getOrNull() ?: emptyList() }
-            }.awaitAll()
-            (cached + fresh).flatten()
+        cold += playlists
+    }
+    // Two playlists at a time, never the whole list at once: each one is a
+    // multi-megabyte download plus a parse, and twenty of them in parallel is
+    // what took the heap out on the reported 512 MB device.
+    for (chunk in cold.chunked(2)) {
+        if (out.size >= limit) break
+        val fresh = chunk.map { p ->
+            async { runCatching { p.channels(force = force) }.getOrNull().orEmpty() }
+        }.awaitAll()
+        for (list in fresh) {
+            if (out.size >= limit) break
+            out.addAll(list.take(limit - out.size))
         }
     }
+    out
 }

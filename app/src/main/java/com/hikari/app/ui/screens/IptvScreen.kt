@@ -119,6 +119,7 @@ import com.hikari.app.data.ProviderType
 import com.hikari.app.data.TileShapes
 import com.hikari.app.i18n.I18n
 import com.hikari.app.i18n.tr
+import com.hikari.app.iptv.PortalStore
 import com.hikari.app.providers.IptvProvider
 import com.hikari.app.providers.gatherIptvChannels
 import com.hikari.app.ui.IptvArt
@@ -624,6 +625,11 @@ addStream = false
 
         // Xtream accounts quick access row
         XtreamAccountRow(app = app)
+
+        // Portals found by the generator: visible here, added to the real
+        // playlist list only on request (five full Xtream exports at once
+        // exhausted the heap on a 512 MB device).
+        GeneratedPortalsRow(app = app)
 
         Spacer(Modifier.height(8.dp))
         IptvSectionStrip(
@@ -2657,6 +2663,92 @@ private fun XtreamAccountRow(app: HikariApp) {
             app = app,
             onDismiss = { showGenerator = false },
         )
+    }
+}
+
+/**
+ * Generated portals live here until the user adds them. This is deliberately
+ * a light list, not five IPTV providers: every provider parses and keeps its
+ * whole channel list, and adding them all at once caused an OutOfMemoryError.
+ */
+@Composable
+private fun GeneratedPortalsRow(app: HikariApp) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) { PortalStore.init(context) }
+    val portals by PortalStore.portals.collectAsState(initial = emptyList())
+    if (portals.isEmpty()) return
+
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Portal search results",
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                "${portals.count { !it.added }} to add · ${portals.count { it.added }} in IPTV",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 10.sp,
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(portals, key = { it.key }) { portal ->
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                    modifier = Modifier.width(260.dp),
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                portal.name,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                listOfNotNull(
+                                    portal.host,
+                                    portal.source,
+                                    portal.expiry,
+                                    portal.maxConnections?.let { "$it conn" },
+                                ).joinToString(" · "),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 9.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        if (portal.added) {
+                            Text("In IPTV", color = Color(0xFF4CAF50), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        } else {
+                            TextButton(onClick = {
+                                scope.launch {
+                                    if (PortalStore.addAsProvider(context, portal)) {
+                                        Toast.makeText(context, "Added ${portal.name}", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }) { Text("Add", fontSize = 11.sp) }
+                        }
+                        IconButton(
+                            onClick = { PortalStore.remove(context, portal) },
+                            modifier = Modifier.size(28.dp),
+                        ) {
+                            Icon(Icons.Filled.Delete, contentDescription = "Remove portal", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(14.dp))
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

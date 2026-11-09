@@ -243,6 +243,54 @@ object Http {
         }
 
     /**
+     * Reads at most [maxBytes] of a response, for sources that can be far
+     * larger than the heap: an Xtream `get.php` export can be well over 100 MB
+     * (`superott.top` is 127 MB), and `body.string()` would first create the
+     * whole body, then a String copy of it. A bounded prefix still contains
+     * thousands of channels, which is what the playlist parser needs.
+     *
+     * The read stops at the cap and closes the connection, so the rest of the
+     * file is never pulled over the network.
+     */
+    fun fetchStringCapped(
+        url: String,
+        headers: Map<String, String> = emptyMap(),
+        maxBytes: Int,
+        readTimeoutSec: Long = 30,
+    ): Result<String> = try {
+        val call = clientFor(readTimeoutSec)
+        val builder = Request.Builder().url(url).header("User-Agent", UA)
+        headers.forEach { (k, v) -> builder.header(k, v) }
+        call.newCall(builder.build()).execute().use { r ->
+            if (!r.isSuccessful) {
+                Result.failure(Exception("HTTP ${r.code} for $url"))
+            } else {
+                val body = r.body
+                if (body == null) {
+                    Result.success("")
+                } else {
+                    val cap = maxBytes.coerceAtLeast(1)
+                    val buf = ByteArray(minOf(cap, 64 * 1024))
+                    val out = java.io.ByteArrayOutputStream(minOf(cap, 1024 * 1024))
+                    var total = 0
+                    body.byteStream().use { input ->
+                        while (total < cap) {
+                            val want = minOf(buf.size, cap - total)
+                            val n = input.read(buf, 0, want)
+                            if (n <= 0) break
+                            out.write(buf, 0, n)
+                            total += n
+                        }
+                    }
+                    Result.success(String(out.toByteArray(), Charsets.UTF_8))
+                }
+            }
+        }
+    } catch (e: Exception) {
+        Result.failure(e)
+    }
+
+    /**
      * The shared client with a longer per-read timeout, for the one kind of
      * fetch that is genuinely big: a Mihon/Aniyomi repo index can be a 1.5 MB
      * JSON file (keiyoushi's `index.json` is), and 30s per read is not always

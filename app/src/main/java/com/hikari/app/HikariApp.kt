@@ -828,6 +828,22 @@ class HikariApp : Application() {
             runCatching {
                 com.hikari.app.nuvio.NuvioPluginManager.applyPatchesToInstalled(this@HikariApp)
             }
+            // Older "Generate portals" builds saved every found Xtream panel as
+            // a full IPTV provider. Move those rows into the lightweight portal
+            // store BEFORE the first refresh builds the provider list: ten
+            // panels' channel lists together were enough to exhaust a 512 MB
+            // heap, and nothing may start loading them again first.
+            runCatching {
+                val moved = com.hikari.app.iptv.PortalStore.migrateLegacyProviders(this@HikariApp)
+                if (moved > 0) {
+                    Logs.log(
+                        "Providers",
+                        "moved $moved generated portal(s) to Portal search results",
+                    )
+                }
+            }.onFailure {
+                Logs.log("Providers", "portal migration failed: ${it.message}")
+            }
             providers.refresh()
             Logs.log("Providers", "refreshed: ${providers.providers.value.size} installed")
             // Watch the provider list itself, for the whole session.

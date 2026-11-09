@@ -70,9 +70,9 @@ internal fun PortalGeneratorDialog(app: HikariApp, onDismiss: () -> Unit) {
                 running = false
                 return@LaunchedEffect
             }
-            status = "Saving ${list.size} portal${if (list.size == 1) "" else "s"} to IPTV…"
+            status = "Saving ${list.size} portal${if (list.size == 1) "" else "s"} to the IPTV page…"
             added = PortalGenerator.save(app, list)
-            status = "Added $added portal${if (added == 1) "" else "s"} to IPTV and the Channel Wall."
+            status = "Found $added portal${if (added == 1) "" else "s"} — they are in the IPTV page's Portal search results."
         } catch (e: Throwable) {
             error = e.message ?: "Couldn't generate portals."
             status = ""
@@ -87,7 +87,7 @@ internal fun PortalGeneratorDialog(app: HikariApp, onDismiss: () -> Unit) {
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "Cloud Vault · verifies live Xtream accounts and adds the working ones to your IPTV playlists.",
+                    "Cloud Vault + Reddit · verifies live Xtream accounts; working portals appear on the IPTV page ready to add.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 11.sp,
                 )
