@@ -474,3 +474,10 @@
 -keep class org.skepsun.kototoro.parsers.model.ContentListFilter$Companion { *; }
 -dontwarn org.skepsun.kototoro.parsers.**
 -dontwarn org.hany18h.parsers.**
+
+## ---- JDK DNS provider (dnsjava, referenced reflectively on a JVM) ----------
+# sun.net.spi.nameservice is a JDK-internal API that Android does not ship.
+# dnsjava only touches it on a desktop JVM; R8 cannot see that, so silence the
+# two missing classes rather than keeping dead reflection code.
+-dontwarn sun.net.spi.nameservice.NameService
+-dontwarn sun.net.spi.nameservice.NameServiceDescriptor
