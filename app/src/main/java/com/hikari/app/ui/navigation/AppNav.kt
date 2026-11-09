@@ -112,6 +112,7 @@ import com.hikari.app.ui.screens.HistoryScreen
 import com.hikari.app.ui.screens.HomeScreen
 import com.hikari.app.ui.screens.IptvAllPlaylistsScreen
 import com.hikari.app.ui.screens.IptvPlaylistScreen
+import com.hikari.app.ui.screens.ChannelWallScreen
 import com.hikari.app.ui.screens.IptvScreen
 import com.hikari.app.ui.screens.MultiViewLayout
 import com.hikari.app.ui.screens.MultiViewScreen
@@ -169,6 +170,8 @@ object Routes {
      * playlist at all and an eighth button costs every one of them room.
      */
     const val IPTV = "iptv"
+    /** The curated Live TV directory ("Channel Wall") opened from the IPTV tab. */
+    const val CHANNEL_WALL = "channel-wall"
     /** One playlist's own page: its groups, each opening a paged channel grid. */
     const val IPTV_PLAYLIST = "iptv-playlist?pid={pid}"
     /** F4 — grouped view merging EVERY IPTV playlist's channels (the "View All
@@ -1519,6 +1522,7 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
             composable(Routes.MUSIC) { MusicScreen(nav) }
             composable(Routes.MUSIC_PLAYER) { MusicPlayerScreen(onBack = { nav.popBackStack() }) }
             composable(Routes.IPTV) { IptvScreen(nav) }
+            composable(Routes.CHANNEL_WALL) { ChannelWallScreen(nav) }
             composable(Routes.SPORTS) { SportsScreen(nav) }
             composable(
                 route = "sports-game:{eventId}",

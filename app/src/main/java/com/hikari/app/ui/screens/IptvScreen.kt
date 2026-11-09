@@ -1065,7 +1065,7 @@ private suspend fun copyPlaylistInto(
  * id is derived from the source so adding the same link twice updates the one
  * entry (exactly what the Extensions screen does, see its addIptvPlaylist).
  */
-private suspend fun addIptvPlaylist(
+internal suspend fun addIptvPlaylist(
     app: HikariApp,
     link: String,
     localPath: String?,
@@ -2745,6 +2745,22 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                 fontWeight = FontWeight.Bold,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                // The curated Live TV directory. Sits immediately left of
+                // "+ Region" as the user asked, at the top of the IPTV tab.
+                OutlinedButton(
+                    onClick = { nav.navigate(Routes.CHANNEL_WALL) },
+                    shape = RoundedCornerShape(20.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = Color.White.copy(alpha = 0.85f),
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                    modifier = Modifier.height(32.dp),
+                ) {
+                    Icon(Icons.Filled.GridView, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("CH Wall", fontSize = 12.sp)
+                }
                 OutlinedButton(
                     onClick = { showAddRegion = true },
                     shape = RoundedCornerShape(20.dp),
