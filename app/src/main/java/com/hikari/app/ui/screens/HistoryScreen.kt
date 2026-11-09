@@ -161,18 +161,9 @@ fun HistoryScreen(nav: NavHostController, embedded: Boolean = false) {
                 HistoryRow(
                     h = h,
                     onClick = {
-                        Routes.safeNavigate(
-                            nav,
-                            Routes.detail(
-                                providerId = h.providerId,
-                                type = h.type,
-                                mediaId = h.mediaId,
-                                title = h.title,
-                                posterUrl = h.posterUrl,
-                                episodeId = h.episodeId,
-                                startPositionMs = h.positionMs,
-                            )
-                        )
+                        // YouTube history entries have no provider detail page:
+                        // resolve them through the YouTube engine and resume.
+                        scope.launch { com.hikari.app.ui.openHistoryEntry(context, nav, h) }
                     },
                     // Deletes this one entry (a single movie, or one episode of
                     // a series) without touching the rest of the history.

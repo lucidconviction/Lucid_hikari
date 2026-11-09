@@ -1160,14 +1160,10 @@ fun HomeScreen(nav: NavHostController) {
                         entries = continueEntries,
                         backdropOf = { h -> backdropByKey["${h.providerId}|${h.type}|${h.mediaId}"] },
                         onClick = { h ->
-                            Routes.safeNavigate(
-                                nav,
-                                Routes.detail(
-                                    h.providerId, h.type, h.mediaId, h.title, h.posterUrl, "",
-                                    episodeId = h.episodeId,
-                                    startPositionMs = h.positionMs,
-                                )
-                            )
+                            // A YouTube entry has no provider page to open;
+                            // openHistoryEntry resolves it through the YouTube
+                            // engine and resumes it in the player instead.
+                            scope.launch { com.hikari.app.ui.openHistoryEntry(context, nav, h) }
                         },
                         // The ✕ on a card drops just that entry from the shared
                         // watch-history store, so it leaves the shelf and the
