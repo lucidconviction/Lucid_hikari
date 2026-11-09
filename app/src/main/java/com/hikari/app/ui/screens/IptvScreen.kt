@@ -2064,17 +2064,15 @@ private fun IptvSectionPage(
             subtitle = when (kind) {
                 IptvSection.LINKS -> if (allLinkCards.isEmpty()) tr("No links yet")
                 else I18n.t("%s links").replace("%s", allLinkCards.size.toString())
-                else -> if (playlistsEmpty) tr("No playlists yet")
-                else I18n.t("%s playlists · %s channels")
-                    .replace("%s", playlistCards.size.toString())
-                    // Prefer the provider's latest count: a card read while a
-                    // panel was still answering can hold an older number.
-                    .replace(
-                        "%s",
-                        playlistCards.sumOf {
-                            IptvProvider.channelCounts[it.id] ?: it.channels
-                        }.toString(),
-                    )
+                else -> when {
+                    playlistsEmpty -> tr("No playlists yet")
+                    // The tile itself carries the live channel/group count; a
+                    // second total here went stale whenever a panel was still
+                    // answering, so the header only states how many playlists exist.
+                    playlistCards.size == 1 -> tr("1 playlist")
+                    else -> I18n.t("%s playlists")
+                        .replace("%s", playlistCards.size.toString())
+                }
             },
             onBack = null,
             shape = pageShape,
