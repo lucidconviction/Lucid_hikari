@@ -87,6 +87,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.hikari.app.HikariApp
 import com.hikari.app.data.IptvChannel
@@ -162,6 +163,9 @@ fun SportsScreen(nav: androidx.navigation.NavHostController) {
 
     LaunchedEffect(Unit) {
         SportsRepository.setViewing(true)
+        // The repository starts fetching at app launch; if that first request
+        // failed (network not ready, a timeout) retry now that the user is here.
+        SportsRepository.ensureFresh()
         SportsRepository.ensureChannels(context)
     }
     LaunchedEffect(providers.size) {
@@ -219,14 +223,23 @@ fun SportsScreen(nav: androidx.navigation.NavHostController) {
             }
         }
         problem?.let {
-            Text(
-                it,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                TextButton(onClick = {
+                    SportsRepository.refreshNow()
+                    SportsRepository.ensureChannels(context, force = true)
+                }) { Text("Retry", fontSize = 12.sp) }
+            }
         }
         Box(modifier = Modifier.fillMaxSize().padding(bottom = bottom)) {
             when (SportsTab.entries[tab]) {

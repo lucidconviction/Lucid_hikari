@@ -115,6 +115,20 @@ object SportsRepository {
 
     // ---- Public API ----
 
+    /**
+     * Loads the fixture when the sports screen is opened if the startup fetch
+     * never landed (the app starts it at launch, but that request can fail while
+     * the network is still coming up). Without this the tab stayed on "No games"
+     * until the user restarted Hikari or pressed Refresh.
+     */
+    fun ensureFresh(maxAgeMs: Long = 5 * 60_000L) {
+        if (loading.value) return
+        val now = LiveTvClock.nowMs()
+        if (events.value.isEmpty() || lastRefreshAt == 0L || now - lastRefreshAt > maxAgeMs) {
+            refreshNow()
+        }
+    }
+
     /** Start a full refresh (events + matches + standings). */
     fun refreshNow() {
         scope.launch {
