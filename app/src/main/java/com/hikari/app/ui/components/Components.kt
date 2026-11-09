@@ -97,7 +97,10 @@ import com.hikari.app.tv.TvUi
 import com.hikari.app.ui.theme.rememberGlassTokens
 import com.hikari.app.ui.shape
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
 import com.hikari.app.tv.tvTextFieldKeys
 
 /** How many automatic re-requests a poster gets before its cell settles on the
@@ -760,14 +763,15 @@ private fun HeroCarousel(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    val heroEn = rememberHeroEnriched(item)
                     val metaLine = buildList {
                         when (item.type) {
                             MediaType.MOVIE -> add("Movie")
                             MediaType.SERIES -> add("Series")
                             else -> {}
                         }
-                        item.genres.take(2).forEach { add(it) }
-                        item.year?.let { add(it.toString()) }
+                        (if (item.genres.isNotEmpty()) item.genres else heroEn?.genres.orEmpty()).take(2).forEach { add(it) }
+                        (item.year ?: heroEn?.year)?.let { add(it.toString()) }
                     }.joinToString("  ·  ")
                     if (config.showMeta && metaLine.isNotBlank()) {
                         Text(
@@ -779,9 +783,9 @@ private fun HeroCarousel(
                             modifier = Modifier.padding(top = 2.dp),
                         )
                     }
-                    if (config.showOverview && !item.overview.isNullOrBlank()) {
+                    if (config.showOverview && !heroOverview(item).isNullOrBlank()) {
                         Text(
-                            item.overview!!.trim(),
+                            heroOverview(item)!!.trim(),
                             style = MaterialTheme.typography.labelSmall,
                             color = Color.White.copy(alpha = 0.72f),
                             maxLines = 2,
@@ -906,14 +910,15 @@ private fun HeroStaticCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                val heroEn = rememberHeroEnriched(item)
                 val metaLine = buildList {
                     when (item.type) {
                         MediaType.MOVIE -> add("Movie")
                         MediaType.SERIES -> add("Series")
                         else -> {}
                     }
-                    item.genres.take(2).forEach { add(it) }
-                    item.year?.let { add(it.toString()) }
+                    (if (item.genres.isNotEmpty()) item.genres else heroEn?.genres.orEmpty()).take(2).forEach { add(it) }
+                    (item.year ?: heroEn?.year)?.let { add(it.toString()) }
                 }.joinToString("  ·  ")
                 if (config.showMeta && metaLine.isNotBlank()) {
                     Text(
@@ -925,9 +930,9 @@ private fun HeroStaticCard(
                         modifier = Modifier.padding(top = 2.dp),
                     )
                 }
-                if (config.showOverview && !item.overview.isNullOrBlank()) {
+                if (config.showOverview && !heroOverview(item).isNullOrBlank()) {
                     Text(
-                        item.overview!!.trim(),
+                        heroOverview(item)!!.trim(),
                         style = MaterialTheme.typography.labelSmall,
                         color = Color.White.copy(alpha = 0.72f),
                         maxLines = 2,
@@ -989,15 +994,59 @@ private fun HeroScoreChip(text: String) {
 }
 
 /** "Movie · Action, Drama · 2024" — the one line every banner shape shares. */
-private fun heroMetaLine(item: MediaItem): String = buildList {
+@Composable
+private fun heroMetaLine(item: MediaItem): String {
+    val enriched = rememberHeroEnriched(item)
+    return heroMetaLineBuilt(item, enriched)
+}
+
+private fun heroMetaLineBuilt(item: MediaItem, enriched: HeroEnriched? = null): String = buildList {
     when (item.type) {
         MediaType.MOVIE -> add("Movie")
         MediaType.SERIES -> add("Series")
         else -> {}
     }
-    item.genres.take(2).forEach { add(it) }
-    item.year?.let { add(it.toString()) }
+    (if (item.genres.isNotEmpty()) item.genres else enriched?.genres.orEmpty()).take(2).forEach { add(it) }
+    (item.year ?: enriched?.year)?.let { add(it.toString()) }
 }.joinToString("  ·  ")
+
+private data class HeroEnriched(val year: Int?, val overview: String?, val genres: List<String>)
+private val heroEnrichCache = ConcurrentHashMap<String, HeroEnriched?>()
+private val heroEnrichStates = ConcurrentHashMap<String, androidx.compose.runtime.MutableState<HeroEnriched?>>()
+private val heroEnrichRunning = ConcurrentHashMap.newKeySet<String>()
+private val heroEnrichMiss = ConcurrentHashMap.newKeySet<String>()
+private fun heroEnrichKey(item: MediaItem): String = item.providerId + "|" + item.type.name + "|" + item.id
+@Composable
+private fun rememberHeroEnriched(item: MediaItem): HeroEnriched? {
+    val key = heroEnrichKey(item)
+    val holder = remember(key) { heroEnrichStates.getOrPut(key) { mutableStateOf(heroEnrichCache[key]) } }
+    if ((item.overview.isNullOrBlank() || item.year == null) && holder.value == null && !heroEnrichMiss.contains(key) && heroEnrichRunning.add(key)) {
+        LaunchedEffect(key) {
+            try {
+                val got = withContext(Dispatchers.IO) { enrichHeroItem(item) }
+                if (got != null) { heroEnrichCache[key] = got; holder.value = got } else heroEnrichMiss.add(key)
+            } finally { heroEnrichRunning.remove(key) }
+        }
+    }
+    return holder.value
+}
+@Composable
+private fun heroOverview(item: MediaItem): String? {
+    val enriched = rememberHeroEnriched(item)
+    return item.overview?.takeIf { it.isNotBlank() } ?: enriched?.overview
+}
+private suspend fun enrichHeroItem(item: MediaItem): HeroEnriched? = runCatching {
+    val resolved = com.hikari.app.nuvio.TmdbResolver.resolve(item) ?: return null
+    val details = com.hikari.app.nuvio.TmdbResolver.apiGet("/" + resolved.mediaType + "/" + resolved.tmdbId, emptyMap<String, String>()) ?: return null
+    val overview = details.optString("overview").ifBlank { null }
+    val date = details.optString("first_air_date").ifBlank { details.optString("release_date") }
+    val year = date.take(4).toIntOrNull()
+    val genres = runCatching {
+        val arr = details.getJSONArray("genres")
+        (0 until arr.length()).mapNotNull { arr.getJSONObject(it).optString("name").ifBlank { null } }.take(2)
+    }.getOrDefault(emptyList())
+    if (overview == null && year == null && genres.isEmpty()) null else HeroEnriched(year, overview, genres)
+}.getOrNull()
 
 /** The pager dots under a banner. Grown in place rather than replaced, so the
  *  row never reflows as it advances. */
@@ -1111,9 +1160,9 @@ private fun HeroSpotlight(
                             modifier = Modifier.padding(top = 3.dp),
                         )
                     }
-                    if (config.showOverview && !item.overview.isNullOrBlank()) {
+                    if (config.showOverview && !heroOverview(item).isNullOrBlank()) {
                         Text(
-                            item.overview!!.trim(),
+                            heroOverview(item)!!.trim(),
                             style = MaterialTheme.typography.bodySmall,
                             color = Color.White.copy(alpha = 0.74f),
                             maxLines = 2,
@@ -1233,9 +1282,9 @@ private fun HeroCompact(
                             modifier = Modifier.padding(top = 3.dp),
                         )
                     }
-                    if (config.showOverview && !item.overview.isNullOrBlank()) {
+                    if (config.showOverview && !heroOverview(item).isNullOrBlank()) {
                         Text(
-                            item.overview!!.trim(),
+                            heroOverview(item)!!.trim(),
                             style = MaterialTheme.typography.labelSmall,
                             color = Color.White.copy(alpha = 0.66f),
                             maxLines = 1,
@@ -1352,9 +1401,9 @@ private fun HeroShowcase(
                                 modifier = Modifier.padding(top = 3.dp),
                             )
                         }
-                        if (config.showOverview && !item.overview.isNullOrBlank()) {
+                        if (config.showOverview && !heroOverview(item).isNullOrBlank()) {
                             Text(
-                                item.overview!!.trim(),
+                                heroOverview(item)!!.trim(),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 3,

@@ -2052,7 +2052,11 @@ internal fun ProviderPickerSheet(
                     }
                     Spacer(Modifier.width(8.dp))
                     FilledTonalButton(
-                        onClick = { if (multi) working = emptyList() else onPick(null) },
+                        // "All Plugins" is an action, not a working-set edit: in
+                        // multi mode it applies All at once (Done) instead of
+                        // just clearing the ticks and stranding the user on a
+                        // sheet whose Close would save nothing.
+                        onClick = { if (multi) onDone(emptyList()) else onPick(null) },
                         shape = RoundedCornerShape(10.dp),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                     ) {
@@ -3035,8 +3039,19 @@ internal fun webUrlChain(p: ContentProvider, vararg itemUrls: String?): String? 
     }
     runCatching { webUrlFor(p) }.getOrNull()?.takeIf { it.isNotBlank() }?.let { return it }
     webUrlRootOf(p.config.url)?.let { return it }
-    webUrlRootOf(p.config.extra)?.let { return it }
+    // The install URL of a scripted extension is the script itself (a .js file
+    // on the repo raw host) — never the site. Opening it showed the module
+    // source instead of the site.
+    webUrlRootOf(p.config.extra)?.takeIf { !isScriptArtifactUrl(it) }?.let { return it }
     return null
+}
+
+/** An install artifact, not a browsable site page: never a globe target. */
+private fun isScriptArtifactUrl(url: String): Boolean {
+    val lower = url.lowercase()
+    if (lower.endsWith(".js")) return true
+    if (lower.contains("/javascript/")) return true
+    return false
 }
 
 /**

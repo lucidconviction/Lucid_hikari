@@ -10536,28 +10536,48 @@ class PlayerActivity : ComponentActivity() {
                         // Remember WHAT was picked (language/label), not the
                         // TrackGroup object — the group dies with the next
                         // re-prepare, the language does not.
-                        pickText = TrackPick(C.TRACK_TYPE_TEXT, format.language, format.label, ti)
-                        // Fresh player, not the dialog-time snapshot (see the
-                        // audio sheet): a re-resolve between open and tap swaps
-                        // the instance, and the confirm loop converges the pick
-                        // onto the live track list.
-                        (player ?: return@addOptionRow).let { live ->
+                        val pick = TrackPick(C.TRACK_TYPE_TEXT, format.language, format.label, ti)
+                        pickText = pick
+                        // Resolve against the LIVE track list, not the
+                        // dialog-time group: a re-prepare between open and tap
+                        // (provider subtitles attaching) kills the dialog's
+                        // group object, and an override keyed on a dead group
+                        // silently does nothing. Fresh player AND fresh groups.
+                        val live = player ?: return@addOptionRow
+                        val liveGroups = live.currentTracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
+                        var targetGroup: Tracks.Group? = null
+                        var targetIndex = -1
+                        outer@ for (loose in listOf(false, true)) {
+                            for (g in liveGroups) {
+                                val mg = g.mediaTrackGroup
+                                for (i in 0 until mg.length) {
+                                    if (!pick.matches(mg.getFormat(i), i, loose)) continue
+                                    targetGroup = g
+                                    targetIndex = i
+                                    break@outer
+                                }
+                            }
+                        }
+                        val tg = targetGroup
+                        val applied = if (tg != null) {
                             live.trackSelectionParameters = live.trackSelectionParameters.buildUpon()
                                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
                                 .clearOverridesOfType(C.TRACK_TYPE_TEXT)
                                 .setOverrideForType(
-                                    TrackSelectionOverride(group.mediaTrackGroup, ImmutableList.of(ti))
+                                    TrackSelectionOverride(tg.mediaTrackGroup, ImmutableList.of(targetIndex))
                                 )
                                 .build()
-                        }
-                        // Say what was chosen and re-assert it on the next loop
-                        // pass: "I tapped the subtitle and nothing appeared" is
-                        // the other half of the same report, and a silent pick
-                        // on a stream that then re-prepares looks exactly like a
-                        // tap that did nothing.
+                            live.currentTracks.groups.any { it.mediaTrackGroup === tg.mediaTrackGroup } &&
+                                overrideSelects(live, tg, targetIndex)
+                        } else false
+                        // Say what was chosen only when it took effect. When
+                        // the track is not in the live list yet (manifest still
+                        // parsing) the pick stays armed and the confirm loop
+                        // converges it when the tracks arrive.
                         Toast.makeText(
                             this,
-                            I18n.t("Subtitle: %s").replace("%s", option.label),
+                            if (applied) I18n.t("Subtitle: %s").replace("%s", option.label)
+                            else I18n.t("Subtitle will apply when tracks load"),
                             Toast.LENGTH_SHORT,
                         ).show()
                         // Re-asserted until it reads back as active (see
@@ -12369,8 +12389,25 @@ class PlayerActivity : ComponentActivity() {
     /** Seeks both players together — every user seek keeps the dual-audio
      *  pair aligned instantly instead of drifting until the 1s heartbeat. */
     private fun seekBoth(targetMs: Long) {
+        // A progressive (mp4) timeline reports duration only once the header
+        // lands; seeking before that (or when the server ignored Range and
+        // left the timeline unseekable) jumps to 0 and restarts from the
+        // top — the HubCloud/Pixeldrain "skip restarts" report. Hold the
+        // position instead of manufacturing a restart.
         try {
-            player?.seekTo(targetMs)
+            val p = player
+            if (p != null) {
+                val dur = p.duration
+                val seekable = dur > 0L && runCatching {
+                    val tl = p.currentTimeline
+                    !tl.isEmpty && tl.getWindow(0, androidx.media3.common.Timeline.Window()).isSeekable
+                }.getOrDefault(dur > 0L)
+                if (seekable) p.seekTo(targetMs.coerceIn(0L, dur))
+                else com.hikari.app.data.Logs.log(
+                    "Player",
+                    "seek ignored — timeline not seekable yet target=" + targetMs + " dur=" + dur,
+                )
+            }
         } catch (_: Throwable) { }
         try {
             dualPlayer?.seekTo(targetMs)
@@ -16101,7 +16138,16 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
             // for fresh sources the same way a stale 403 does.
             val loopback400Refresh = httpStatus == 400 &&
                 isLoopbackHost(sources.getOrNull(currentIndex)?.url.orEmpty())
-            if ((httpStatus == 403 || loopback400Refresh) &&
+            // A bridge 502/503 is the same class as a stale 403: the bridge's
+            // upstream file link (Filmu's sacdn HLS) expired, and a fresh
+            // extraction hands out a working one. Re-resolve once or twice
+            // before walking the list, exactly like stale signed playlists.
+            val bridge5xxRefresh = (httpStatus == 502 || httpStatus == 503) &&
+                runCatching {
+                    val h = java.net.URI(sources.getOrNull(currentIndex)?.url.orEmpty()).host.orEmpty().lowercase()
+                    h.contains("workers.dev") || h.contains("bridge")
+                }.getOrDefault(false)
+            if ((httpStatus == 403 || loopback400Refresh || bridge5xxRefresh) &&
                 liveSessionId != null &&
                 signedLinkRefreshes < 2 &&
                 !isLiveSource(sources.getOrNull(currentIndex))
@@ -17431,7 +17477,7 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
      * after a few seconds when the track is genuinely gone (the default
      * rightly stands then), and never touches a destroyed activity.
      */
-    private fun confirmTrackPick(type: Int, attempts: Int = 10) {
+    private fun confirmTrackPick(type: Int, attempts: Int = 16) {
         val handler = android.os.Handler(android.os.Looper.getMainLooper())
         var left = attempts
         fun tick() {
