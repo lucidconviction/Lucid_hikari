@@ -12,6 +12,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import com.hikari.app.net.Http
 import com.hikari.app.net.PlayerHttp
+import com.hikari.app.telegram.Td
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -108,6 +109,14 @@ object DownloadEngine {
         val headers = task.headers
         val isHls = task.isM3u8 || task.url.substringBefore('?').lowercase().contains(".m3u8")
 
+        // Telegram's `hikari-td://` URLs are not HTTP: the bytes are already on
+        // disk once TDLib finishes the download, so no HTTP engine can fetch
+        // them. Downloads used to fail on these ("This server can't be
+        // downloaded" from the player, or a plain HTTP error here).
+        if (task.url.startsWith(com.hikari.app.telegram.TdFileDataSource.SCHEME + "://", true)) {
+            return@withContext downloadTelegram(ctx, task, workDir, Reporter(onProgress), isCancelled)
+        }
+
         if (isHls) {
             val res = downloadHls(
                 masterUrl = task.url,
@@ -183,6 +192,97 @@ object DownloadEngine {
             val top = parsePlaylist(text, finalUrl)
             top.audios.map { it.name.trim() }.filter { it.isNotBlank() }.distinct()
         }.getOrDefault(emptyList())
+    }
+
+    /**
+     * A video that lives in the user's Telegram account.
+     *
+     * There is no URL to fetch: TDLib owns the download and writes it to its
+     * own store. We ask TDLib for the whole file, poll its progress (the same
+     * state the player's data source reads), then copy the finished file into
+     * the download's own directory. The copy is deliberate — the player calls
+     * [com.hikari.app.telegram.Td.forgetPlayedFile] when it moves on, which
+     * deletes TDLib's copy, so an offline task must not point at it.
+     *
+     * An expired Telegram file reference is repaired the same way playback
+     * repairs it: re-read the post and follow the file id TDLib hands back.
+     */
+    private suspend fun downloadTelegram(
+        ctx: Context,
+        task: DownloadTask,
+        workDir: File,
+        reporter: Reporter,
+        isCancelled: () -> Boolean,
+    ): DlResult {
+        val uri = android.net.Uri.parse(task.url)
+        var fileId = uri.getQueryParameter("id")?.toIntOrNull()
+            ?: throw IOException("Telegram download has no file id")
+        val chatId = uri.getQueryParameter("chat")?.toLongOrNull() ?: 0L
+        val messageId = uri.getQueryParameter("msg")?.toLongOrNull() ?: 0L
+        if (chatId != 0L && messageId != 0L) {
+            val fresh = runCatching { Td.touchMessage(chatId, messageId) }.getOrDefault(0)
+            if (fresh != 0) fileId = fresh
+        }
+        Td.clearDownloadError(fileId)
+        // A download can be resumed in a fresh process (the download service
+        // keeps running after the Telegram tab is gone), so make sure TDLib is
+        // started and give it a moment to answer.
+        runCatching { Td.init(ctx) }
+        var state: com.hikari.app.telegram.Td.FileState? = null
+        for (attempt in 0 until 40) {
+            state = runCatching { Td.stateOf(fileId) }.getOrNull()
+            if (state != null) break
+            delay(250L)
+        }
+        val first = state ?: throw IOException("Telegram did not return this video (file $fileId)")
+        if (!first.complete) {
+            Td.request(fileId, 0L, 0L)
+            var idleTicks = 0
+            var lastBytes = -1L
+            while (true) {
+                if (isCancelled()) throw DownloadCancelledException()
+                val current = Td.stateOf(fileId)
+                    ?: throw IOException("Telegram did not return this video (file $fileId)")
+                Td.downloadError(fileId)?.let { throw IOException(it) }
+                val done = if (current.complete) current.size
+                else current.downloadOffset + current.readyFromOffset
+                reporter.video(done.coerceAtLeast(0L), current.size, 0L, 0L)
+                if (current.complete) {
+                    state = current
+                    break
+                }
+                idleTicks = if (done > lastBytes) 0 else idleTicks + 1
+                lastBytes = done
+                // 60 seconds without a byte while TDLib is not between states:
+                // report the failure instead of leaving the row at 0% forever.
+                if (idleTicks > 240) {
+                    throw IOException(
+                        Td.downloadError(fileId)
+                            ?: "Telegram stopped downloading this video — tap Resume to try again.",
+                    )
+                }
+                delay(250L)
+            }
+        }
+        val finished = state ?: throw IOException("Telegram did not return this video (file $fileId)")
+        val source = File(finished.path)
+        if (finished.path.isBlank() || !source.exists() || source.length() == 0L) {
+            throw IOException("Telegram has no local copy of this video yet")
+        }
+        reporter.video(source.length(), source.length(), 0L, 0L)
+        val ext = source.extension.ifBlank { "mp4" }
+        val local = File(workDir, "telegram-$fileId.$ext")
+        source.inputStream().use { input ->
+            local.outputStream().use { output -> input.copyTo(output, 1 shl 16) }
+        }
+        return if (task.kind == DownloadKind.EXPORT) {
+            val name = task.episodeStem() + "." + ext
+            val saved = writeToDownloads(ctx, local, name, mimeForName(name), task.titleFolder())
+            runCatching { workDir.deleteRecursively() }
+            DlResult(null, saved)
+        } else {
+            DlResult(local.absolutePath, null)
+        }
     }
 
     /** Aggregates the video + (optional) audio rendition into one task-wide
