@@ -2067,7 +2067,14 @@ private fun IptvSectionPage(
                 else -> if (playlistsEmpty) tr("No playlists yet")
                 else I18n.t("%s playlists · %s channels")
                     .replace("%s", playlistCards.size.toString())
-                    .replace("%s", playlistCards.sumOf { it.channels }.toString())
+                    // Prefer the provider's latest count: a card read while a
+                    // panel was still answering can hold an older number.
+                    .replace(
+                        "%s",
+                        playlistCards.sumOf {
+                            IptvProvider.channelCounts[it.id] ?: it.channels
+                        }.toString(),
+                    )
             },
             onBack = null,
             shape = pageShape,
@@ -2208,7 +2215,9 @@ private fun IptvKindGrid(
             // playlist to group; a single playlist's tile is already that.
             if (kind == IptvSection.PLAYLIST && cards.size > 1) {
                 item(key = "iptv-all-playlists") {
-                    val totalChannels = remember(cards) { cards.sumOf { it.channels } }
+                    val totalChannels = remember(cards) {
+                        cards.sumOf { IptvProvider.channelCounts[it.id] ?: it.channels }
+                    }
                     val totalGroups = remember(cards) { cards.sumOf { it.groups } }
                     IptvTile(
                         cover = null,
@@ -2226,6 +2235,7 @@ private fun IptvKindGrid(
                 }
             }
             items(cards, key = { it.id }) { card ->
+                val liveChannels = IptvProvider.channelCounts[card.id] ?: card.channels
                 IptvTile(
                     cover = card.cover,
                     name = card.name,
@@ -2233,9 +2243,9 @@ private fun IptvKindGrid(
                         card.error != null -> card.error
                         card.torrent -> tr("Torrent")
                         card.stream -> tr("Network stream")
-                        card.channels == 0 -> tr("Empty playlist")
+                        liveChannels == 0 -> tr("Empty playlist")
                         else -> I18n.t("%s channels · %s groups")
-                            .replace("%s", card.channels.toString())
+                            .replace("%s", liveChannels.toString())
                             .replace("%s", card.groups.toString())
                     },
                     shape = shape,
