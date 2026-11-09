@@ -11,7 +11,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -20,7 +19,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.lifecycleScope
 import com.hikari.app.ui.AccentStore
-import com.hikari.app.ui.components.TelegramDialog
 import com.hikari.app.ui.navigation.AppRoot
 import com.hikari.app.ui.theme.HikariAccent
 import com.hikari.app.ui.theme.HikariTheme
@@ -202,7 +200,6 @@ class MainActivity : AppCompatActivity() {
         // via runBlocking) is safe and means the first frame already carries it.
         runCatching { kotlinx.coroutines.runBlocking { com.hikari.app.ui.CustomBackground.load(this@MainActivity) } }
         setContent {
-            val scope = rememberCoroutineScope()
             // Remember the Flow — a fresh store.themeFlow() per recomposition
             // would make collectAsState reset to the initial key each time.
             val themeFlow = remember { store.themeFlow() }
@@ -419,23 +416,6 @@ class MainActivity : AppCompatActivity() {
                 ).isAppearanceLightStatusBars = themeMode == HikariThemeMode.LIGHT
             }
 
-            // One-time community invitation per version. Held back until the update
-            // check has finished so the two dialogs never stack. "Don't show
-            // this again" holds for the CURRENT version only: after an update
-            // the dialog comes back once even for a user who ticked it before,
-            // and ticking it again holds the new version. Coming back once per
-            // update (not just first install) is what surfaces the
-            // Telegram/Reddit/Discord links to existing users too.
-            var showTelegramDialog by remember { mutableStateOf(false) }
-            LaunchedEffect(Unit) {
-                val current = runCatching { com.hikari.app.BuildConfig.VERSION_NAME }.getOrDefault("")
-                val dontShowFor = runCatching { store.communityDontShowVersion() }.getOrDefault("")
-                val seen = runCatching { store.communitySeenVersion() }.getOrDefault("")
-                if (dontShowFor != current && seen != current) {
-                    showTelegramDialog = true
-                }
-            }
-
             // The television layout can be chosen at runtime (Settings → TV &
             // Remote → "This device is a TV"), so the mirror the whole app reads
             // is kept in step with the stored choice — switching it re-lays-out
@@ -486,37 +466,12 @@ class MainActivity : AppCompatActivity() {
                 // over the lock.
                 com.hikari.app.ui.AppLockGate(this@MainActivity) {
                 AppRoot(themeMode.key)
-                if (showTelegramDialog) {
-                    TelegramDialog(
-                        context = this@MainActivity,
-                        onDismiss = {
-                            showTelegramDialog = false
-                            scope.launch {
-                                runCatching {
-                                    store.setCommunitySeenVersion(
-                                        com.hikari.app.BuildConfig.VERSION_NAME
-                                    )
-                                }
-                            }
-                        },
-                        onDontShowAgain = {
-                            showTelegramDialog = false
-                            scope.launch {
-                                runCatching {
-                                    val v = com.hikari.app.BuildConfig.VERSION_NAME
-                                    store.setCommunitySeenVersion(v)
-                                    store.setCommunityDontShowVersion(v)
-                                }
-                            }
-                        },
-                    )
                 }
                 }
                 }
             }
             }
         }
-    }
 
     /**
      * Feeds the television focus ring (see [com.hikari.app.tv.TvInput]).
