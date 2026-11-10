@@ -78,6 +78,10 @@ Lucid Hikari is a fork of **Hikari** by **Hikari Devs**. The original project an
 |:---:|:---:|:---:|
 | ![Extensions](docs/screenshots/extensions.jpg) | ![Stats](docs/screenshots/stats.jpg) | ![IPTV Playlists](docs/screenshots/iptv-2.jpg) |
 
+| Music (Deezer) | Manga | Sports Scores |
+|:---:|:---:|:---:|
+| ![Music](docs/screenshots/music.jpg) | ![Manga](docs/screenshots/manga.jpg) | ![Sports Scores](docs/screenshots/sports-scores.jpg) |
+
 ---
 
 ## Install
