@@ -500,3 +500,17 @@
 -dontwarn kotlin.Unit
 -dontwarn retrofit2.KotlinExtensions
 -dontwarn retrofit2.KotlinExtensions$*
+
+## ---- YouTube engine (release-only Retrofit failure) ------------------------
+# R8 full mode stripped Retrofit's built-in Call adapter / service metadata in
+# release builds, which left every YouTube request failing with
+# "Unable to create call adapter for interface retrofit2.Call". The engine is
+# loaded reflectively by name and its APIs/models are read by Gson, so keep the
+# whole stack intact; this is a few MB against a feature that has to work.
+-keep class retrofit2.** { *; }
+-keep interface retrofit2.** { *; }
+-dontwarn retrofit2.**
+-keep class com.liskovsoft.** { *; }
+-dontwarn com.liskovsoft.**
+-keep class com.jayway.jsonpath.** { *; }
+-dontwarn com.jayway.jsonpath.**
