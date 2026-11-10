@@ -60,39 +60,21 @@ Lucid Hikari is a fork of **Hikari** by **Hikari Devs**. The original project an
 
 ## Screenshots
 
-### Core Experience
+| Home | YouTube Player | MultiView | IPTV Dashboard |
+|:---:|:---:|:---:|:---:|
+| ![Home](docs/screenshots/home.jpg) | ![YouTube](docs/screenshots/youtube.jpg) | ![MultiView](docs/screenshots/multiview.jpg) | ![IPTV](docs/screenshots/iptv.jpg) |
 
-| Home & YouTube | MultiView | Web Apps Mini-Player |
+| Sports — Leagues | Sports Scores | Web Apps Grid | Web Apps Mini-Player |
+|:---:|:---:|:---:|:---:|
+| ![Sports](docs/screenshots/sports.jpg) | ![Sports Scores](docs/screenshots/sports-scores.jpg) | ![Web Apps](docs/screenshots/web-apps-grid.jpg) | ![Web Apps Mini-Player](docs/screenshots/web-apps-miniplayer.jpg) |
+
+| Settings | Extensions & Repos | Stats Dashboard | IPTV Playlists |
+|:---:|:---:|:---:|:---:|
+| ![Settings](docs/screenshots/settings.jpg) | ![Extensions](docs/screenshots/extensions.jpg) | ![Stats](docs/screenshots/stats.jpg) | ![IPTV Playlists](docs/screenshots/iptv-2.jpg) |
+
+| Music (Deezer) | Manga | Anime Calendar |
 |:---:|:---:|:---:|
-| ![YouTube](docs/screenshots/youtube.jpg) | ![MultiView](docs/screenshots/multiview.jpg) | ![Web Apps Mini-Player](docs/screenshots/web-apps-miniplayer.jpg) |
-
-| Live TV & IPTV | Sports — Leagues & Soccer | Sports — Combat |
-|:---:|:---:|:---:|
-| ![IPTV](docs/screenshots/iptv.jpg) | ![Sports](docs/screenshots/sports.jpg) | ![Sports Combat](docs/screenshots/sports-2.jpg) |
-
-| Web Apps Grid | Web Apps Grid (more) | Settings |
-|:---:|:---:|:---:|
-| ![Web Apps Grid](docs/screenshots/web-apps-grid.jpg) | ![Web Apps Grid 2](docs/screenshots/web-apps-grid-2.jpg) | ![Settings](docs/screenshots/settings.jpg) |
-
-| Extensions & Repos | Stats Dashboard | IPTV Playlists |
-|:---:|:---:|:---:|
-| ![Extensions](docs/screenshots/extensions.jpg) | ![Stats](docs/screenshots/stats.jpg) | ![IPTV Playlists](docs/screenshots/iptv-2.jpg) |
-
-| Music (Deezer) | Manga | Sports Scores |
-|:---:|:---:|:---:|
-| ![Music](docs/screenshots/music.jpg) | ![Manga](docs/screenshots/manga.jpg) | ![Sports Scores](docs/screenshots/sports-scores.jpg) |
-
-| Anime Calendar | Anime Calendar (more) |
-|:---:|:---:|
-| ![Anime Calendar](docs/screenshots/anime-calendar.jpg) | ![Anime Calendar 2](docs/screenshots/anime-calendar-2.jpg) |
-
-| Home | Home (banner) | Library |
-|:---:|:---:|:---:|
-| ![Home](docs/screenshots/home.jpg) | ![Home Banner](docs/screenshots/home-2.jpg) | ![Library](docs/screenshots/library.jpg) |
-
-| Search | Search Filters |
-|:---:|:---:|
-| ![Search](docs/screenshots/search.jpg) | ![Search Filters](docs/screenshots/search.jpg) |
+| ![Music](docs/screenshots/music.jpg) | ![Manga](docs/screenshots/manga.jpg) | ![Anime Calendar](docs/screenshots/anime-calendar.jpg) |
 
 ---
 
