@@ -27,13 +27,22 @@ object YouTubeLibrary {
         val savedAt: Long,
     )
 
+    /** A user-made YouTube playlist, kept on this device like Watch later. */
+    data class Playlist(
+        val id: String,
+        val title: String,
+        val videos: List<Entry>,
+    )
+
     private const val PREFS = "youtube_library"
     private const val KEY_WATCH_LATER = "watch_later"
     private const val KEY_LIKED = "liked"
+    private const val KEY_PLAYLISTS = "playlists"
     private const val MAX_ENTRIES = 500
 
     /** In-memory copy of both shelves, so a card's ⋮ menu does not parse JSON on every recomposition. */
     private val cache = HashMap<Shelf, List<Entry>>()
+    private var playlistCache: List<Playlist>? = null
 
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -123,5 +132,113 @@ object YouTubeLibrary {
     fun remove(context: Context, shelf: Shelf, videoId: String) {
         write(context, shelf, read(context, shelf).filterNot { it.videoId == videoId })
         YouTubeSession.feed?.refreshYou()
+    }
+
+    // ---- user playlists -----------------------------------------------------
+
+    /** Every playlist the user made on this device, newest first. */
+    fun playlists(context: Context): List<Playlist> = synchronized(cache) {
+        playlistCache?.let { return it }
+        val raw = prefs(context).getString(KEY_PLAYLISTS, null)
+        val arr = raw?.let { runCatching { JSONArray(it) }.getOrNull() }
+        val out = ArrayList<Playlist>()
+        if (arr != null) {
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val id = o.optString("id").takeIf { it.isNotBlank() } ?: continue
+                val vids = o.optJSONArray("videos") ?: JSONArray()
+                val videos = ArrayList<Entry>()
+                for (j in 0 until vids.length()) {
+                    vids.optJSONObject(j)?.let { e -> entryFromJson(e)?.let { videos += it } }
+                }
+                out += Playlist(id, o.optString("title").ifBlank { "Playlist" }, videos)
+            }
+        }
+        playlistCache = out
+        out
+    }
+
+    fun createPlaylist(context: Context, title: String): Playlist = synchronized(cache) {
+        val playlist = Playlist(
+            id = "ytpl_${System.currentTimeMillis()}",
+            title = title.trim().ifBlank { "New playlist" },
+            videos = emptyList(),
+        )
+        writePlaylists(context, listOf(playlist) + playlists(context))
+        playlist
+    }
+
+    fun playlistContains(context: Context, playlistId: String, videoId: String?): Boolean {
+        if (videoId.isNullOrBlank()) return false
+        return playlists(context).firstOrNull { it.id == playlistId }
+            ?.videos?.any { it.videoId == videoId } == true
+    }
+
+    /** Adds or removes [item] from [playlistId]; returns true when now included. */
+    fun toggleInPlaylist(context: Context, playlistId: String, item: YtItem): Boolean {
+        val entry = item.toEntry() ?: return false
+        var nowSaved = false
+        val next = playlists(context).map { playlist ->
+            if (playlist.id != playlistId) return@map playlist
+            val existing = playlist.videos.any { it.videoId == entry.videoId }
+            nowSaved = !existing
+            playlist.copy(
+                videos = if (existing) playlist.videos.filterNot { it.videoId == entry.videoId }
+                else (playlist.videos + entry).takeLast(MAX_ENTRIES),
+            )
+        }
+        writePlaylists(context, next)
+        YouTubeSession.feed?.refreshYou()
+        return nowSaved
+    }
+
+    private fun YtItem.toEntry(): Entry? {
+        val id = videoId?.takeIf { it.isNotBlank() } ?: return null
+        return Entry(
+            videoId = id,
+            title = title,
+            author = author,
+            thumbnail = thumbnail,
+            channelId = channelId,
+            savedAt = System.currentTimeMillis(),
+        )
+    }
+
+    private fun entryFromJson(o: JSONObject): Entry? {
+        val id = o.optString("videoId").takeIf { it.isNotBlank() } ?: return null
+        return Entry(
+            videoId = id,
+            title = o.optString("title"),
+            author = o.optString("author").takeIf { it.isNotBlank() },
+            thumbnail = o.optString("thumbnail").takeIf { it.isNotBlank() },
+            channelId = o.optString("channelId").takeIf { it.isNotBlank() },
+            savedAt = o.optLong("savedAt", 0L),
+        )
+    }
+
+    private fun writePlaylists(context: Context, list: List<Playlist>) {
+        playlistCache = list
+        val arr = JSONArray()
+        list.forEach { playlist ->
+            val videos = JSONArray()
+            playlist.videos.forEach { e ->
+                videos.put(
+                    JSONObject()
+                        .put("videoId", e.videoId)
+                        .put("title", e.title)
+                        .put("author", e.author.orEmpty())
+                        .put("thumbnail", e.thumbnail.orEmpty())
+                        .put("channelId", e.channelId.orEmpty())
+                        .put("savedAt", e.savedAt),
+                )
+            }
+            arr.put(
+                JSONObject()
+                    .put("id", playlist.id)
+                    .put("title", playlist.title)
+                    .put("videos", videos),
+            )
+        }
+        prefs(context).edit().putString(KEY_PLAYLISTS, arr.toString()).apply()
     }
 }

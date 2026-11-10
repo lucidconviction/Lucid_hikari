@@ -25,10 +25,13 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -149,11 +152,24 @@ internal fun YouTubeSaveMenu(item: YtItem, modifier: Modifier = Modifier) {
     var liked by remember(videoId) {
         mutableStateOf(YouTubeLibrary.isSaved(context, YouTubeLibrary.Shelf.LIKED, videoId))
     }
+    var playlistList by remember { mutableStateOf(YouTubeLibrary.playlists(context)) }
+    var savedIn by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var creatingPlaylist by remember { mutableStateOf(false) }
+    var newPlaylistName by remember { mutableStateOf("") }
+
+    fun refreshPlaylists() {
+        playlistList = YouTubeLibrary.playlists(context)
+        savedIn = playlistList.filter { p ->
+            p.videos.any { it.videoId == videoId }
+        }.map { it.id }.toSet()
+    }
+
     Box(modifier) {
         IconButton(
             onClick = {
                 inLater = YouTubeLibrary.isSaved(context, YouTubeLibrary.Shelf.WATCH_LATER, videoId)
                 liked = YouTubeLibrary.isSaved(context, YouTubeLibrary.Shelf.LIKED, videoId)
+                refreshPlaylists()
                 expanded = true
             },
             modifier = Modifier
@@ -175,6 +191,32 @@ internal fun YouTubeSaveMenu(item: YtItem, modifier: Modifier = Modifier) {
                     expanded = false
                 },
             )
+            // Every local playlist, right under Watch later. A tick means this
+            // video is already filed there; tapping toggles it.
+            playlistList.forEach { playlist ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            (if (playlist.id in savedIn) "✓ " else "") + playlist.title,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    onClick = {
+                        YouTubeLibrary.toggleInPlaylist(context, playlist.id, item)
+                        refreshPlaylists()
+                        expanded = false
+                    },
+                )
+            }
+            DropdownMenuItem(
+                text = { Text("＋ Make a new playlist") },
+                onClick = {
+                    newPlaylistName = ""
+                    creatingPlaylist = true
+                    expanded = false
+                },
+            )
             DropdownMenuItem(
                 text = { Text(if (liked) "Unlike" else "Like") },
                 onClick = {
@@ -183,6 +225,35 @@ internal fun YouTubeSaveMenu(item: YtItem, modifier: Modifier = Modifier) {
                 },
             )
         }
+    }
+
+    if (creatingPlaylist) {
+        AlertDialog(
+            onDismissRequest = { creatingPlaylist = false },
+            title = { Text("New playlist") },
+            text = {
+                OutlinedTextField(
+                    value = newPlaylistName,
+                    onValueChange = { newPlaylistName = it },
+                    label = { Text("Playlist name") },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = newPlaylistName.isNotBlank(),
+                    onClick = {
+                        val playlist = YouTubeLibrary.createPlaylist(context, newPlaylistName)
+                        YouTubeLibrary.toggleInPlaylist(context, playlist.id, item)
+                        refreshPlaylists()
+                        creatingPlaylist = false
+                    },
+                ) { Text("Create & add") }
+            },
+            dismissButton = {
+                TextButton(onClick = { creatingPlaylist = false }) { Text("Cancel") }
+            },
+        )
     }
 }
 

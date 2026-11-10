@@ -84,6 +84,8 @@ Download the latest signed APK from the **releases page**:
 
 **<https://github.com/lucidconviction/Lucid_hikari/releases/latest>**
 
+Lucid Hikari has its own app package, so it can be installed alongside the original Hikari — you do not need to uninstall the other app.
+
 Open the downloaded file on your phone and allow installing unknown apps when prompted.
 
 The release page carries a universal APK and separate 64-bit and 32-bit builds. The in-app updater picks the right one for your device.

@@ -18,11 +18,11 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.hikari.app"
+        applicationId = "com.lucid.hikari"
         minSdk = 24
         targetSdk = 34
-        versionCode = 364
-        versionName = "0.12.0"
+        versionCode = 365
+        versionName = "0.12.1"
         // CI injects the exact commit SHA the APK was built from, so the
         // in-app update checker can compare it against main's HEAD.
         val gitSha = System.getenv("GIT_SHA") ?: "unknown"

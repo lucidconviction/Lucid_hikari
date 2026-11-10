@@ -1992,7 +1992,7 @@ class PlayerActivity : ComponentActivity() {
                     resetPillScroll()
                     ytMoreButton?.invoke()
                 } else {
-                    findViewById<View>(R.id.yt_more_btn)?.visibility = View.GONE
+                    findViewById<View>(R.id.yt_actions)?.visibility = View.GONE
                 }
                 // An UNPINNED codec readout lives and dies with the controls —
                 // pin it and it stays on the picture (see showCodecOverlay).
@@ -3345,6 +3345,7 @@ class PlayerActivity : ComponentActivity() {
     /** Compose state for the overlay: the ComposeView is built once and only
      *  its list is toggled, because setContent must not be called twice. */
     private val ytMoreOpen = androidx.compose.runtime.mutableStateOf(false)
+    private val ytPanelMode = androidx.compose.runtime.mutableStateOf<com.hikari.app.youtube.YtPanelMode?>(null)
     private val ytVideoId = androidx.compose.runtime.mutableStateOf("")
     private var ytMoreHideTask: Runnable? = null
 
@@ -3354,51 +3355,101 @@ class PlayerActivity : ComponentActivity() {
             ?.removePrefix(com.hikari.app.youtube.YouTubeProgress.ID_PREFIX)
             ?.takeIf { it.isNotBlank() } ?: return
         val overlay = findViewById<ComposeView>(R.id.youtube_more_overlay) ?: return
-        val button = findViewById<View>(R.id.yt_more_btn) ?: return
+        val actions = findViewById<View>(R.id.yt_actions) ?: return
+        val moreButton = findViewById<View>(R.id.yt_more_btn) ?: return
+        val infoButton = findViewById<View>(R.id.yt_info_btn) ?: return
+        val commentsButton = findViewById<View>(R.id.yt_comments_btn) ?: return
 
         ytVideoId.value = videoId
+        ytPanelMode.value = null
         overlay.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
         overlay.setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
-                if (ytMoreOpen.value) {
-                    com.hikari.app.youtube.YouTubeMoreVideos(
-                        videoId = ytVideoId.value,
-                        buttonVisible = false,
-                        initialOpen = true,
-                        onOpenChange = { open ->
-                            if (!open) {
+                when (ytPanelMode.value) {
+                    com.hikari.app.youtube.YtPanelMode.INFO -> {
+                        com.hikari.app.youtube.YouTubeVideoPanel(
+                            videoId = ytVideoId.value,
+                            mode = com.hikari.app.youtube.YtPanelMode.INFO,
+                            onClose = {
                                 ytMoreOpen.value = false
+                                ytPanelMode.value = null
                                 overlay.visibility = View.GONE
-                            }
-                        },
-                        onPlay = { request -> switchYouTubeVideo(request) },
-                    )
+                            },
+                        )
+                    }
+                    com.hikari.app.youtube.YtPanelMode.COMMENTS -> {
+                        com.hikari.app.youtube.YouTubeVideoPanel(
+                            videoId = ytVideoId.value,
+                            mode = com.hikari.app.youtube.YtPanelMode.COMMENTS,
+                            onClose = {
+                                ytMoreOpen.value = false
+                                ytPanelMode.value = null
+                                overlay.visibility = View.GONE
+                            },
+                        )
+                    }
+                    else -> {
+                        if (ytMoreOpen.value) {
+                            com.hikari.app.youtube.YouTubeMoreVideos(
+                                videoId = ytVideoId.value,
+                                buttonVisible = false,
+                                initialOpen = true,
+                                onOpenChange = { open ->
+                                    if (!open) {
+                                        ytMoreOpen.value = false
+                                        ytPanelMode.value = null
+                                        overlay.visibility = View.GONE
+                                    }
+                                },
+                                onPlay = { request -> switchYouTubeVideo(request) },
+                            )
+                        }
+                    }
                 }
             }
         }
         overlay.visibility = View.GONE
+        // The video view sits under the action pills visually, but raising the
+        // pill stack in the window order guarantees taps land on it even after
+        // PlayerView rearranges its own controller children.
+        actions.elevation = 16f * resources.displayMetrics.density
+        actions.bringToFront()
 
-        fun showButton() {
-            if (ytMoreOpen.value || findViewById<View>(R.id.youtube_more_overlay)?.visibility == View.VISIBLE) return
-            button.visibility = View.VISIBLE
-            ytMoreHideTask?.let { button.removeCallbacks(it) }
+        fun showButtons() {
+            if (ytMoreOpen.value || overlay.visibility == View.VISIBLE) return
+            actions.visibility = View.VISIBLE
+            ytMoreHideTask?.let { actions.removeCallbacks(it) }
             val hide = Runnable {
-                if (!ytMoreOpen.value) button.visibility = View.GONE
+                if (!ytMoreOpen.value) actions.visibility = View.GONE
             }
             ytMoreHideTask = hide
-            // Matches the extra overlay time: the button is a tap target, not
-            // a flash, so it stays reachable for 9s after the controls return.
-            button.postDelayed(hide, 9_000L)
+            // Matches the extra overlay time: the pills are tap targets, not a
+            // flash, so they stay reachable for 9s after the controls return.
+            actions.postDelayed(hide, 9_000L)
         }
 
-        button.setOnClickListener {
-            button.visibility = View.GONE
+        fun openPanel(mode: com.hikari.app.youtube.YtPanelMode) {
+            actions.visibility = View.GONE
+            ytPanelMode.value = mode
             ytMoreOpen.value = true
             overlay.visibility = View.VISIBLE
         }
-        showButton()
-        // The button is offered again whenever the player controls come back.
-        ytMoreButton = ::showButton
+
+        infoButton.setOnClickListener {
+            openPanel(com.hikari.app.youtube.YtPanelMode.INFO)
+        }
+        moreButton.setOnClickListener {
+            actions.visibility = View.GONE
+            ytPanelMode.value = null
+            ytMoreOpen.value = true
+            overlay.visibility = View.VISIBLE
+        }
+        commentsButton.setOnClickListener {
+            openPanel(com.hikari.app.youtube.YtPanelMode.COMMENTS)
+        }
+        showButtons()
+        // The buttons are offered again whenever the player controls come back.
+        ytMoreButton = ::showButtons
     }
 
     private var ytMoreButton: (() -> Unit)? = null
@@ -3433,7 +3484,9 @@ class PlayerActivity : ComponentActivity() {
         pickedByUser = false
         ytVideoId.value = request.videoId
         ytMoreOpen.value = false
+        ytPanelMode.value = null
         findViewById<View>(R.id.youtube_more_overlay)?.visibility = View.GONE
+        findViewById<View>(R.id.yt_actions)?.visibility = View.GONE
         findViewById<TextView>(R.id.title_text)?.text = request.title
         findViewById<TextView>(R.id.subtitle_text)?.apply {
             text = ""
@@ -3554,7 +3607,7 @@ class PlayerActivity : ComponentActivity() {
         if (isInPictureInPictureMode) {
             ytMoreOpen.value = false
             findViewById<View>(R.id.youtube_more_overlay)?.visibility = View.GONE
-            findViewById<View>(R.id.yt_more_btn)?.visibility = View.GONE
+            findViewById<View>(R.id.yt_actions)?.visibility = View.GONE
             hideLoadingBanner(immediate = true)
             pv.useController = false
             pv.hideController()
@@ -8111,11 +8164,29 @@ class PlayerActivity : ComponentActivity() {
      * so it cannot leave the playlist the user is watching.
      */
     private fun showQuickChannelsDialog() {
-        val channels = channelSurfController?.channels.orEmpty()
-        if (channels.isEmpty()) {
+        val current = channelSurfController?.channels.orEmpty()
+        if (current.isEmpty()) {
             Toast.makeText(this, I18n.t("No active channel list"), Toast.LENGTH_SHORT).show()
             return
         }
+        Toast.makeText(this, I18n.t("Searching all playlists…"), Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch {
+            val all = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val app = applicationContext as? com.hikari.app.HikariApp
+                val playlists = app?.providers?.providers?.value
+                    ?.filterIsInstance<com.hikari.app.providers.IptvProvider>()
+                    .orEmpty()
+                val gathered = if (playlists.isEmpty()) emptyList() else {
+                    runCatching { com.hikari.app.providers.gatherIptvChannels(playlists) }
+                        .getOrDefault(emptyList())
+                }
+                (gathered + current).distinctBy { it.url }
+            }
+            showQuickCategories(if (all.isEmpty()) current else all)
+        }
+    }
+
+    private fun showQuickCategories(channels: List<com.hikari.app.data.IptvChannel>) {
         val categories = com.hikari.app.data.QuickChannelList.categories
         showGlassMenu(
             I18n.t("Quick Ch"),
@@ -8142,7 +8213,7 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
-    /** Step two of Quick Ch: pick the pattern, then the playlist match. */
+    /** Step two of Quick Ch: pick the pattern, then the match. */
     private fun showQuickChannelMatches(
         categoryTitle: String,
         quick: List<com.hikari.app.data.QuickChannel>,
@@ -8151,7 +8222,7 @@ class PlayerActivity : ComponentActivity() {
         showGlassMenu(
             I18n.t("Quick Ch") + " · " + categoryTitle,
             quick.map { GlassOption(it.displayName) },
-            hint = I18n.t("The matching channels in this playlist come next."),
+            hint = I18n.t("Matches from every installed playlist come next."),
             iconRes = R.drawable.ic_quick_ch,
         ) { which ->
             val pattern = quick.getOrNull(which) ?: return@showGlassMenu
@@ -8160,22 +8231,89 @@ class PlayerActivity : ComponentActivity() {
             if (matches.isEmpty()) {
                 Toast.makeText(
                     this,
-                    I18n.t("No channel in this playlist matches") + " ${pattern.displayName}",
+                    I18n.t("No channel in your playlists matches") + " ${pattern.displayName}",
                     Toast.LENGTH_SHORT,
                 ).show()
                 return@showGlassMenu
             }
-            val current = channelSurfController?.currentIndex ?: -1
+            val currentUrl = channelSurfController?.channels
+                ?.getOrNull(channelSurfController?.currentIndex ?: -1)?.url
             showGlassMenu(
                 pattern.displayName,
-                matches.take(48).map { GlassOption(it.value.name, selected = it.index == current) },
-                hint = I18n.t("${matches.size} matching channels"),
+                matches.take(48).map { GlassOption(it.value.name, selected = it.value.url == currentUrl) },
+                hint = I18n.t("${matches.size} matching channels across all playlists"),
                 iconRes = R.drawable.ic_quick_ch,
             ) { pick ->
-                val match = matches.getOrNull(pick) ?: return@showGlassMenu
-                lifecycleScope.launch { channelSurfController?.switch(match.index) }
+                val match = matches.getOrNull(pick)?.value ?: return@showGlassMenu
+                val here = channelSurfController?.channels
+                    ?.indexOfFirst { it.url == match.url } ?: -1
+                if (here >= 0) {
+                    lifecycleScope.launch { channelSurfController?.switch(here) }
+                } else {
+                    switchToQuickChannel(match, channels)
+                }
             }
         }
+    }
+
+    /** Replaces the current stream in this player with [channel], which may
+     *  belong to another playlist. The player is singleTop, so starting another
+     *  PlayerActivity would land on this instance; the sources are swapped in
+     *  place instead. */
+    private fun switchToQuickChannel(
+        channel: com.hikari.app.data.IptvChannel,
+        all: List<com.hikari.app.data.IptvChannel>,
+    ) {
+        val isM3u8 = channel.url.endsWith(".m3u8", ignoreCase = true)
+        val isMpd = channel.url.substringBefore('?').contains(".mpd", ignoreCase = true)
+        val headers = org.json.JSONObject().apply {
+            channel.headers.forEach { (k, v) -> put(k, v) }
+            channel.cookie?.takeIf { it.isNotBlank() }?.let { put("Cookie", it) }
+        }
+        val source = org.json.JSONObject()
+            .put("name", channel.name)
+            .put("url", channel.url)
+            .put("headers", headers)
+            .put("isM3u8", isM3u8)
+            .put("isMpd", isMpd)
+            .put("provider", "IPTV")
+            .put("providerId", channel.providerId)
+            .put("isTorrent", false)
+        val sourcesJson = org.json.JSONArray().put(source)
+        val surf = (all.filter { it.providerId == channel.providerId }.ifEmpty { all }).take(250)
+        val surfJson = org.json.JSONArray().apply {
+            surf.forEach { ch ->
+                put(
+                    org.json.JSONObject()
+                        .put("name", ch.name)
+                        .put("url", ch.url)
+                        .put("logo", ch.artwork.orEmpty())
+                        .put("thumbnail", ch.artwork.orEmpty())
+                        .put("group", ch.group)
+                        .put("providerId", ch.providerId),
+                )
+            }
+        }
+        val next = android.content.Intent(this, PlayerActivity::class.java).apply {
+            putExtra("title", channel.name)
+            putExtra("sources", sourcesJson.toString())
+            putExtra("askServer", false)
+            putExtra("histProviderId", channel.providerId)
+            putExtra("histTitle", channel.name)
+            putExtra("channelSurfChannels", surfJson.toString())
+            channel.artwork?.takeIf { it.isNotBlank() }?.let {
+                putExtra("titleLogo", it)
+                putExtra("bannerBackdrop", it)
+                putExtra("histPoster", it)
+            }
+        }
+        setIntent(next)
+        sources = parseIntentSources()
+        currentIndex = 0
+        refreshChannelSurfController(next)
+        updateTitleForChannel(channel)
+        showLoadingCover()
+        playSource(0)
     }
 
     /** The Episodes pill: lists the title's episodes (fetched from the provideres (fetched from the provider

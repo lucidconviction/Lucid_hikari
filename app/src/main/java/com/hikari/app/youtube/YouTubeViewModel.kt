@@ -207,6 +207,12 @@ class YouTubeViewModel (private val context: Context) : ViewModel() {
                 val liked = YouTubeLibrary.entries(context, YouTubeLibrary.Shelf.LIKED).map(::libraryItem)
                 buildList {
                     if (later.isNotEmpty()) add(YtRow("Watch later", later))
+                    // User-made playlists sit under Watch later, in the same
+                    // You page, so a video can be filed without an account.
+                    YouTubeLibrary.playlists(context).forEach { playlist ->
+                        val items = playlist.videos.map(::libraryItem)
+                        if (items.isNotEmpty()) add(YtRow(playlist.title, items))
+                    }
                     if (liked.isNotEmpty()) add(YtRow("Liked videos", liked))
                 }
             }

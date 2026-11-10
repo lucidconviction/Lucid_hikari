@@ -12,6 +12,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -65,6 +66,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -83,6 +85,9 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.zIndex
+import kotlinx.coroutines.delay
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -377,7 +382,7 @@ object Routes {
     /** F4 — opens the multi-view screen with the given sessions and layout. */
     fun multiView(sessions: List<com.hikari.app.data.MultiViewSession>, layout: String = ""): String {
         val encoded = Uri.encode(com.hikari.app.data.MultiViewSession.encode(sessions))
-        val layoutArg = if (layout.isBlank()) "GRID_2x3" else Uri.encode(layout)
+        val layoutArg = if (layout.isBlank()) "" else Uri.encode(layout)
         return "multi-view?sessions=$encoded&layout=$layoutArg"
     }
     /**
@@ -1225,6 +1230,20 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
     // connection sits on the Box that wraps the whole app, so every screen's
     // list feeds it without a single screen having to pass its scroll state up.
     var barExpanded by remember { mutableStateOf(true) }
+    // MultiView is a wall of video: its taskbar and quick-nav disc fade away
+    // after a few seconds and come back on the next touch, so nothing sits over
+    // the streams unless the user is actually reaching for it.
+    var mvBarVisible by remember { mutableStateOf(true) }
+    var mvTouches by remember { mutableIntStateOf(0) }
+    LaunchedEffect(tabRoute, mvTouches) {
+        if (tabRoute != Routes.MULTI_VIEW) {
+            mvBarVisible = true
+            return@LaunchedEffect
+        }
+        mvBarVisible = true
+        delay(4_000L)
+        mvBarVisible = false
+    }
     val barScroll = remember {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
@@ -1372,7 +1391,19 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
         }
     }
 
-    Box(Modifier.fillMaxSize().nestedScroll(barScroll).padding(tvEdge).then(mouseDrive).then(tvRepeatGuard)) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .nestedScroll(barScroll)
+            .padding(tvEdge)
+            .pointerInput(tabRoute) {
+                if (tabRoute == Routes.MULTI_VIEW) {
+                    detectTapGestures(onTap = { mvTouches++ })
+                }
+            }
+            .then(mouseDrive)
+            .then(tvRepeatGuard)
+    ) {
         // The page backdrop, drawn here rather than by the Scaffold so the
         // translucent cards have something to be glass OVER (the Scaffold below
         // is transparent for exactly that reason).
@@ -1592,14 +1623,15 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
                 route = Routes.MULTI_VIEW,
                 arguments = listOf(
                     navArgument("sessions") { type = NavType.StringType },
-                    navArgument("layout") { type = NavType.StringType; defaultValue = "GRID_2x3" },
+                    navArgument("layout") { type = NavType.StringType; defaultValue = "" },
                 )
             ) { entry ->
                 val sessions = com.hikari.app.data.MultiViewSession.parse(
                     entry.arguments?.getString("sessions")
                 )
-                val layoutKey = entry.arguments?.getString("layout") ?: "GRID_2x3"
-                val layout = com.hikari.app.ui.screens.MultiViewLayout.fromKey(layoutKey)
+                val layoutKey = entry.arguments?.getString("layout").orEmpty()
+                val layout = layoutKey.takeIf { it.isNotBlank() }
+                    ?.let { com.hikari.app.ui.screens.MultiViewLayout.fromKey(it) }
                 MultiViewScreen(
                     sessions = sessions,
                     layout = layout,
@@ -1802,7 +1834,7 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
         // comment on the Scaffold). It is the last child of the Box, so it sits
         // on top of every screen, and it is transparent wherever the pill is not
         // — nothing around it is painted.
-        if (showBar && !isTv) {
+        if (showBar && !isTv && (tabRoute != Routes.MULTI_VIEW || mvBarVisible)) {
             AppBottomBar(
                 currentRoute = tabRoute,
                 hidden = visibleTabs,
@@ -1873,6 +1905,7 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
+                    .zIndex(20f)
                     .padding(end = 16.dp, bottom = if (showBar) 80.dp else 16.dp)
                     .size(46.dp)
                     .clip(CircleShape)

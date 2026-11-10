@@ -1,3 +1,18 @@
+## 0.12.1
+
+**10 November 2026**
+
+### Fixes and player updates
+
+- Lucid Hikari now installs alongside the original Hikari: the app package is its own, so neither replaces the other.
+- Channel Wall's Add Channel now uses the same display name, search aliases and region menu as Quick Channels, with the stream URL and optional logo alongside them.
+- MultiView's taskbar and quick-nav button now fade away after a few seconds and return when the screen is touched.
+- MultiView opens in Auto layout again, choosing the matching default arrangement for however many windows are open.
+- YouTube's player menu now lists your local playlists under Save to Watch later, with a Make a new playlist action.
+- YouTube player has new Info and Comments panels beside More Videos. Comments show the current video's thread and open a second layer of replies when a comment is tapped.
+- Quick Ch in the IPTV player now searches every installed playlist, not only the one currently playing, and switches in place when the chosen channel belongs to another playlist.
+- The player's bottom controls have extra margin above the screen edge.
+
 ## 0.12.0
 
 **9 November 2026**

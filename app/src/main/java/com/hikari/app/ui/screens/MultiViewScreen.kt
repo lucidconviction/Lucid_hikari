@@ -120,7 +120,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 @Composable
 fun MultiViewScreen(
     sessions: List<MultiViewSession>,
-    layout: MultiViewLayout = MultiViewLayout.V6_2x3,
+    layout: MultiViewLayout? = null,
     onBack: () -> Unit,
     nav: NavHostController? = null,
 ) {
@@ -144,7 +144,10 @@ fun MultiViewScreen(
                 MultiWindowStore.addToSlot(s.name, s.url, slotIndex = i)
             }
         }
-        MultiWindowStore.setLayout(layout)
+        // No explicit layout = Auto: resolveLayout then picks the default
+        // arrangement for however many windows are open (1, 2, 3 … 9), instead
+        // of locking the page to a six-window grid on every entry.
+        if (layout != null) MultiWindowStore.setLayout(layout) else MultiWindowStore.setAutoLayout()
     }
 
     DisposableEffect(Unit) {

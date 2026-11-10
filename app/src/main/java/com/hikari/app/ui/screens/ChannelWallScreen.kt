@@ -114,6 +114,11 @@ private data class WallCustomChannel(
     val name: String,
     val url: String,
     val logo: String?,
+    /** Same kind of search words the Quick Channels menu keeps: handy when
+     *  the tile is matched against playlist names later. */
+    val aliases: List<String> = emptyList(),
+    /** The Quick Channels-style region group, shown on the tile. */
+    val region: String = "Custom",
 )
 
 private fun parseCustomChannels(raw: String?): List<WallCustomChannel> {
@@ -125,11 +130,15 @@ private fun parseCustomChannels(raw: String?): List<WallCustomChannel> {
         val name = o.optString("name")
         val url = o.optString("url")
         if (name.isBlank() || url.isBlank()) continue
+        val aliases = o.optString("aliases").split(",")
+            .map { it.trim() }.filter { it.isNotEmpty() }
         out += WallCustomChannel(
             id = o.optString("id").ifBlank { "custom_$i" },
             name = name,
             url = url,
             logo = o.optString("logo").takeIf { it.isNotBlank() },
+            aliases = aliases,
+            region = o.optString("region").ifBlank { "Custom" },
         )
     }
     return out
@@ -143,7 +152,9 @@ private fun encodeCustomChannels(list: List<WallCustomChannel>): String =
                     .put("id", channel.id)
                     .put("name", channel.name)
                     .put("url", channel.url)
-                    .put("logo", channel.logo.orEmpty()),
+                    .put("logo", channel.logo.orEmpty())
+                    .put("aliases", channel.aliases.joinToString(", "))
+                    .put("region", channel.region),
             )
         }
     }.toString()
@@ -286,6 +297,9 @@ fun ChannelWallScreen(nav: NavHostController) {
             IconButton(onClick = { searchOpen = !searchOpen; if (!searchOpen) query = "" }) {
                 Icon(Icons.Filled.Search, contentDescription = "Search channels", tint = Color.White.copy(alpha = 0.85f))
             }
+            IconButton(onClick = { showAddCustom = true }) {
+                Icon(Icons.Filled.Add, contentDescription = "Add a channel", tint = Color.White.copy(alpha = 0.85f))
+            }
             IconButton(onClick = { reloadKey++ }) {
                 if (channelsLoading) {
                     CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
@@ -420,13 +434,15 @@ fun ChannelWallScreen(nav: NavHostController) {
 
     if (showAddCustom) {
         AddCustomChannelDialog(
-            onAdd = { name, url, logo ->
+            onAdd = { name, url, aliases, region, logo ->
                 saveCustomChannels(
                     customChannels + WallCustomChannel(
                         id = "custom_" + System.currentTimeMillis(),
                         name = name,
                         url = url,
                         logo = logo.takeIf { it.isNotBlank() },
+                        aliases = aliases,
+                        region = region,
                     ),
                 )
                 showAddCustom = false
@@ -933,12 +949,14 @@ private fun WallMatchSheet(
 
 @Composable
 private fun AddCustomChannelDialog(
-    onAdd: (name: String, url: String, logo: String) -> Unit,
+    onAdd: (name: String, url: String, aliases: List<String>, region: String, logo: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var name by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("") }
     var logo by remember { mutableStateOf("") }
+    var aliasText by remember { mutableStateOf("") }
+    var region by remember { mutableStateOf("Custom") }
     var error by remember { mutableStateOf<String?>(null) }
     fun normalized(): String? {
         var value = url.trim()
@@ -952,21 +970,46 @@ private fun AddCustomChannelDialog(
     }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Add custom channel") },
+        title = { Text("Add channel") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    "Add a stream of your own to the wall. It plays in Hikari's player like any playlist channel.",
-                    color = Color.White.copy(alpha = 0.55f),
-                    fontSize = 11.sp,
-                )
+                // Same fields and wording as Quick Channels → Add channel:
+                // display name, search aliases and a region group, plus the
+                // stream details a wall tile needs to actually play.
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Channel name") },
+                    label = { Text("Display name") },
+                    placeholder = { Text("e.g. My Channel") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                OutlinedTextField(
+                    value = aliasText,
+                    onValueChange = { aliasText = it },
+                    label = { Text("Search aliases") },
+                    placeholder = { Text("e.g. CNN, ESPN") },
+                    singleLine = false,
+                    maxLines = 3,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "Region",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 11.sp,
+                )
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(
+                        listOf("All", "US", "UK", "CA", "Premium", "Sports", "News", "Custom"),
+                        key = { it },
+                    ) { option ->
+                        FilterChip(
+                            selected = region == option,
+                            onClick = { region = option },
+                            label = { Text(option) },
+                        )
+                    }
+                }
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
@@ -995,7 +1038,16 @@ private fun AddCustomChannelDialog(
                     } else if (address == null) {
                         error = "Enter a valid stream address."
                     } else {
-                        onAdd(name.trim(), address, logo.trim())
+                        val aliases = aliasText.split(",")
+                            .map { it.trim() }
+                            .filter { it.isNotEmpty() }
+                        onAdd(
+                            name.trim(),
+                            address,
+                            aliases.ifEmpty { listOf(name.trim()) },
+                            region,
+                            logo.trim(),
+                        )
                     }
                 },
             ) { Text("Add") }
