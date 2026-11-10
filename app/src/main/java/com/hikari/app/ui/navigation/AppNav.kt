@@ -55,12 +55,14 @@ import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -1864,7 +1866,59 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
         // First-visit tours, one per page. The overlay sits above the page and
         // the taskbar, and marks itself seen the moment it is dismissed — the
         // Settings → About & Updates card can replay any of them afterwards.
-        FirstVisitTutorial(route = currentRoute)
+        //
+        // The package-change notice comes first: 0.12.1 installs beside the old
+        // Lucid Hikari, and that needs saying before a tutorial starts.
+        val migrationPrefs = remember { context.getSharedPreferences("install_notice", 0) }
+        var showMigrationNotice by remember {
+            mutableStateOf(
+                !migrationPrefs.getBoolean("new_package_0121_seen", false) &&
+                    runCatching {
+                        context.packageManager.getPackageInfo("com.hikari.app", 0)
+                    }.isSuccess
+            )
+        }
+        if (showMigrationNotice) {
+            AlertDialog(
+                onDismissRequest = {
+                    showMigrationNotice = false
+                    migrationPrefs.edit().putBoolean("new_package_0121_seen", true).apply()
+                },
+                title = { Text("Welcome to the new Lucid Hikari") },
+                text = {
+                    Text(
+                        "This update now has its own app package, so it installed " +
+                            "alongside your old Lucid Hikari instead of replacing it. " +
+                            "Set this one up at your own pace, then uninstall the old " +
+                            "app when you are ready. Extensions and settings are not " +
+                            "copied across automatically."
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showMigrationNotice = false
+                        migrationPrefs.edit().putBoolean("new_package_0121_seen", true).apply()
+                        runCatching {
+                            context.startActivity(
+                                android.content.Intent(
+                                    android.content.Intent.ACTION_DELETE,
+                                    android.net.Uri.parse("package:com.hikari.app"),
+                                ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        }
+                    }) { Text("Uninstall old app") }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showMigrationNotice = false
+                        migrationPrefs.edit().putBoolean("new_package_0121_seen", true).apply()
+                    }) { Text("Got it") }
+                },
+            )
+        }
+        if (!showMigrationNotice) {
+            FirstVisitTutorial(route = currentRoute)
+        }
 
         // GitHub update check: once a day, quietly, only when there is a newer
         // release. Settings → About & Updates owns the switch and the manual
