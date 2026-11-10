@@ -58,6 +58,22 @@ Lucid Hikari is a fork of **Hikari** by **Hikari Devs**. The original project an
 
 ---
 
+## Screenshots
+
+| Home & YouTube | MultiView | Web Apps |
+|:---:|:---:|:---:|
+| ![YouTube Home](docs/screenshots/youtube.jpg) | ![MultiView](docs/screenshots/multiview.jpg) | ![Web Apps Mini-Player](docs/screenshots/web-apps-miniplayer.jpg) |
+
+| Live TV & IPTV | Sports | Settings |
+|:---:|:---:|:---:|
+| ![IPTV](docs/screenshots/iptv.jpg) | ![Sports](docs/screenshots/sports.jpg) | ![Settings](docs/screenshots/settings.jpg) |
+
+| Extensions | Web Apps Grid | Stats |
+|:---:|:---:|:---:|
+| ![Extensions](docs/screenshots/extensions.jpg) | ![Web Apps](docs/screenshots/web-apps-grid.jpg) | ![Stats](docs/screenshots/stats.jpg) |
+
+---
+
 ## Install
 
 Download the latest signed APK from the **releases page**:
