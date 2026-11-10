@@ -99,6 +99,7 @@ import com.hikari.app.data.StreamValidationStore
 import com.hikari.app.player.PlayerPool
 import com.hikari.app.providers.IptvProvider
 import com.hikari.app.providers.ContentProvider
+import com.hikari.app.ui.navigation.LocalTaskbarInset
 import com.hikari.app.ui.navigation.Routes
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -152,7 +153,15 @@ fun MultiViewScreen(
 
     DisposableEffect(Unit) {
         onDispose {
-            pool.releaseAll(); MultiWindowStore.clear()
+            // Leaving the page pauses the wall but keeps it: streams, slots and
+            // playback positions stay in MultiWindowStore, so coming back resumes
+            // exactly what the user left open.
+            for (s in MultiWindowStore.allStreams) {
+                val p = pool.get(s.slotIndex)
+                MultiWindowStore.setPosition(s.id, p.currentPosition)
+                p.pause()
+            }
+            pool.releaseAll()
             StreamValidationStore.save(cacheDir)
             MultiWindowStore.saveLayouts(cacheDir, "Last session")
         }
@@ -424,31 +433,6 @@ private fun MultiViewContent(
         }
 
         Column(Modifier.fillMaxSize()) {
-            // Header
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.Filled.ArrowBack, contentDescription = "Back", tint = MaterialTheme.colorScheme.onSurface)
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        Modifier.clip(RoundedCornerShape(9999.dp)).background(ErrorContainerAlpha)
-                            .border(0.5.dp, ErrorBorderAlpha, RoundedCornerShape(9999.dp))
-                            .clickable { savedLayoutsSheetOpen = true }
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Box(Modifier.size(6.dp).clip(CircleShape).background(ErrorColor))
-                            Text("${streams.size} ACTIVE", color = ErrorColor, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
-                        }
-                    }
-                    Spacer(Modifier.width(8.dp))
-                }
-            }
-
             // Pill row
             Row(
                 modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 2.dp),
@@ -580,7 +564,12 @@ private fun MultiViewContent(
             }
 
             // Grid
-            Column(modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 12.dp)
+                    .padding(bottom = LocalTaskbarInset.current + 12.dp),
+            ) {
                 var gridPos = 0
                 for (row in 0 until totalRows) {
                     Row(modifier = Modifier.weight(1f)) {
@@ -718,6 +707,7 @@ private fun VideoCell(
             it.playWhenReady = !MultiWindowStore.isPaused(stream.id)
             it.videoScalingMode = if (MultiWindowStore.getResizeMode(stream.id) == RESIZE_ZOOM)
                 C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING else C.VIDEO_SCALING_MODE_SCALE_TO_FIT
+            it.seekTo(MultiWindowStore.position(stream.id))
             it.prepare()
         }
     }
@@ -732,7 +722,12 @@ private fun VideoCell(
         }
     }
 
-    DisposableEffect(stream.id) { onDispose { /* player stays in pool */ } }
+    DisposableEffect(stream.id) {
+        onDispose {
+            runCatching { MultiWindowStore.setPosition(stream.id, player.currentPosition) }
+            /* player stays in pool */
+        }
+    }
 
     var isAudioActive by remember { mutableStateOf(MultiWindowStore.getVolume(stream.id) > 0f) }
     var isPlaying by remember(stream.id) { mutableStateOf(!MultiWindowStore.isPaused(stream.id)) }
@@ -1318,23 +1313,15 @@ fun QuickChannelOverlay(
             } else {
                 // Probe each URL with a short HTTP HEAD/GET — use StreamValidationStore
                 // so results persist across sessions.
+                // Validate every match, not just the first page of results.
+                // validateChannelStatuses() probes with a small concurrency cap
+                // and updates the persistent alive/dead store.
                 val probeResults = withContext(Dispatchers.IO) {
-                    val now = System.currentTimeMillis()
-                    val toProbe = matches.map { it.url }.filter { url ->
-                        !StreamValidationStore.isKnownAliveSync(url) &&
-                            !StreamValidationStore.isKnownDeadSync(url)
-                    }.take(30) // cap to avoid flooding
-                    val results = mutableMapOf<String, Boolean>()
-                    for (url in toProbe) {
-                        val ok = try {
-                            com.hikari.app.net.Http.get(url, mapOf("User-Agent" to com.hikari.app.net.Http.IPTV_UA)).use { resp ->
-                                resp.isSuccessful || resp.code == 301 || resp.code == 302
-                            }
-                        } catch (_: Exception) { false }
-                        results[url] = ok
-                        if (ok) StreamValidationStore.markAlive(url) else StreamValidationStore.markDead(setOf(url))
+                    val toProbe = matches.filter { ch ->
+                        !StreamValidationStore.isKnownAliveSync(ch.url) &&
+                            !StreamValidationStore.isKnownDeadSync(ch.url)
                     }
-                    // Merge with cached results for all matched channels
+                    val results = validateChannelStatuses(toProbe)
                     matches.associate { ch ->
                         ch.url to (results[ch.url]
                             ?: StreamValidationStore.isKnownAliveSync(ch.url))

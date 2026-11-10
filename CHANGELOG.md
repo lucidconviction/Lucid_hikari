@@ -11,6 +11,8 @@
 - YouTube's player menu now lists your local playlists under Save to Watch later, with a Make a new playlist action.
 - YouTube player has new Info and Comments panels beside More Videos. Comments show the current video's thread and open a second layer of replies when a comment is tapped.
 - Quick Ch in the IPTV player now searches every installed playlist, not only the one currently playing, and switches in place when the chosen channel belongs to another playlist.
+- Quick Channel results validate every matched channel, not only the first 30.
+- MultiView keeps its wall when you leave the page: streams pause, keep their position, and resume when you come back. The page also has a bottom margin, no top-left back button and no active-count pill.
 - The player's bottom controls have extra margin above the screen edge.
 
 ## 0.12.0

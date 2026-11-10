@@ -3149,7 +3149,7 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                 qcMatches = matches
                 // Probe only the rows the sheet actually shows; the rest stay
                 // unprobed instead of delaying the sheet on hundreds of URLs.
-                validateChannelStatuses(matches.take(30)) { url, isAlive ->
+                validateChannelStatuses(matches) { url, isAlive ->
                     aliveByUrl = aliveByUrl + (url to isAlive)
                 }
             } finally {
@@ -3199,7 +3199,7 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
         qcMatches = matches
         qcLoading = false
         // Real network stream probe — only the sheet's first page, progressive.
-        validateChannelStatuses(matches.take(30)) { url, isAlive ->
+        validateChannelStatuses(matches) { url, isAlive ->
             aliveByUrl = aliveByUrl + (url to isAlive)
         }
     }
@@ -3859,7 +3859,7 @@ private fun ChannelListItem(
  * Uses the app's own StreamProbe so the same connection pool and DNS cache are shared.
  * Calls [onProgress] as each URL finishes so the UI can update live.
  */
-private suspend fun validateChannelStatuses(
+internal suspend fun validateChannelStatuses(
     channels: List<IptvChannel>,
     concurrent: Int = 5,
     onProgress: (String, Boolean) -> Unit = { _, _ -> },

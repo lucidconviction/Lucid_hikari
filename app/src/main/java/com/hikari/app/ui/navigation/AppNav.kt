@@ -1954,7 +1954,7 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
         // the page leaves the page alone.
         val mwStreams = MultiWindowStore.allStreams
         val isOnMultiView = tabRoute == Routes.MULTI_VIEW
-        if (mwStreams.isNotEmpty()) {
+        if (mwStreams.isNotEmpty() && tabRoute == Routes.MULTI_VIEW) {
             val mwCount = mwStreams.size
             Box(
                 modifier = Modifier

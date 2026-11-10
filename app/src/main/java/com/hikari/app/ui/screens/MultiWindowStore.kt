@@ -38,6 +38,9 @@ object MultiWindowStore {
     private var idCounter = 0L
     private val volumes = mutableStateMapOf<String, Float>()
     private val paused = mutableStateMapOf<String, Boolean>()
+    /** Last known playback position per window, so leaving MultiView pauses
+     *  the wall without losing where each channel was. */
+    private val positions = mutableMapOf<String, Long>()
     private var _audioFocusId: String? = null
     private val playerIndexById = mutableMapOf<String, Int>()
     private val resizeModes = mutableStateMapOf<String, Int>()
@@ -249,6 +252,14 @@ object MultiWindowStore {
     fun getVolume(streamId: String): Float = volumes[streamId] ?: 0f
     fun setPaused(streamId: String, isPaused: Boolean) { paused[streamId] = isPaused }
     fun isPaused(streamId: String): Boolean = paused[streamId] ?: false
+
+    /** Saves where a window was when the page closed, so the next visit resumes
+     *  the channel instead of starting it from zero. */
+    fun setPosition(streamId: String, positionMs: Long) {
+        if (positionMs > 0L) positions[streamId] = positionMs
+    }
+
+    fun position(streamId: String): Long = positions[streamId] ?: 0L
     fun setAudioFocus(streamId: String) { _audioFocusId = streamId }
     fun isAudioFocused(streamId: String): Boolean = _audioFocusId == streamId
     fun storePlayerIndex(streamId: String, index: Int) { playerIndexById[streamId] = index }
@@ -279,7 +290,7 @@ object MultiWindowStore {
     }
 
     fun clear() {
-        streams.clear(); volumes.clear(); paused.clear(); playerIndexById.clear(); resizeModes.clear()
+        streams.clear(); volumes.clear(); paused.clear(); positions.clear(); playerIndexById.clear(); resizeModes.clear()
         slotPlaylists.clear(); slotPlaylistIdx.clear()
         _audioFocusId = null; _currentLayout.value = null; _layoutLocked.value = false
     }
