@@ -86,6 +86,14 @@ Lucid Hikari is a fork of **Hikari** by **Hikari Devs**. The original project an
 |:---:|:---:|
 | ![Anime Calendar](docs/screenshots/anime-calendar.jpg) | ![Anime Calendar 2](docs/screenshots/anime-calendar-2.jpg) |
 
+| Home | Home (banner) | Library |
+|:---:|:---:|:---:|
+| ![Home](docs/screenshots/home.jpg) | ![Home Banner](docs/screenshots/home-2.jpg) | ![Library](docs/screenshots/library.jpg) |
+
+| Search | Search Filters |
+|:---:|:---:|
+| ![Search](docs/screenshots/search.jpg) | ![Search Filters](docs/screenshots/search.jpg) |
+
 ---
 
 ## Install
