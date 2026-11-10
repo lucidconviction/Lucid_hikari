@@ -60,17 +60,23 @@ Lucid Hikari is a fork of **Hikari** by **Hikari Devs**. The original project an
 
 ## Screenshots
 
-| Home & YouTube | MultiView | Web Apps |
-|:---:|:---:|:---:|
-| ![YouTube Home](docs/screenshots/youtube.jpg) | ![MultiView](docs/screenshots/multiview.jpg) | ![Web Apps Mini-Player](docs/screenshots/web-apps-miniplayer.jpg) |
+### Core Experience
 
-| Live TV & IPTV | Sports | Settings |
+| Home & YouTube | MultiView | Web Apps Mini-Player |
 |:---:|:---:|:---:|
-| ![IPTV](docs/screenshots/iptv.jpg) | ![Sports](docs/screenshots/sports.jpg) | ![Settings](docs/screenshots/settings.jpg) |
+| ![YouTube](docs/screenshots/youtube.jpg) | ![MultiView](docs/screenshots/multiview.jpg) | ![Web Apps Mini-Player](docs/screenshots/web-apps-miniplayer.jpg) |
 
-| Extensions | Web Apps Grid | Stats |
+| Live TV & IPTV | Sports — Leagues & Soccer | Sports — Combat |
 |:---:|:---:|:---:|
-| ![Extensions](docs/screenshots/extensions.jpg) | ![Web Apps](docs/screenshots/web-apps-grid.jpg) | ![Stats](docs/screenshots/stats.jpg) |
+| ![IPTV](docs/screenshots/iptv.jpg) | ![Sports](docs/screenshots/sports.jpg) | ![Sports Combat](docs/screenshots/sports-2.jpg) |
+
+| Web Apps Grid | Web Apps Grid (more) | Settings |
+|:---:|:---:|:---:|
+| ![Web Apps Grid](docs/screenshots/web-apps-grid.jpg) | ![Web Apps Grid 2](docs/screenshots/web-apps-grid-2.jpg) | ![Settings](docs/screenshots/settings.jpg) |
+
+| Extensions & Repos | Stats Dashboard | IPTV Playlists |
+|:---:|:---:|:---:|
+| ![Extensions](docs/screenshots/extensions.jpg) | ![Stats](docs/screenshots/stats.jpg) | ![IPTV Playlists](docs/screenshots/iptv-2.jpg) |
 
 ---
 
