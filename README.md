@@ -60,9 +60,9 @@ Lucid Hikari is a fork of **Hikari** by **Hikari Devs**. The original project an
 
 ## Screenshots
 
-| Home | YouTube Player | MultiView | IPTV Dashboard |
-|:---:|:---:|:---:|:---:|
-| ![Home](docs/screenshots/home.jpg) | ![YouTube](docs/screenshots/youtube.jpg) | ![MultiView](docs/screenshots/multiview.jpg) | ![IPTV](docs/screenshots/iptv.jpg) |
+| Home | YouTube Player | MultiView (Phone) | MultiView (Foldable/Tablet) | IPTV Dashboard |
+|:---:|:---:|:---:|:---:|:---:|
+| ![Home](docs/screenshots/home.jpg) | ![YouTube](docs/screenshots/youtube.jpg) | ![MultiView](docs/screenshots/multiview.jpg) | ![MultiView 9-Grid](docs/screenshots/multiview-9grid.jpg) | ![IPTV](docs/screenshots/iptv.jpg) |
 
 | Sports — Leagues | Sports Scores | Web Apps Grid | Web Apps Mini-Player |
 |:---:|:---:|:---:|:---:|
