@@ -514,3 +514,10 @@
 -dontwarn com.liskovsoft.**
 -keep class com.jayway.jsonpath.** { *; }
 -dontwarn com.jayway.jsonpath.**
+
+## ---- J2V8 (YouTube's JavaScript engine) ------------------------------------
+# System.loadLibrary() instantiates V8Inspector by name. R8 cannot see that
+# reflective reference, so shrinking removed the class and the release app
+# aborted with ClassNotFoundException on the first YouTube lookup.
+-keep class com.eclipsesource.v8.** { *; }
+-dontwarn com.eclipsesource.v8.**
