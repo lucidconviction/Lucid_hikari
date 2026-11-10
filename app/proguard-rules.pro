@@ -481,3 +481,22 @@
 # two missing classes rather than keeping dead reflection code.
 -dontwarn sun.net.spi.nameservice.NameService
 -dontwarn sun.net.spi.nameservice.NameServiceDescriptor
+
+## ---- Retrofit service interfaces -------------------------------------------
+# R8 full mode sees no implementation of a Retrofit interface (it is a runtime
+# Proxy) and can replace the interface with null, which surfaces as
+# "Unable to create call adapter for interface retrofit2.Call" when the
+# YouTube engine builds AppApi. Keep every interface that declares an HTTP
+# method, plus Retrofit's reflection attributes.
+-keepattributes Signature, InnerClasses, EnclosingMethod
+-keepattributes RuntimeVisibleAnnotations, RuntimeVisibleParameterAnnotations
+-keepclassmembers,allowshrinking,allowobfuscation interface * {
+    @retrofit2.http.* <methods>;
+}
+-if interface * { @retrofit2.http.* <methods>; }
+-keep,allowobfuscation interface <1>
+-dontwarn org.codehaus.mojo.animal_sniffer.IgnoreJRERequirement
+-dontwarn javax.annotation.**
+-dontwarn kotlin.Unit
+-dontwarn retrofit2.KotlinExtensions
+-dontwarn retrofit2.KotlinExtensions$*
