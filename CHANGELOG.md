@@ -1,3 +1,16 @@
+## 0.12.2
+
+**10 November 2026**
+
+### Music crossfade and IPTV polish
+
+- **20-second crossfade** in the Music player: the next song or music video starts quietly 20 seconds before the current one ends and fades in as the current one fades out.
+- **IPTV playlists stay loaded** when you leave Live TV or refresh providers, so the tab no longer re-downloads every playlist.
+- **Artwork everywhere**: each playlist tile now has a thumbnail. Hikari uses the playlist's own channel icon/thumbnail first and falls back to a themed generated tile.
+- **Portal EPG** is read from installed Xtream portals as well as saved accounts and shown in the On now strip.
+- **Channel Wall Add channel** now needs only a display name and search aliases. The region picker is gone, and the stream URL is optional — leave it blank and the tile searches every playlist by its aliases.
+- **YouTube player panels**: Info and Comments now match the More Videos width and are easier to read over video.
+
 ## 0.12.1
 
 **10 November 2026**
