@@ -638,8 +638,6 @@ addStream = false
 
         // Xtream accounts quick access row
         XtreamAccountRow(app = app)
-        // The panel's own guide: what is on right now, straight from XMLTV.
-        XtreamNowSection(app = app)
 
         // Portals found by the generator: visible here, added to the real
         // playlist list only on request (five full Xtream exports at once

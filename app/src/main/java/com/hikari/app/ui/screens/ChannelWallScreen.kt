@@ -43,6 +43,8 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -107,6 +109,33 @@ import org.json.JSONObject
 
 private const val WALL_PREFS = "channel_wall"
 private const val WALL_CUSTOM = "custom_channels"
+private const val WALL_COUNTRIES = "countries"
+
+private data class WallCountryOption(val label: String, val category: String)
+
+private val WallCountryOptions = listOf(
+    WallCountryOption("United States", "US"),
+    WallCountryOption("United Kingdom", "UK"),
+    WallCountryOption("Canada", "CA"),
+    WallCountryOption("Bay Area", "Bay Area"),
+    WallCountryOption("Arab", "Arabic"),
+    WallCountryOption("Africa", "Africa"),
+    WallCountryOption("Jamaica", "Jamaica"),
+    WallCountryOption("Italy", "Italy"),
+    WallCountryOption("France", "France"),
+    WallCountryOption("China", "China"),
+    WallCountryOption("Japan", "Japan"),
+    WallCountryOption("Cuba", "Cuba"),
+    WallCountryOption("India", "India"),
+    WallCountryOption("Brazil", "Brazil"),
+    WallCountryOption("Mexico", "Mexico"),
+    WallCountryOption("Germany", "Germany"),
+    WallCountryOption("Spain", "Spain"),
+    WallCountryOption("South Korea", "South Korea"),
+    WallCountryOption("Philippines", "Philippines"),
+)
+
+private val DefaultWallCountries = setOf("US", "UK", "CA", "France", "Italy", "Japan", "China", "Cuba", "Africa", "Jamaica")
 
 /** A stream the user added themselves to the Channel Wall. */
 private data class WallCustomChannel(
@@ -189,6 +218,16 @@ fun ChannelWallScreen(nav: NavHostController) {
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     var customChannels by remember { mutableStateOf<List<WallCustomChannel>>(emptyList()) }
     var showAddCustom by remember { mutableStateOf(false) }
+    var showCountries by remember { mutableStateOf(false) }
+    var selectedCountries by remember {
+        mutableStateOf(
+            prefs.getString(WALL_COUNTRIES, null)
+                ?.split(',')
+                ?.filter { it.isNotBlank() }
+                ?.toSet()
+                ?: DefaultWallCountries
+        )
+    }
     var selectedWall by remember { mutableStateOf<WallChannel?>(null) }
     var wallMatches by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
     var wallLoading by remember { mutableStateOf(false) }
@@ -199,6 +238,15 @@ fun ChannelWallScreen(nav: NavHostController) {
     var channelsLoading by remember { mutableStateOf(false) }
     var channelsJob by remember { mutableStateOf<Deferred<List<IptvChannel>>?>(null) }
     var reloadKey by remember { mutableIntStateOf(0) }
+
+    // Premium network artwork rotates on each visit instead of a fixed list.
+    val heroChannels = remember {
+        ChannelWallChannels.all
+            .filter { !it.backdropUrl.isNullOrBlank() }
+            .shuffled()
+            .take(8)
+            .ifEmpty { ChannelWallChannels.featured }
+    }
 
     fun toast(message: String) {
         Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
@@ -336,6 +384,9 @@ fun ChannelWallScreen(nav: NavHostController) {
             IconButton(onClick = { searchOpen = !searchOpen; if (!searchOpen) query = "" }) {
                 Icon(Icons.Filled.Search, contentDescription = "Search channels", tint = Color.White.copy(alpha = 0.85f))
             }
+            IconButton(onClick = { showCountries = true }) {
+                Icon(Icons.Filled.Public, contentDescription = "Wall countries", tint = Color.White.copy(alpha = 0.85f))
+            }
             IconButton(onClick = { showAddCustom = true }) {
                 Icon(Icons.Filled.Add, contentDescription = "Add a channel", tint = Color.White.copy(alpha = 0.85f))
             }
@@ -394,7 +445,7 @@ fun ChannelWallScreen(nav: NavHostController) {
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 item {
-                    WallHero(ChannelWallChannels.featured) { openWall(it) }
+                    WallHero(heroChannels) { openWall(it) }
                 }
                 item {
                     WallQuickRow(
@@ -431,12 +482,7 @@ fun ChannelWallScreen(nav: NavHostController) {
                     Triple("News", "CNN, BBC, Sky News and the world's newsrooms", "News"),
                     Triple("Discovery & Documentaries", "Nat Geo, Discovery, History and more", "Discovery"),
                     Triple("Kids & Family", "Cartoon Network, Disney, Nickelodeon and more", "Kids"),
-                    Triple("US Region", "US networks and local broadcasters", "US"),
-                    Triple("UK Region", "BBC, ITV, Sky and Channel 4", "UK"),
-                    Triple("Canada Region", "CBC, CTV, TSN and Sportsnet", "CA"),
-                    Triple("Bay Area", "The Bay Area's local stations", "Bay Area"),
                     Triple("International Sports", "Cricket, rugby, international feeds and more", "Int. Sports"),
-                    Triple("Arabic & Regional", "MBC, Rotana, OSN and the Arabic hubs", "Arabic"),
                     Triple("More Sports", "The rest of the sports directory", "Sports"),
                 )
                 categories.forEach { (title, subtitle, category) ->
@@ -447,6 +493,21 @@ fun ChannelWallScreen(nav: NavHostController) {
                         }
                     }
                 }
+                WallCountryOptions
+                    .filter { it.category in selectedCountries }
+                    .forEach { country ->
+                        val channels = ChannelWallChannels.byCategory(country.category)
+                        if (channels.isNotEmpty()) {
+                            item(key = "country:${country.category}") {
+                                WallSection(
+                                    country.label,
+                                    "Popular and premium networks from ${country.label}",
+                                    channels,
+                                    ::openWall,
+                                )
+                            }
+                        }
+                    }
             }
         }
     }
@@ -468,6 +529,53 @@ fun ChannelWallScreen(nav: NavHostController) {
             loading = customLoading,
             onDismiss = { customTarget = null },
             onPlay = { playChannel(it) },
+        )
+    }
+
+    if (showCountries) {
+        var draft by remember(showCountries) { mutableStateOf(selectedCountries) }
+        AlertDialog(
+            onDismissRequest = { showCountries = false },
+            title = { Text("Countries on the wall") },
+            text = {
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 460.dp)) {
+                    items(WallCountryOptions, key = { it.category }) { option ->
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clickable {
+                                    draft = if (option.category in draft) draft - option.category
+                                    else draft + option.category
+                                }
+                                .padding(vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                option.label,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontSize = 13.sp,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (option.category in draft) {
+                                Icon(
+                                    Icons.Filled.Check,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    selectedCountries = draft
+                    prefs.edit().putString(WALL_COUNTRIES, draft.joinToString(",")).apply()
+                    showCountries = false
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCountries = false }) { Text("Cancel") }
+            },
         )
     }
 
@@ -715,11 +823,14 @@ private fun WallFullBleedArt(channel: WallChannel, modifier: Modifier = Modifier
         ?: ChannelWallArt.byChannel[channel.id]
         ?: channel.iconUrl
     if (!art.isNullOrBlank()) {
-        AsyncImage(
+        SubcomposeAsyncImage(
             model = art,
             contentDescription = channel.name,
             modifier = modifier.fillMaxSize(),
             contentScale = ContentScale.Crop,
+            loading = { WallPromoFallback(channel.name, Modifier.fillMaxSize()) },
+            error = { WallPromoFallback(channel.name, Modifier.fillMaxSize()) },
+            success = { SubcomposeAsyncImageContent() },
         )
     } else {
         WallPromoFallback(channel.name, modifier.fillMaxSize())

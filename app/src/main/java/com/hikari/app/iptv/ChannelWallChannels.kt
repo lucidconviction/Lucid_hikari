@@ -19,7 +19,7 @@ data class WallChannel(
 )
 
 object ChannelWallChannels {
-    val all: List<WallChannel> = listOf(
+    private val curated: List<WallChannel> = listOf(
         WallChannel(
             id = "ufc",
             name = "UFC Fight Pass",
@@ -1671,6 +1671,8 @@ object ChannelWallChannels {
             backdropUrl = "https://raw.githubusercontent.com/tv-logo/tv-logos/main/countries/canada/super-channel-ca.png",
         ),
     )
+
+    val all: List<WallChannel> = curated + ChannelWallCountries.all
 
     val featuredIds = listOf(
         "espn_plus", "ncaa_cbb", "ufc", "bein_sports",

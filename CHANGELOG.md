@@ -1,3 +1,18 @@
+## 0.12.3
+
+**10 November 2026**
+
+### Channel Wall countries and channel-level guide
+
+- The IPTV page is clean again: the On now portal strip has moved off the tab.
+- EPG now appears on a live channel's own description page, with what is on now, its progress and what is next when the portal provides a guide.
+- Channel Wall has a country picker: choose as many countries as you like and their popular and premium networks appear as wall sections.
+- Added country collections for Africa, Jamaica, Italy, France, China, Japan, Cuba, India, Brazil, Mexico, Germany, Spain, South Korea, the Philippines, plus the existing US, UK, Canada and Arab selections.
+- Every country channel uses the same full-bleed artwork/fallback design as the rest of the wall.
+- Hero posters now rotate through random premium network artwork on each visit.
+
+## 0.12.2
+
 ## 0.12.2
 
 **10 November 2026**

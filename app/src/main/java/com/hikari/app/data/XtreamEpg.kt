@@ -96,6 +96,15 @@ object XtreamEpg {
         return XtreamCredentials.fromUrl(provider.config.url)
     }
 
+    /** Now/next for one playlist channel, or null when its panel has no guide
+     *  or the channel is not listed in it. */
+    suspend fun lookupForChannel(channel: IptvChannel): Pair<Programme?, Programme?>? {
+        val creds = credentialsFor(channel.providerId) ?: return null
+        val snapshot = load(creds) ?: return null
+        val hit = snapshot.lookup(channel)
+        return hit.takeIf { it.first != null || it.second != null }
+    }
+
     fun cached(creds: XtreamCredentials): Snapshot? {
         val hit = cache[key(creds)] ?: return null
         return hit.takeIf { System.currentTimeMillis() - it.fetchedAt < TTL_MS }

@@ -19,6 +19,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Image
@@ -1807,6 +1808,91 @@ private object AutoResumeGuard {
  * for the player's ChannelSurfController. Extracted to keep DetailScreen
  * under the ART verifier's method size limit (~9.8k lines).
  */
+/**
+ * The guide on a live channel's own page: a compact glass card that says what
+ * is on now (with progress) and what follows. Deliberately channel-level — the
+ * IPTV tab stays a clean list, and the guide appears exactly where the user is
+ * deciding whether to watch this channel.
+ */
+@Composable
+private fun ChannelEpgCard(
+    now: com.hikari.app.data.XtreamEpg.Programme?,
+    next: com.hikari.app.data.XtreamEpg.Programme?,
+    channelName: String,
+) {
+    val use24h = android.text.format.DateFormat.is24HourFormat(androidx.compose.ui.platform.LocalContext.current)
+    val timeFormat = remember(use24h) {
+        java.text.SimpleDateFormat(if (use24h) "HH:mm" else "h:mm a", java.util.Locale.getDefault())
+    }
+    val accent = MaterialTheme.colorScheme.primary
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.35f)),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+    ) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 13.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(7.dp).clip(CircleShape).background(Color(0xFF4CAF50)))
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    if (channelName.isBlank()) tr("On now") else "$channelName · On now",
+                    color = accent,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.6.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (now != null) {
+                Spacer(Modifier.height(7.dp))
+                Text(
+                    now.title,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "${timeFormat.format(java.util.Date(now.startMs))} – ${timeFormat.format(java.util.Date(now.stopMs))}",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 10.sp,
+                )
+                Spacer(Modifier.height(7.dp))
+                LinearProgressIndicator(
+                    progress = { now.progress },
+                    modifier = Modifier.fillMaxWidth().height(3.dp),
+                    color = accent,
+                    trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
+                )
+            }
+            if (next != null) {
+                Spacer(Modifier.height(9.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        tr("Next"),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp,
+                    )
+                    Spacer(Modifier.width(7.dp))
+                    Text(
+                        "${timeFormat.format(java.util.Date(next.startMs))}  ${next.title}",
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun IptvSiblingChannels(
     livePid: String,
@@ -1900,6 +1986,27 @@ fun DetailScreen(
 
     // IPTV sibling + full channel loading (extracted to reduce composable size)
     val (iptvSiblings, iptvAllChannels) = IptvSiblingChannels(livePid, mediaId, isIptvPage, providers)
+    // Channel-level guide: a live channel's own description page shows what is
+    // on now and next, straight from its Xtream panel's XMLTV feed.
+    val currentIptvChannel = remember(iptvAllChannels, mediaId) {
+        iptvAllChannels.firstOrNull { it.url == mediaId }
+    }
+    var channelEpgNow by remember(mediaId, livePid) {
+        mutableStateOf<com.hikari.app.data.XtreamEpg.Programme?>(null)
+    }
+    var channelEpgNext by remember(mediaId, livePid) {
+        mutableStateOf<com.hikari.app.data.XtreamEpg.Programme?>(null)
+    }
+    LaunchedEffect(currentIptvChannel?.url, currentIptvChannel?.providerId) {
+        channelEpgNow = null
+        channelEpgNext = null
+        val channel = currentIptvChannel ?: return@LaunchedEffect
+        val pair = runCatching {
+            com.hikari.app.data.XtreamEpg.lookupForChannel(channel)
+        }.getOrNull() ?: return@LaunchedEffect
+        channelEpgNow = pair.first
+        channelEpgNext = pair.second
+    }
 
     /**
      * The name the PLAYER's artwork card prints (and the detail page's own
@@ -6302,6 +6409,15 @@ fun DetailScreen(
                 // reference app answers that space with the playlist itself:
                 // more channels from the same list, same group first, so the
                 // next channel is one tap away.
+                if (isIptvPage && (channelEpgNow != null || channelEpgNext != null)) {
+                    item(key = "channel-epg") {
+                        ChannelEpgCard(
+                            now = channelEpgNow,
+                            next = channelEpgNext,
+                            channelName = currentIptvChannel?.name.orEmpty(),
+                        )
+                    }
+                }
                 if (isIptvPage && iptvSiblings.isNotEmpty()) {
                     item {
                         ShelfRow(
