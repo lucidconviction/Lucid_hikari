@@ -110,6 +110,7 @@ import org.json.JSONObject
 private const val WALL_PREFS = "channel_wall"
 private const val WALL_CUSTOM = "custom_channels"
 private const val WALL_COUNTRIES = "countries"
+private const val WALL_LISTS = "lists"
 
 private data class WallCountryOption(val label: String, val category: String)
 
@@ -133,9 +134,49 @@ private val WallCountryOptions = listOf(
     WallCountryOption("Spain", "Spain"),
     WallCountryOption("South Korea", "South Korea"),
     WallCountryOption("Philippines", "Philippines"),
+    WallCountryOption("Ireland", "Ireland"),
+    WallCountryOption("Australia", "Australia"),
+    WallCountryOption("New Zealand", "New Zealand"),
+    WallCountryOption("Portugal", "Portugal"),
+    WallCountryOption("Netherlands", "Netherlands"),
+    WallCountryOption("Sweden", "Sweden"),
+    WallCountryOption("Norway", "Norway"),
+    WallCountryOption("Denmark", "Denmark"),
+    WallCountryOption("Poland", "Poland"),
+    WallCountryOption("Turkey", "Turkey"),
+    WallCountryOption("Greece", "Greece"),
+    WallCountryOption("Pakistan", "Pakistan"),
+    WallCountryOption("Bangladesh", "Bangladesh"),
+    WallCountryOption("Indonesia", "Indonesia"),
+    WallCountryOption("Malaysia", "Malaysia"),
+    WallCountryOption("Thailand", "Thailand"),
+    WallCountryOption("Vietnam", "Vietnam"),
+    WallCountryOption("Singapore", "Singapore"),
+    WallCountryOption("UAE", "UAE"),
+    WallCountryOption("Saudi Arabia", "Saudi Arabia"),
+    WallCountryOption("Israel", "Israel"),
+    WallCountryOption("Argentina", "Argentina"),
+    WallCountryOption("Colombia", "Colombia"),
+    WallCountryOption("Chile", "Chile"),
+    WallCountryOption("Peru", "Peru"),
+    WallCountryOption("Venezuela", "Venezuela"),
+    WallCountryOption("Dominican Republic", "Dominican Republic"),
 )
 
 private val DefaultWallCountries = setOf("US", "UK", "CA", "France", "Italy", "Japan", "China", "Cuba", "Africa", "Jamaica")
+
+private val WallListOptions = listOf(
+    "Soccer",
+    "Combat",
+    "Racing",
+    "Movies & Premium",
+    "News",
+    "Discovery & Documentaries",
+    "Kids & Family",
+    "International Sports",
+    "More Sports",
+)
+private val DefaultWallLists = WallListOptions.toSet()
 
 /** A stream the user added themselves to the Channel Wall. */
 private data class WallCustomChannel(
@@ -226,6 +267,15 @@ fun ChannelWallScreen(nav: NavHostController) {
                 ?.filter { it.isNotBlank() }
                 ?.toSet()
                 ?: DefaultWallCountries
+        )
+    }
+    var selectedLists by remember {
+        mutableStateOf(
+            prefs.getString(WALL_LISTS, null)
+                ?.split(',')
+                ?.filter { it.isNotBlank() }
+                ?.toSet()
+                ?: DefaultWallLists
         )
     }
     var selectedWall by remember { mutableStateOf<WallChannel?>(null) }
@@ -486,6 +536,7 @@ fun ChannelWallScreen(nav: NavHostController) {
                     Triple("More Sports", "The rest of the sports directory", "Sports"),
                 )
                 categories.forEach { (title, subtitle, category) ->
+                    if (title !in selectedLists) return@forEach
                     val channels = ChannelWallChannels.byCategory(category)
                     if (channels.isNotEmpty()) {
                         item(key = "cat:$category") {
@@ -534,12 +585,22 @@ fun ChannelWallScreen(nav: NavHostController) {
 
     if (showCountries) {
         var draft by remember(showCountries) { mutableStateOf(selectedCountries) }
+        var draftLists by remember(showCountries) { mutableStateOf(selectedLists) }
         AlertDialog(
             onDismissRequest = { showCountries = false },
-            title = { Text("Countries on the wall") },
+            title = { Text("Countries & lists on the wall") },
             text = {
-                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 460.dp)) {
-                    items(WallCountryOptions, key = { it.category }) { option ->
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
+                    item {
+                        Text(
+                            "Countries",
+                            color = MaterialTheme.colorScheme.primary,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(top = 2.dp, bottom = 4.dp),
+                        )
+                    }
+                    items(WallCountryOptions, key = { "c:${it.category}" }) { option ->
                         Row(
                             Modifier.fillMaxWidth()
                                 .clickable {
@@ -564,12 +625,50 @@ fun ChannelWallScreen(nav: NavHostController) {
                             }
                         }
                     }
+                    item {
+                        Text(
+                            "Lists",
+                            color = MaterialTheme.colorScheme.primary,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
+                        )
+                    }
+                    items(WallListOptions, key = { "l:$it" }) { title ->
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clickable {
+                                    draftLists = if (title in draftLists) draftLists - title
+                                    else draftLists + title
+                                }
+                                .padding(vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                title,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontSize = 13.sp,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (title in draftLists) {
+                                Icon(
+                                    Icons.Filled.Check,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    }
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
                     selectedCountries = draft
-                    prefs.edit().putString(WALL_COUNTRIES, draft.joinToString(",")).apply()
+                    selectedLists = draftLists
+                    prefs.edit()
+                        .putString(WALL_COUNTRIES, draft.joinToString(","))
+                        .putString(WALL_LISTS, draftLists.joinToString(","))
+                        .apply()
                     showCountries = false
                 }) { Text("Save") }
             },
@@ -788,9 +887,40 @@ private fun WallSection(
     onOpen: (WallChannel) -> Unit,
 ) {
     Column {
-        Column(Modifier.padding(horizontal = 16.dp)) {
-            Text(title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Black)
-            Text(subtitle, color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Every shelf header wears a poster from its own first channel, so
+            // a country/list is recognisable before the rail is read.
+            Box(
+                Modifier
+                    .width(46.dp)
+                    .height(62.dp)
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(
+                        Brush.linearGradient(
+                            channels.firstOrNull()?.gradient?.map(::Color)
+                                ?: listOf(Color(0xFF24104F), Color(0xFF0B0B10))
+                        )
+                    ),
+            ) {
+                channels.firstOrNull()?.let { first ->
+                    WallFullBleedArt(first)
+                    Box(
+                        Modifier.fillMaxSize().background(
+                            Brush.verticalGradient(
+                                listOf(Color.Transparent, Color(0xAA080A0F))
+                            )
+                        )
+                    )
+                }
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Black)
+                Text(subtitle, color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
         }
         Spacer(Modifier.height(8.dp))
         LazyRow(

@@ -1,3 +1,17 @@
+## 0.12.4
+
+**10 November 2026**
+
+### A bigger, more visual Channel Wall
+
+- Added many more networks across every supported country, plus Ireland, Australia, New Zealand, Portugal, the Netherlands, Sweden, Norway, Denmark, Poland, Turkey, Greece, Pakistan, Bangladesh, Indonesia, Malaysia, Thailand, Vietnam, Singapore, UAE, Saudi Arabia, Israel, Argentina, Colombia, Chile, Peru, Venezuela and the Dominican Republic.
+- The country picker now also chooses which main lists appear. Countries and lists you do not select stay hidden.
+- Every shelf header now wears a poster from its first channel, so a country or category is recognisable before you read the rail.
+- Every channel tile keeps full-bleed artwork, with a generated poster fallback when its network logo is unavailable.
+- The wall hero continues to rotate through random premium network artwork.
+
+## 0.12.3
+
 ## 0.12.3
 
 **10 November 2026**
