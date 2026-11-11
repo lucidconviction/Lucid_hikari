@@ -178,7 +178,11 @@ fun YouTubeVideoPanel(
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val panelWidth = (maxWidth * 0.56f).coerceIn(300.dp, 520.dp)
+        // Exactly the More Videos geometry: a quarter of the player width for
+        // the card, plus its padding, capped at 60% of the screen. The Info and
+        // Comments panels therefore line up with the list they sit beside.
+        val thumbnailWidth = (maxWidth / 4).coerceIn(150.dp, 360.dp)
+        val panelWidth = (thumbnailWidth + 28.dp).coerceAtMost(maxWidth * 0.6f)
         Box(
             Modifier
                 .fillMaxSize()
@@ -190,7 +194,8 @@ fun YouTubeVideoPanel(
                 .align(Alignment.CenterEnd)
                 .fillMaxHeight()
                 .width(panelWidth)
-                .background(Color(0xF5111114))
+                // Fully opaque, 25% stronger than the previous translucent panel.
+                .background(Color(0xFF111114))
                 .clickable(enabled = false) {},
         ) {
             Column(Modifier.fillMaxSize()) {
