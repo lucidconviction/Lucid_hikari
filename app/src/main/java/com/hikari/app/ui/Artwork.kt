@@ -75,6 +75,17 @@ object Artwork {
 
     /** Grid/row cell model: the item's own art, else the art we looked up. */
     fun model(item: MediaItem): Any? {
+        // IPTV channels are not films: their own tvg-logo/thumbnail is the
+        // only correct artwork. If the playlist shipped none, draw the same
+        // branded fallback tile the IPTV tab uses — never ask TMDB, whose
+        // lookup matches a film with a similar name and puts its poster on a
+        // live channel.
+        if (com.hikari.app.data.IptvMark.of(item)) {
+            item.posterUrl?.takeIf { it.isNotBlank() }?.let { return PosterLoader.model(it) }
+            item.backdropUrl?.takeIf { it.isNotBlank() }?.let { return PosterLoader.model(it) }
+            IptvArt.tile(item)?.let { return PosterLoader.model(it) }
+            return null
+        }
         // A manga cover goes through its EXTENSION's own client rather than
         // Coil's bare request (see PosterLoader.coverModel(url, providerId)): a manga
         // CDN is the kind that refuses a request with no Referer, which is why

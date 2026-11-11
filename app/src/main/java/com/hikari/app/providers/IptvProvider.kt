@@ -88,34 +88,46 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
         private val loadGate = Semaphore(2)
 
         private val cacheLock = Any()
-        private val cacheOrder = LinkedHashMap<String, IptvProvider>(8, 0.75f, true)
+        // Keyed by provider id, NOT held on the provider instance: refreshing
+        // the provider list rebuilds every IptvProvider, and an instance field
+        // meant the whole playlist was downloaded again just for entering the
+        // IPTV tab. The parsed list now survives a provider rebuild.
+        private val cacheById = HashMap<String, List<IptvChannel>>()
+        private val cacheOrder = LinkedHashMap<String, Int>(8, 0.75f, true)
         private var cachedChannelTotal = 0
 
         /** Stores a parsed list and evicts the oldest playlists over the budget. */
         private fun putCache(provider: IptvProvider, list: List<IptvChannel>) {
             synchronized(cacheLock) {
-                val before = provider.channelsCache?.size ?: 0
-                provider.channelsCache = list
+                val id = provider.config.id
+                val before = cacheById[id]?.size ?: 0
+                cacheById[id] = list
                 cachedChannelTotal += list.size - before
-                cacheOrder[provider.config.id] = provider
+                cacheOrder[id] = list.size
                 val entries = cacheOrder.entries.iterator()
                 while (cachedChannelTotal > MAX_CACHED_CHANNELS && entries.hasNext()) {
                     val entry = entries.next()
-                    if (entry.value === provider) continue
-                    cachedChannelTotal -= entry.value.channelsCache?.size ?: 0
-                    entry.value.channelsCache = null
+                    if (entry.key == id) continue
+                    cachedChannelTotal -= entry.value
+                    cacheById.remove(entry.key)
                     entries.remove()
                 }
             }
         }
 
         /** Drops one provider's parsed list and its cache accounting. */
-        private fun dropCache(provider: IptvProvider) {
+        private fun dropCache(providerId: String) {
             synchronized(cacheLock) {
-                cachedChannelTotal -= provider.channelsCache?.size ?: 0
-                provider.channelsCache = null
-                cacheOrder.remove(provider.config.id)
+                cachedChannelTotal -= cacheById.remove(providerId)?.size ?: 0
+                cacheOrder.remove(providerId)
             }
+        }
+
+        private fun cachedFor(providerId: String): List<IptvChannel>? = synchronized(cacheLock) {
+            val hit = cacheById[providerId] ?: return null
+            // Touching the order map keeps the LRU budget honest.
+            cacheOrder[providerId] = hit.size
+            hit
         }
 
         /** How long a parsed playlist is trusted before it is re-read. */
@@ -176,6 +188,7 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
             iptvErrors.remove(providerId)
             channelCounts.remove(providerId)
             loadedAt.remove(providerId)
+            dropCache(providerId)
         }
 
         /** The group name inside a [catalogIdForGroup] id (null for anything
@@ -445,9 +458,6 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
 
     private val loadLock = Mutex()
 
-    @Volatile
-    private var channelsCache: List<IptvChannel>? = null
-
     private val selfCheckUrl = config.url.trim()
 
     /** The name the user gave the playlist, else the host it came from. */
@@ -462,7 +472,7 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
      * previously parsed list in place, so a dead panel does not empty Home.
      */
     suspend fun channels(force: Boolean = false): List<IptvChannel> = loadLock.withLock {
-        val cached = channelsCache
+        val cached = cachedFor(config.id)
         if (!force && cached != null && System.currentTimeMillis() - (loadedAt[config.id] ?: 0L) < TTL_MS) {
             return@withLock cached
         }
@@ -559,7 +569,7 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
      *  this playlist has never been loaded — the quick-channel matcher uses this
      *  first so opening the IPTV tab or the multi-view picker does not kick off
      *  nine 45-second downloads just to list preset channels. */
-    fun cachedChannels(): List<IptvChannel>? = channelsCache
+    fun cachedChannels(): List<IptvChannel>? = cachedFor(config.id)
 
     /** When [config.url] is a stream rather than a playlist (an m3u8/m3u link
      *  pasted straight in), that stream is the playlist's only channel. */
@@ -856,7 +866,7 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
         id = c.url,
         title = c.name,
         type = MediaType.MOVIE,
-        posterUrl = c.logo,
+        posterUrl = c.artwork,
         overview = IptvPlaylist.groupOf(c).takeIf { it != "Ungrouped" },
         // "torrent" keeps saved magnets out of the live-channel treatment
         // (LIVE tile, live playback) — see Artwork and PlayerActivity. "stream"
@@ -871,7 +881,7 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
     /** Re-reads the playlist on the next call. */
     fun invalidate() {
         loadedAt.remove(config.id)
-        dropCache(this)
+        dropCache(config.id)
     }
 }
 

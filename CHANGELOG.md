@@ -14,6 +14,10 @@
 - Quick Channel results validate every matched channel, not only the first 30.
 - MultiView keeps its wall when you leave the page: streams pause, keep their position, and resume when you come back. The page also has a bottom margin, no top-left back button and no active-count pill.
 - The player's bottom controls have extra margin above the screen edge.
+- Every IPTV playlist and channel now has artwork: the playlist's own channel icon/thumbnail is used first, with a generated themed tile as the fallback.
+- Portal EPG is read from installed Xtream portals as well as saved accounts, shown in the themed On now strip.
+- IPTV playlist data now survives leaving the tab and a provider refresh, so entering Live TV no longer re-downloads every playlist.
+- Channel Wall's Add channel menu now asks only for a display name and search aliases; the region picker is gone and the stream URL is optional. With no URL, the tile searches every playlist by its aliases.
 
 ## 0.12.0
 

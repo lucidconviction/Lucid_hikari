@@ -192,6 +192,9 @@ fun ChannelWallScreen(nav: NavHostController) {
     var selectedWall by remember { mutableStateOf<WallChannel?>(null) }
     var wallMatches by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
     var wallLoading by remember { mutableStateOf(false) }
+    var customTarget by remember { mutableStateOf<WallCustomChannel?>(null) }
+    var customMatches by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
+    var customLoading by remember { mutableStateOf(false) }
     var allChannels by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
     var channelsLoading by remember { mutableStateOf(false) }
     var channelsJob by remember { mutableStateOf<Deferred<List<IptvChannel>>?>(null) }
@@ -267,7 +270,43 @@ fun ChannelWallScreen(nav: NavHostController) {
 
     fun playChannel(channel: IptvChannel) {
         selectedWall = null
+        customTarget = null
         playIptvChannel(context, channel)
+    }
+
+    /** A custom wall tile either points at one stream or, when its URL is left
+     *  empty, behaves like a Quick Channel: search every playlist for its
+     *  display name and aliases and let the user pick the source. */
+    fun openCustomChannel(custom: WallCustomChannel) {
+        if (custom.url.isNotBlank()) {
+            playIptvChannel(
+                context,
+                IptvChannel(
+                    name = custom.name,
+                    url = custom.url,
+                    logo = custom.logo,
+                    providerId = "channel-wall",
+                ),
+            )
+            return
+        }
+        customTarget = custom
+        customMatches = emptyList()
+        customLoading = true
+        scope.launch {
+            val channels = if (allChannels.isNotEmpty()) allChannels else requestChannels().await()
+            if (allChannels.isEmpty()) allChannels = channels
+            val aliases = custom.aliases.ifEmpty { listOf(custom.name) }
+                .map { it.trim().lowercase() }
+                .filter { it.isNotEmpty() }
+            customMatches = withContext(Dispatchers.Default) {
+                channels.filter { ch ->
+                    val hay = (ch.name + " " + ch.group).lowercase()
+                    aliases.any { hay.contains(it) }
+                }.distinctBy { it.url }
+            }
+            customLoading = false
+        }
     }
 
     val wallQuery = query.trim()
@@ -360,17 +399,7 @@ fun ChannelWallScreen(nav: NavHostController) {
                 item {
                     WallQuickRow(
                         custom = customChannels,
-                        onPlay = { custom ->
-                            playIptvChannel(
-                                context,
-                                IptvChannel(
-                                    name = custom.name,
-                                    url = custom.url,
-                                    logo = custom.logo,
-                                    providerId = "channel-wall",
-                                ),
-                            )
-                        },
+                        onPlay = { custom -> openCustomChannel(custom) },
                         onAdd = { showAddCustom = true },
                         onRemove = { custom -> saveCustomChannels(customChannels - custom) },
                     )
@@ -432,9 +461,19 @@ fun ChannelWallScreen(nav: NavHostController) {
         )
     }
 
+    customTarget?.let { custom ->
+        WallCustomMatchSheet(
+            channel = custom,
+            matches = customMatches,
+            loading = customLoading,
+            onDismiss = { customTarget = null },
+            onPlay = { playChannel(it) },
+        )
+    }
+
     if (showAddCustom) {
         AddCustomChannelDialog(
-            onAdd = { name, url, aliases, region, logo ->
+            onAdd = { name, url, aliases, logo ->
                 saveCustomChannels(
                     customChannels + WallCustomChannel(
                         id = "custom_" + System.currentTimeMillis(),
@@ -442,7 +481,6 @@ fun ChannelWallScreen(nav: NavHostController) {
                         url = url,
                         logo = logo.takeIf { it.isNotBlank() },
                         aliases = aliases,
-                        region = region,
                     ),
                 )
                 showAddCustom = false
@@ -624,7 +662,12 @@ private fun WallCustomCard(channel: WallCustomChannel, onClick: () -> Unit) {
         )
         Column(Modifier.align(Alignment.BottomStart).padding(10.dp)) {
             Text(channel.name, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text("Custom stream", color = Color.White.copy(alpha = 0.65f), fontSize = 10.sp, maxLines = 1)
+            Text(
+                if (channel.url.isBlank()) "Custom search" else "Custom stream",
+                color = Color.White.copy(alpha = 0.65f),
+                fontSize = 10.sp,
+                maxLines = 1,
+            )
         }
     }
 }
@@ -853,6 +896,104 @@ private fun WallLogoFallback(channel: WallChannel, size: Int) {
     }
 }
 
+/** A user tile with no direct URL: the channels its aliases matched across
+ *  every playlist. */
+@Composable
+private fun WallCustomMatchSheet(
+    channel: WallCustomChannel,
+    matches: List<IptvChannel>,
+    loading: Boolean,
+    onDismiss: () -> Unit,
+    onPlay: (IptvChannel) -> Unit,
+) {
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
+        Column(Modifier.fillMaxWidth().heightIn(max = 620.dp).padding(horizontal = 16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (!channel.logo.isNullOrBlank()) {
+                    AsyncImage(
+                        model = channel.logo,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.size(52.dp).clip(RoundedCornerShape(10.dp)),
+                    )
+                } else {
+                    WallPromoFallback(channel.name, Modifier.size(52.dp))
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(channel.name, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text("Custom search channel", color = Color.White.copy(alpha = 0.55f), fontSize = 12.sp)
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            when {
+                loading -> Box(Modifier.fillMaxWidth().height(150.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = Color(0xFF7C5CFF))
+                }
+                matches.isEmpty() -> {
+                    Text(
+                        "No channel in your playlists matches ${channel.aliases.joinToString(", ").ifBlank { channel.name }} yet.",
+                        color = Color.White.copy(alpha = 0.65f),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "Add a playlist in Live TV, or edit this tile's aliases.",
+                        color = Color.White.copy(alpha = 0.45f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                else -> {
+                    Text("${matches.size} matches found", color = Color.White.copy(alpha = 0.55f), fontSize = 11.sp)
+                    LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false), contentPadding = PaddingValues(vertical = 6.dp)) {
+                        items(matches, key = { it.url }) { match ->
+                            Row(
+                                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                                    .clickable { onPlay(match) }
+                                    .padding(vertical = 7.dp, horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                val logo = match.artwork
+                                if (!logo.isNullOrBlank()) {
+                                    AsyncImage(
+                                        model = logo,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(42.dp).clip(RoundedCornerShape(8.dp)),
+                                        contentScale = ContentScale.Fit,
+                                    )
+                                } else {
+                                    Box(Modifier.size(42.dp), contentAlignment = Alignment.Center) {
+                                        Icon(Icons.Filled.LiveTv, contentDescription = null, tint = Color.White.copy(alpha = 0.5f))
+                                    }
+                                }
+                                Spacer(Modifier.width(10.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(match.name, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(
+                                        listOfNotNull(match.group.takeIf { it.isNotBlank() }, match.providerId.takeIf { it.isNotBlank() })
+                                            .joinToString(" · "),
+                                        color = Color.White.copy(alpha = 0.5f),
+                                        fontSize = 11.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color(0xFF00D2EF))
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onDismiss) { Text("Close") }
+            }
+            Spacer(Modifier.height(10.dp))
+        }
+    }
+}
+
 @Composable
 private fun WallMatchSheet(
     channel: WallChannel,
@@ -949,14 +1090,13 @@ private fun WallMatchSheet(
 
 @Composable
 private fun AddCustomChannelDialog(
-    onAdd: (name: String, url: String, aliases: List<String>, region: String, logo: String) -> Unit,
+    onAdd: (name: String, url: String, aliases: List<String>, logo: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var name by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("") }
     var logo by remember { mutableStateOf("") }
     var aliasText by remember { mutableStateOf("") }
-    var region by remember { mutableStateOf("Custom") }
     var error by remember { mutableStateOf<String?>(null) }
     fun normalized(): String? {
         var value = url.trim()
@@ -973,9 +1113,9 @@ private fun AddCustomChannelDialog(
         title = { Text("Add channel") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                // Same fields and wording as Quick Channels → Add channel:
-                // display name, search aliases and a region group, plus the
-                // stream details a wall tile needs to actually play.
+                // Display name and aliases are the only required fields: they
+                // let the tile search every playlist. A stream URL is optional
+                // when the user already knows the exact channel.
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
@@ -987,33 +1127,16 @@ private fun AddCustomChannelDialog(
                 OutlinedTextField(
                     value = aliasText,
                     onValueChange = { aliasText = it },
-                    label = { Text("Search aliases") },
+                    label = { Text("Search aliases (required)") },
                     placeholder = { Text("e.g. CNN, ESPN") },
                     singleLine = false,
                     maxLines = 3,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Text(
-                    "Region",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 11.sp,
-                )
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    items(
-                        listOf("All", "US", "UK", "CA", "Premium", "Sports", "News", "Custom"),
-                        key = { it },
-                    ) { option ->
-                        FilterChip(
-                            selected = region == option,
-                            onClick = { region = option },
-                            label = { Text(option) },
-                        )
-                    }
-                }
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
-                    label = { Text("Stream URL (m3u8, mpd, mp4 or direct link)") },
+                    label = { Text("Stream URL (optional — leave blank to search aliases)") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -1032,22 +1155,18 @@ private fun AddCustomChannelDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    val address = normalized()
-                    if (name.isBlank()) {
-                        error = "Give the channel a name."
-                    } else if (address == null) {
-                        error = "Enter a valid stream address."
-                    } else {
-                        val aliases = aliasText.split(",")
-                            .map { it.trim() }
-                            .filter { it.isNotEmpty() }
-                        onAdd(
-                            name.trim(),
-                            address,
-                            aliases.ifEmpty { listOf(name.trim()) },
-                            region,
-                            logo.trim(),
-                        )
+                    val aliases = aliasText.split(",")
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                    // A blank URL is allowed: the tile then searches all
+                    // playlists using its display name and aliases.
+                    val address = if (url.isBlank()) "" else normalized()
+                    when {
+                        name.isBlank() -> error = "Give the channel a name."
+                        aliases.isEmpty() -> error = "Add at least one search alias."
+                        url.isNotBlank() && address == null ->
+                            error = "Enter a valid stream address, or leave it blank to search."
+                        else -> onAdd(name.trim(), address.orEmpty(), aliases, logo.trim())
                     }
                 },
             ) { Text("Add") }

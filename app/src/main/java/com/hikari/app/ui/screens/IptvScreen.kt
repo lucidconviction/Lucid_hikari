@@ -2270,8 +2270,25 @@ private fun IptvKindGrid(
                         cards.sumOf { IptvProvider.channelCounts[it.id] ?: it.channels }
                     }
                     val totalGroups = remember(cards) { cards.sumOf { it.groups } }
+                    val allPlaylistsTitle = tr("View All Playlists")
+                    val allIptvLabel = tr("All IPTV")
+                    val art by produceState<String?>(initialValue = null, cards.size, allPlaylistsTitle) {
+                        value = withContext(Dispatchers.IO) {
+                            IptvArt.tile(
+                                MediaItem(
+                                    providerId = "iptv-all",
+                                    id = "iptv-all",
+                                    title = allPlaylistsTitle,
+                                    type = MediaType.MOVIE,
+                                    overview = allIptvLabel,
+                                ),
+                                live = false,
+                            )
+                        }
+                    }
                     IptvTile(
                         cover = null,
+                        art = art,
                         name = tr("View All Playlists"),
                         subtitle = I18n.t("%s playlists · %s channels · %s groups")
                             .replace("%s", cards.size.toString())
@@ -2287,8 +2304,32 @@ private fun IptvKindGrid(
             }
             items(cards, key = { it.id }) { card ->
                 val liveChannels = IptvProvider.channelCounts[card.id] ?: card.channels
+                // Internal artwork from the playlist wins (card.cover is the
+                // first channel with a logo); when the playlist has none, draw
+                // a branded fallback tile so the card is never blank.
+                val art by produceState<String?>(initialValue = null, card.id, card.name) {
+                    if (card.cover.isNullOrBlank()) {
+                        value = withContext(Dispatchers.IO) {
+                            IptvArt.tile(
+                                MediaItem(
+                                    providerId = card.id,
+                                    id = card.id,
+                                    title = card.name,
+                                    type = MediaType.MOVIE,
+                                    overview = when {
+                                        card.torrent -> "Torrent"
+                                        card.stream -> "Stream"
+                                        else -> "IPTV"
+                                    },
+                                ),
+                                live = false,
+                            )
+                        }
+                    }
+                }
                 IptvTile(
                     cover = card.cover,
+                    art = art,
                     name = card.name,
                     subtitle = when {
                         card.error != null -> card.error
@@ -2894,24 +2935,36 @@ private fun XtreamAccountPill(account: com.hikari.app.data.XtreamAccount, onClic
 private fun XtreamNowSection(app: HikariApp) {
     val context = LocalContext.current
     val accounts by app.store.xtreamAccountsFlow().collectAsState(initial = emptyList())
-    if (accounts.isEmpty()) return
+    val allProviders by app.providers.providers.collectAsState()
+    // A portal can be installed as an IPTV provider without having a separate
+    // saved-account row (that row is best-effort). Read the guide from both
+    // sources, deduped by panel + username.
+    val portals = remember(accounts, allProviders) {
+        val out = LinkedHashMap<String, com.hikari.app.data.XtreamCredentials>()
+        accounts.forEach { acc ->
+            val creds = com.hikari.app.data.XtreamCredentials(acc.baseUrl, acc.username, acc.password)
+            out[creds.root.lowercase() + "|" + creds.username] = creds
+        }
+        allProviders.filterIsInstance<IptvProvider>().forEach { p ->
+            com.hikari.app.data.XtreamCredentials.fromUrl(p.config.url)?.let { creds ->
+                out.putIfAbsent(creds.root.lowercase() + "|" + creds.username, creds)
+            }
+        }
+        out.values.toList()
+    }
+    if (portals.isEmpty()) return
     var programmes by remember { mutableStateOf<List<com.hikari.app.data.XtreamEpg.Programme>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var failed by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<com.hikari.app.data.XtreamEpg.Programme?>(null) }
 
-    LaunchedEffect(accounts) {
+    LaunchedEffect(portals) {
         loading = true
         failed = false
         val merged = ArrayList<com.hikari.app.data.XtreamEpg.Programme>()
-        // Two panels at most: enough to be useful, and it keeps a page that
+        // Three panels at most: enough to be useful, and it keeps a page that
         // already parses playlists from also downloading every guide at once.
-        for (account in accounts.take(2)) {
-            val creds = com.hikari.app.data.XtreamCredentials(
-                baseUrl = account.baseUrl,
-                username = account.username,
-                password = account.password,
-            )
+        for (creds in portals.take(3)) {
             val snapshot = runCatching {
                 com.hikari.app.data.XtreamEpg.load(creds)
             }.getOrNull()
@@ -2930,7 +2983,7 @@ private fun XtreamNowSection(app: HikariApp) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "On now",
+                "On now · portal guide",
                 color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
