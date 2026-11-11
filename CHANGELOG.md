@@ -9,6 +9,7 @@
 - Every shelf header now wears a poster from its first channel, so a country or category is recognisable before you read the rail.
 - Every channel tile keeps full-bleed artwork, with a generated poster fallback when its network logo is unavailable.
 - The wall hero continues to rotate through random premium network artwork.
+- **Generate portals** now collects up to **25** working panels per run, giving you a much larger pool of viewing sources to pick from.
 
 ## 0.12.3
 

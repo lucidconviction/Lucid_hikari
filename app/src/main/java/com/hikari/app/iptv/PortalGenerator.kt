@@ -27,6 +27,9 @@ import java.util.zip.GZIPInputStream
  */
 object PortalGenerator {
 
+    /** How many working portals one generation run should collect. */
+    const val TARGET = 25
+
     private const val CLOUD_PRIMARY =
         "https://pub-38f23eb5f3304328b9774fadfa233a38.r2.dev/xtreamity-plus-db.csv.gz"
     private const val CLOUD_BACKUP =
@@ -66,8 +69,8 @@ object PortalGenerator {
      * same dead hosts, then checked in small parallel batches.
      */
     suspend fun generate(
-        target: Int = 5,
-        maxTries: Int = 400,
+        target: Int = TARGET,
+        maxTries: Int = 1_600,
         onProgress: (Progress) -> Unit = {},
     ): List<Generated> = withContext(Dispatchers.IO) {
         onProgress(Progress("Loading Cloud Vault portals…", target = target))

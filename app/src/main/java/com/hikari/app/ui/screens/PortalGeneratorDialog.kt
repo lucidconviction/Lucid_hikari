@@ -59,7 +59,7 @@ internal fun PortalGeneratorDialog(app: HikariApp, onDismiss: () -> Unit) {
         tried = 0
         added = 0
         try {
-            val list = PortalGenerator.generate(target = 5) { p ->
+            val list = PortalGenerator.generate(target = PortalGenerator.TARGET) { p ->
                 status = p.status
                 tried = p.tried
                 found = p.found
@@ -103,7 +103,7 @@ internal fun PortalGeneratorDialog(app: HikariApp, onDismiss: () -> Unit) {
                 }
                 if (running && (tried > 0 || found > 0)) {
                     Text(
-                        "Tried $tried · verified $found of 5",
+                        "Tried $tried · verified $found of ${PortalGenerator.TARGET}",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 11.sp,
                     )
