@@ -1,3 +1,20 @@
+## 0.12.8
+
+**12 November 2026**
+
+### Layout pass, faster channel switching and preview polish
+
+- **About & Updates fits portrait phones**: the GitHub/Telegram links and update actions now wrap with `FlowRow` instead of overflowing the card.
+- **Next-video preview is 30% bigger** (247×139 dp), carries an “Up next · Ns” countdown, and can be tapped to take over immediately.
+- **IPTV actions are a 2×2 grid**: CH Wall / Generate portals above IPTV / Links, with every button the same height and each pair sharing the width. Generate portals moved out of the saved-account row.
+- **Channels is a searchable sheet** instead of a 500-row menu; it uses the playlist the channel came from, falls back to every playlist, and caches the merged list for two minutes.
+- **Quick Ch reuses that cache**, so opening it no longer re-reads every playlist.
+- The preview hides itself when you seek back above the last ten seconds, disables its audio track, caps its video at 720p and stops polling when playback ends.
+- Added Settings → Playback & Servers → **Next-video preview** toggle.
+- **Channel Wall favorites** now have a visible focusable heart on every tile (long-press still works) and stale favorite IDs are pruned.
+- The Adult list option disappears from the wall picker when NSFW is off.
+- Portal generator shows its last run time; GitHub Actions now strips the machine-specific JDK path before building.
+
 ## 0.12.7
 
 **12 November 2026**

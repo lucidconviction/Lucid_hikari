@@ -412,6 +412,9 @@ class AppStore(private val ctx: Context) {
          *  default, like the reference clients; the player's own pill toggles
          *  it). */
         val PLAYER_AUTOPLAY = booleanPreferencesKey("playerAutoplayNext")
+        /** Show the muted next-video preview in the corner during the last
+         *  ten seconds (ON by default; Settings → Playback & Servers). */
+        val PLAYER_NEXT_PREVIEW = booleanPreferencesKey("playerNextPreview")
         /** Auto-advance to the next IPTV stream in the playlist when the current
          *  one ends (ON by default; the player's Auto-Next pill toggles it). */
         val PLAYER_AUTO_NEXT = booleanPreferencesKey("playerAutoNext")
@@ -3911,6 +3914,18 @@ fun searchExceptionOnFlow(): Flow<Boolean> =
 
     suspend fun setAutoplayNext(on: Boolean) {
         write("PLAYER_AUTOPLAY") { it[K.PLAYER_AUTOPLAY] = on }
+    }
+
+    /** Whether the player previews the next video in the corner during the
+     *  last ten seconds. */
+    fun nextPreviewFlow(): Flow<Boolean> =
+        store.data.map { it[K.PLAYER_NEXT_PREVIEW] ?: true }
+            .distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    suspend fun nextPreview(): Boolean = nextPreviewFlow().first()
+
+    suspend fun setNextPreview(on: Boolean) {
+        write("PLAYER_NEXT_PREVIEW") { it[K.PLAYER_NEXT_PREVIEW] = on }
     }
 
     /** Whether the player advances to the next IPTV stream in the playlist

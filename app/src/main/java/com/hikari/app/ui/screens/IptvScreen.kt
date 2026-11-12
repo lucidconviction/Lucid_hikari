@@ -511,6 +511,7 @@ addStream = false
     // (tap animates over, swipe settles back); TV draws the section directly
     // with pills as the only switcher, like MyStuffScreen does.
     var section by rememberSaveable { mutableStateOf(IptvSection.PLAYLIST) }
+    var showPortalGenerator by remember { mutableStateOf(false) }
     val tvNow = com.hikari.app.tv.TvMode.current()
     val pager = androidx.compose.foundation.pager.rememberPagerState(
         initialPage = 0,
@@ -660,6 +661,14 @@ addStream = false
         // exhausted the heap on a 512 MB device).
         GeneratedPortalsRow(app = app)
 
+        // Two rows of equal cards: CH Wall / Generate portals on top, then the
+        // IPTV / Links page pills. Every button is the same height, and each
+        // pair shares the width half-and-half.
+        IptvPortalActions(
+            onChWall = { Routes.safeNavigate(nav, Routes.CHANNEL_WALL) },
+            onGenerate = { showPortalGenerator = true },
+        )
+
         Spacer(Modifier.height(8.dp))
         IptvSectionStrip(
             sections = listOf(IptvSection.PLAYLIST, IptvSection.LINKS),
@@ -676,6 +685,13 @@ addStream = false
                 SectionPage(sectionAt(page))
             }
         }
+    }
+
+    if (showPortalGenerator) {
+        PortalGeneratorDialog(
+            app = app,
+            onDismiss = { showPortalGenerator = false },
+        )
     }
 
     if (showAdd) {
@@ -2142,6 +2158,36 @@ private object IptvSection {
     const val LINKS = "links"  // Combined torrent + network stream
 }
 
+/** CH Wall / Generate portals, the top half of the IPTV action grid. */
+@Composable
+private fun IptvPortalActions(
+    onChWall: () -> Unit,
+    onGenerate: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IptvSectionPill(
+            label = "CH Wall",
+            icon = Icons.Filled.GridView,
+            selected = false,
+            modifier = Modifier.weight(1f),
+            onClick = onChWall,
+        )
+        IptvSectionPill(
+            label = "Generate portals",
+            icon = Icons.Filled.Add,
+            selected = false,
+            modifier = Modifier.weight(1f),
+            onClick = onGenerate,
+        )
+    }
+}
+
 /** The pill strip above the pages (IPTV | Tor | Network stream). */
 @Composable
 private fun IptvSectionStrip(sections: List<String>, current: String, onPick: (String) -> Unit) {
@@ -2807,7 +2853,6 @@ private fun tileMinFor(shape: String): Dp = when (TileShapes.normalize(shape)) {
  */
 @Composable
 private fun QuickChannelActionRow(
-    onChWall: () -> Unit,
     onAddRegion: () -> Unit,
     onAddChannel: () -> Unit,
     showValidate: Boolean,
@@ -2820,20 +2865,6 @@ private fun QuickChannelActionRow(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        OutlinedButton(
-            onClick = onChWall,
-            shape = RoundedCornerShape(20.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
-            colors = ButtonDefaults.outlinedButtonColors(
-                contentColor = Color.White.copy(alpha = 0.85f),
-            ),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-            modifier = Modifier.height(32.dp),
-        ) {
-            Icon(Icons.Filled.GridView, contentDescription = null, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(4.dp))
-            Text("CH Wall", fontSize = 12.sp)
-        }
         OutlinedButton(
             onClick = onAddRegion,
             shape = RoundedCornerShape(20.dp),
@@ -2893,9 +2924,8 @@ private fun QuickChannelActionRow(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun XtreamAccountRow(app: HikariApp) {
-    val scope = rememberCoroutineScope()
     val xtreamAccounts by app.store.xtreamAccountsFlow().collectAsState(initial = emptyList())
-    var showGenerator by remember { mutableStateOf(false) }
+    if (xtreamAccounts.isEmpty()) return
 
     Row(
         modifier = Modifier
@@ -2905,47 +2935,23 @@ private fun XtreamAccountRow(app: HikariApp) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Saved Xtream accounts
-        if (xtreamAccounts.isNotEmpty()) {
-            Text(
-                "Saved Xtream:  ",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-            )
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.weight(1f),
-            ) {
-                items(xtreamAccounts) { acc ->
-                    XtreamAccountPill(
-                        account = acc,
-                        onClick = { /* TODO: open panel detail */ },
-                    )
-                }
-            }
-        } else {
-            Spacer(Modifier.weight(1f))
-        }
-        OutlinedButton(
-            onClick = { showGenerator = true },
-            shape = RoundedCornerShape(20.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
-            colors = ButtonDefaults.outlinedButtonColors(
-                contentColor = Color.White.copy(alpha = 0.85f),
-            ),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-            modifier = Modifier.height(32.dp),
-        ) {
-            Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(4.dp))
-            Text("Generate portals", fontSize = 12.sp)
-        }
-    }
-    if (showGenerator) {
-        PortalGeneratorDialog(
-            app = app,
-            onDismiss = { showGenerator = false },
+        Text(
+            "Saved Xtream:  ",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
         )
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.weight(1f),
+        ) {
+            items(xtreamAccounts) { acc ->
+                XtreamAccountPill(
+                    account = acc,
+                    onClick = { /* TODO: open panel detail */ },
+                )
+            }
+        }
     }
 }
 
@@ -3452,7 +3458,6 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
         ) {
             val actions: @Composable (Modifier) -> Unit = { actionModifier ->
                 QuickChannelActionRow(
-                    onChWall = { nav.navigate(Routes.CHANNEL_WALL) },
                     onAddRegion = { showAddRegion = true },
                     onAddChannel = { showAddChannel = true },
                     showValidate = selectedQc != null,

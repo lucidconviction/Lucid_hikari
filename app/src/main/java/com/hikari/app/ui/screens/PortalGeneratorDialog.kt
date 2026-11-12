@@ -26,6 +26,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -42,6 +43,9 @@ import kotlinx.coroutines.launch
  */
 @Composable
 internal fun PortalGeneratorDialog(app: HikariApp, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val runPrefs = remember { context.getSharedPreferences("portal_generator", 0) }
+    var lastRun by remember { mutableStateOf(runPrefs.getLong("last_run_at", 0L)) }
     var runKey by remember { mutableIntStateOf(0) }
     var running by remember { mutableStateOf(true) }
     var status by remember { mutableStateOf("Starting…") }
@@ -72,6 +76,8 @@ internal fun PortalGeneratorDialog(app: HikariApp, onDismiss: () -> Unit) {
             }
             status = "Saving ${list.size} portal${if (list.size == 1) "" else "s"} to the IPTV page…"
             added = PortalGenerator.save(app, list)
+            lastRun = System.currentTimeMillis()
+            runPrefs.edit().putLong("last_run_at", lastRun).apply()
             status = "Found $added portal${if (added == 1) "" else "s"} — they are in the IPTV page's Portal search results."
         } catch (e: Throwable) {
             error = e.message ?: "Couldn't generate portals."
@@ -91,6 +97,15 @@ internal fun PortalGeneratorDialog(app: HikariApp, onDismiss: () -> Unit) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 11.sp,
                 )
+                if (lastRun > 0L) {
+                    Text(
+                        "Last run: " + java.text.SimpleDateFormat(
+                            "MMM d, HH:mm", java.util.Locale.getDefault()
+                        ).format(java.util.Date(lastRun)),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 10.sp,
+                    )
+                }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (running) {
                         CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)

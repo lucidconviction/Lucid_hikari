@@ -47,6 +47,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Check
@@ -408,6 +409,14 @@ fun ChannelWallScreen(nav: NavHostController) {
 
     LaunchedEffect(Unit) {
         customChannels = parseCustomChannels(prefs.getString(WALL_CUSTOM, null))
+        // Favorites are stored by id. Prune ids whose channel disappeared in an
+        // update so the shelf never points at a tile that cannot be drawn.
+        val known = ChannelWallChannels.all.mapTo(HashSet()) { it.id }
+        val cleaned = favoriteIds.intersect(known)
+        if (cleaned != favoriteIds) {
+            favoriteIds = cleaned
+            prefs.edit().putString(WALL_FAVORITES, cleaned.joinToString(",")).apply()
+        }
     }
 
     fun requestChannels(force: Boolean = false): Deferred<List<IptvChannel>> {
@@ -736,6 +745,9 @@ fun ChannelWallScreen(nav: NavHostController) {
     if (showCountries) {
         var draft by remember(showCountries) { mutableStateOf(selectedCountries) }
         var draftLists by remember(showCountries) { mutableStateOf(selectedLists) }
+        val listOptions = remember(nsfwOn) {
+            WallListOptions.filter { it != "Adult (18+)" || nsfwOn }
+        }
         AlertDialog(
             onDismissRequest = { showCountries = false },
             title = { Text("Countries & lists on the wall") },
@@ -784,7 +796,7 @@ fun ChannelWallScreen(nav: NavHostController) {
                             modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
                         )
                     }
-                    items(WallListOptions, key = { "l:$it" }) { title ->
+                    items(listOptions, key = { "l:$it" }) { title ->
                         Row(
                             Modifier.fillMaxWidth()
                                 .clickable {
@@ -1178,15 +1190,21 @@ private fun WallCard(
                     ),
                 ),
         )
-        if (favorite) {
+        Box(
+            Modifier
+                .align(Alignment.TopEnd)
+                .padding(5.dp)
+                .size(28.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.45f))
+                .clickable(onClick = onLongClick),
+            contentAlignment = Alignment.Center,
+        ) {
             Icon(
-                Icons.Filled.Favorite,
-                contentDescription = "Favorite",
-                tint = Color(0xFFFF5A7A),
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(8.dp)
-                    .size(18.dp),
+                if (favorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                contentDescription = if (favorite) "Remove favorite" else "Add favorite",
+                tint = if (favorite) Color(0xFFFF5A7A) else Color.White.copy(alpha = 0.8f),
+                modifier = Modifier.size(17.dp),
             )
         }
         Column(Modifier.align(Alignment.BottomStart).padding(10.dp)) {
@@ -1224,15 +1242,21 @@ private fun WallGridCard(
                     ),
                 ),
         )
-        if (favorite) {
+        Box(
+            Modifier
+                .align(Alignment.TopEnd)
+                .padding(4.dp)
+                .size(24.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.45f))
+                .clickable(onClick = onLongClick),
+            contentAlignment = Alignment.Center,
+        ) {
             Icon(
-                Icons.Filled.Favorite,
-                contentDescription = "Favorite",
-                tint = Color(0xFFFF5A7A),
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(6.dp)
-                    .size(15.dp),
+                if (favorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                contentDescription = if (favorite) "Remove favorite" else "Add favorite",
+                tint = if (favorite) Color(0xFFFF5A7A) else Color.White.copy(alpha = 0.8f),
+                modifier = Modifier.size(14.dp),
             )
         }
         Column(Modifier.align(Alignment.BottomStart).padding(8.dp)) {

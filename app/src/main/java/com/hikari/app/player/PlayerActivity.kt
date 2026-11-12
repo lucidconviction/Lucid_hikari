@@ -32,7 +32,9 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
+import android.text.Editable
 import android.text.TextUtils
+import android.text.TextWatcher
 import android.util.Rational
 import android.util.TypedValue
 import android.view.GestureDetector
@@ -44,12 +46,14 @@ import android.view.ViewGroup
 import android.view.ViewParent
 import android.view.ViewTreeObserver
 import android.view.WindowManager
+import android.widget.BaseAdapter
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ListView
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.SeekBar
@@ -1946,6 +1950,10 @@ class PlayerActivity : ComponentActivity() {
         playerView = findViewById(R.id.player_view)
         nextPreviewContainer = findViewById(R.id.next_preview_container)
         nextPreviewView = findViewById(R.id.next_preview_view)
+        nextPreviewLabel = findViewById(R.id.next_preview_label)
+        nextPreviewContainer?.setOnClickListener {
+            if (nextPreviewStarted) nextPreview?.let { handOffNextPreview(it) }
+        }
         // The progress bar is a real focus target on TV. Once it owns focus,
         // Left/Right scrubs the video instead of jumping between the buttons.
         // This complements the normal hidden-controller D-pad seek path.
@@ -2474,6 +2482,17 @@ class PlayerActivity : ComponentActivity() {
             (applicationContext as HikariApp).store.autoplayNextFlow().collect { on ->
                 autoplayNextOn = on
                 updateAutoplayPill()
+            }
+        }
+        lifecycleScope.launch {
+            nextPreviewOn = runCatching {
+                (applicationContext as HikariApp).store.nextPreview()
+            }.getOrDefault(true)
+        }
+        lifecycleScope.launch {
+            (applicationContext as HikariApp).store.nextPreviewFlow().collect { on ->
+                nextPreviewOn = on
+                if (!on) releaseNextPreview()
             }
         }
         lifecycleScope.launch {
@@ -5755,10 +5774,18 @@ class PlayerActivity : ComponentActivity() {
     private var nextPreviewPlayer: ExoPlayer? = null
     private var nextPreviewView: PlayerView? = null
     private var nextPreviewContainer: View? = null
+    private var nextPreviewLabel: TextView? = null
     private var nextPreviewJob: Job? = null
     private var nextPreviewWatch: Runnable? = null
     private var nextPreviewStarted = false
     private var nextPreviewAttemptedAt = 0L
+    private var nextPreviewOn = true
+
+    /** All-playlist channel cache for Channels/Quick Ch (see
+     *  [gatherEveryIptvChannel]); gathering thousands of channels is not
+     *  something to repeat on every button tap. */
+    private var allIptvChannelsCache: List<com.hikari.app.data.IptvChannel> = emptyList()
+    private var allIptvChannelsAt = 0L
 
     /** Ten seconds before the end, per the user's request: mute the next video
      *  in the corner, then continue from the same timestamp when the current
@@ -8210,62 +8237,152 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun showChannelsDialog() {
-        val channels = channelSurfController?.channels.orEmpty()
-        val currentIndex = channelSurfController?.currentIndex ?: -1
-        if (channels.isEmpty()) {
-            // No playlist context was handed over (a single wall/network link,
-            // a direct channel open): fall back to every installed IPTV
-            // playlist, exactly like Quick Ch. The Channels pill must always
-            // list something when the user has playlists.
-            Toast.makeText(this, I18n.t("Loading channels from your playlists…"), Toast.LENGTH_SHORT).show()
+        val current = channelSurfController?.channels.orEmpty()
+        showChannelPicker(current)
+    }
+
+    /**
+     * Searchable IPTV channel picker for the Channels pill. It shows the list
+     * the channel was picked from when there is one; otherwise it falls back to
+     * every installed playlist. Replaces the old 500-row glass menu, which was
+     * both slow and impossible to navigate on a phone.
+     */
+    private fun showChannelPicker(current: List<com.hikari.app.data.IptvChannel>) {
+        val density = resources.displayMetrics.density
+        fun dp(v: Int) = (v * density + 0.5f).toInt()
+        val dialog = Dialog(this, android.R.style.Theme_Translucent_NoTitleBar)
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(14), dp(18), dp(8))
+            setBackgroundColor(0xF0121218.toInt())
+        }
+        val titleRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val title = TextView(this).apply {
+            text = I18n.t("IPTV Channels")
+            setTextColor(0xFFFFFFFF.toInt())
+            textSize = 18f
+            setTypeface(typeface, Typeface.BOLD)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val close = TextView(this).apply {
+            text = "✕"
+            setTextColor(0xCCFFFFFF.toInt())
+            textSize = 20f
+            setPadding(dp(14), dp(2), dp(2), dp(6))
+            setOnClickListener { dialog.dismiss() }
+        }
+        titleRow.addView(title)
+        titleRow.addView(close)
+        val search = EditText(this).apply {
+            hint = I18n.t("Search channels…")
+            setSingleLine(true)
+            setTextColor(0xFFFFFFFF.toInt())
+            setHintTextColor(0x77FFFFFF.toInt())
+            textSize = 14f
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+        }
+        val status = TextView(this).apply {
+            setTextColor(0x99FFFFFF.toInt())
+            textSize = 11f
+            setPadding(dp(4), dp(2), dp(4), dp(6))
+        }
+        val list = ListView(this).apply {
+            divider = null
+            dividerHeight = dp(4)
+        }
+        root.addView(titleRow)
+        root.addView(search)
+        root.addView(status)
+        root.addView(list, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f,
+        ))
+        dialog.setContentView(root)
+        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+
+        var all = current
+        var filtered = current
+        val adapter = object : BaseAdapter() {
+            override fun getCount(): Int = filtered.size
+            override fun getItem(position: Int): Any? = filtered.getOrNull(position)
+            override fun getItemId(position: Int): Long = position.toLong()
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
+                val row = LinearLayout(this@PlayerActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(12), dp(8), dp(12), dp(8))
+                }
+                val ch = filtered.getOrNull(position) ?: return row
+                val isCurrent = ch.url == sources.getOrNull(currentIndex)?.url
+                row.addView(TextView(this@PlayerActivity).apply {
+                    text = ch.name
+                    setTextColor(if (isCurrent) 0xFF8AB4F8.toInt() else 0xFFFFFFFF.toInt())
+                    textSize = 14f
+                    setTypeface(typeface, if (isCurrent) Typeface.BOLD else Typeface.NORMAL)
+                    maxLines = 1
+                    ellipsize = TextUtils.TruncateAt.END
+                })
+                if (!ch.group.isNullOrBlank()) {
+                    row.addView(TextView(this@PlayerActivity).apply {
+                        text = ch.group
+                        setTextColor(0x88FFFFFF.toInt())
+                        textSize = 11f
+                        maxLines = 1
+                        ellipsize = TextUtils.TruncateAt.END
+                    })
+                }
+                return row
+            }
+        }
+        list.adapter = adapter
+
+        fun applyFilter(query: String) {
+            filtered = if (query.isBlank()) all else
+                com.hikari.app.iptv.IptvSearch.filter(query, all) { listOf(it.name, it.group) }
+            adapter.notifyDataSetChanged()
+            status.text = if (all.isEmpty()) {
+                I18n.t("No channels found")
+            } else {
+                "${filtered.size} / ${all.size} " + I18n.t("channels")
+            }
+        }
+
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                applyFilter(s?.toString().orEmpty())
+            }
+            override fun afterTextChanged(s: Editable?) {}
+        })
+        list.setOnItemClickListener { _, _, position, _ ->
+            val channel = filtered.getOrNull(position) ?: return@setOnItemClickListener
+            dialog.dismiss()
+            val here = channelSurfController?.channels
+                ?.indexOfFirst { it.url == channel.url } ?: -1
+            if (here >= 0) {
+                lifecycleScope.launch { channelSurfController?.switch(here) }
+            } else {
+                switchToQuickChannel(channel, all)
+            }
+        }
+
+        dialog.show()
+        dialog.window?.setLayout(
+            (resources.displayMetrics.widthPixels * 0.92f).toInt(),
+            (resources.displayMetrics.heightPixels * 0.84f).toInt(),
+        )
+        if (current.isEmpty()) {
+            status.text = I18n.t("Loading channels from your playlists…")
             lifecycleScope.launch {
-                val all = withContext(Dispatchers.IO) { gatherEveryIptvChannel(emptyList()) }
-                if (isFinishing || isDestroyed) return@launch
-                if (all.isEmpty()) {
-                    Toast.makeText(
-                        this@PlayerActivity,
-                        I18n.t("No IPTV playlists yet — add one in Live TV"),
-                        Toast.LENGTH_LONG,
-                    ).show()
-                    return@launch
-                }
-                val rows = all.take(500)
-                showGlassMenu(
-                    I18n.t("IPTV Channels"),
-                    rows.map { GlassOption(it.name) },
-                    hint = I18n.t("${all.size} channels across every playlist"),
-                    iconRes = R.drawable.ic_episodes,
-                ) { which ->
-                    rows.getOrNull(which)?.let { channel -> switchToQuickChannel(channel, all) }
-                }
+                val gathered = withContext(Dispatchers.IO) { gatherEveryIptvChannel(emptyList()) }
+                if (isFinishing || isDestroyed || !dialog.isShowing) return@launch
+                all = gathered
+                filtered = gathered
+                applyFilter(search.text?.toString().orEmpty())
             }
-            return
-        }
-        val options = mutableListOf<GlassOption>()
-        channels.forEachIndexed { i, ch ->
-            val isCurrent = i == currentIndex
-            options.add(
-                GlassOption(
-                    label = "${i + 1}. ${ch.name}",
-                    selected = isCurrent,
-                )
-            )
-        }
-        showGlassMenu(
-            I18n.t("IPTV Channels"),
-            options,
-            hint = I18n.t("Switching keeps you inside the player."),
-            iconRes = R.drawable.ic_episodes,
-        ) { which ->
-            channels.getOrNull(which)?.let { channel ->
-                if (channelSurfController != null) {
-                    // switch() already calls onChannelChanged which handles
-                    // the stream fetch and play, so we just call it here.
-                    lifecycleScope.launch {
-                        channelSurfController?.switch(which)
-                    }
-                }
-            }
+        } else {
+            applyFilter("")
         }
     }
 
@@ -8306,6 +8423,13 @@ class PlayerActivity : ComponentActivity() {
     private suspend fun gatherEveryIptvChannel(
         current: List<com.hikari.app.data.IptvChannel>,
     ): List<com.hikari.app.data.IptvChannel> {
+        // Gathering every playlist can take seconds on a large M3U. Channels
+        // and Quick Ch are opened repeatedly, so keep the merged list for two
+        // minutes instead of re-reading every provider on every tap.
+        val now = System.currentTimeMillis()
+        if (allIptvChannelsCache.isNotEmpty() && now - allIptvChannelsAt < 120_000L) {
+            return (allIptvChannelsCache + current).distinctBy { it.url }
+        }
         val app = applicationContext as? com.hikari.app.HikariApp
         val playlists = app?.providers?.providers?.value
             ?.filterIsInstance<com.hikari.app.providers.IptvProvider>()
@@ -8313,6 +8437,10 @@ class PlayerActivity : ComponentActivity() {
         val gathered = if (playlists.isEmpty()) emptyList() else {
             runCatching { com.hikari.app.providers.gatherIptvChannels(playlists) }
                 .getOrDefault(emptyList())
+        }
+        if (gathered.isNotEmpty()) {
+            allIptvChannelsCache = gathered
+            allIptvChannelsAt = System.currentTimeMillis()
         }
         return (gathered + current).distinctBy { it.url }
     }
@@ -9072,7 +9200,7 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun checkNextPreviewWindow() {
-        if (!autoplayNextOn) {
+        if (!autoplayNextOn || !nextPreviewOn) {
             releaseNextPreview()
             return
         }
@@ -9088,6 +9216,13 @@ class PlayerActivity : ComponentActivity() {
             if (nextPreviewStarted) hideNextPreviewOnly()
             return
         }
+        // A preview that is already on screen is only relevant for the last
+        // ten seconds. If the user seeks back to 15-28s, hide it again instead
+        // of leaving a pinned corner player for the rest of the gap.
+        if (nextPreviewStarted && remaining > previewVisibleLeadMs + 2_000L) {
+            hideNextPreviewOnly()
+            return
+        }
         // Do NOT hide the preview just because the main player paused or
         // reached ENDED. That used to release it a beat before onPlaybackEnded,
         // so the handoff branch was skipped and the old autoplay path ran. The
@@ -9101,6 +9236,10 @@ class PlayerActivity : ComponentActivity() {
         }
         if (remaining <= previewVisibleLeadMs && nextPreview != null) {
             showNextPlaybackPreview()
+        }
+        if (nextPreviewStarted) {
+            val secs = ((remaining + 999L) / 1000L).coerceAtLeast(0L)
+            nextPreviewLabel?.text = "Up next · ${secs}s"
         }
     }
 
@@ -9215,6 +9354,16 @@ class PlayerActivity : ComponentActivity() {
                 .build()
         }.getOrNull() ?: return
         p.volume = 0f
+        // Muted is not the same as silent: the preview should not decode an
+        // audio track or a 4K rendition while the fullscreen video is still
+        // using the device's decoders. Cap it at 720p and disable audio.
+        runCatching {
+            p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
+                .setMaxVideoSize(1280, 720)
+                .setMaxVideoBitrate(2_500_000)
+                .build()
+        }
         p.addListener(object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
                 com.hikari.app.data.Logs.log(
@@ -9235,7 +9384,11 @@ class PlayerActivity : ComponentActivity() {
             .build()
         nextPreviewPlayer = p
         view.player = p
+        view.setOnClickListener {
+            if (nextPreviewStarted) nextPreview?.let { handOffNextPreview(it) }
+        }
         nextPreviewContainer?.visibility = View.VISIBLE
+        nextPreviewLabel?.text = "Up next"
         nextPreviewStarted = true
         p.setMediaItem(mediaItem)
         p.prepare()
@@ -16701,9 +16854,11 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
 
         override fun onPlayerStateChanged(playWhenReady: Boolean, playbackState: Int) {
             if (playbackState == Player.STATE_ENDED) {
+                stopNextPreviewWatch()
                 onPlaybackEnded()
                 return
             }
+            if (playbackState == Player.STATE_IDLE) stopNextPreviewWatch()
             // Orientation is never changed when a stream starts: playback stays
             // in the orientation the user is already holding the phone in.
             if (playWhenReady && playbackState == Player.STATE_READY) {

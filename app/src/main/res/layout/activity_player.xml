@@ -21,8 +21,8 @@
          video stops, the next one takes over from this same timestamp. -->
     <FrameLayout
         android:id="@+id/next_preview_container"
-        android:layout_width="190dp"
-        android:layout_height="107dp"
+        android:layout_width="247dp"
+        android:layout_height="139dp"
         android:layout_gravity="bottom|end"
         android:layout_margin="14dp"
         android:background="@drawable/next_preview_frame"
@@ -37,6 +37,20 @@
             app:controller_layout_id="@layout/player_controller"
             app:show_buffering="never"
             app:use_controller="false" />
+
+        <TextView
+            android:id="@+id/next_preview_label"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|start"
+            android:layout_margin="6dp"
+            android:background="#B3000000"
+            android:paddingHorizontal="6dp"
+            android:paddingVertical="2dp"
+            android:text="Up next"
+            android:textColor="#FFFFFF"
+            android:textSize="10sp"
+            android:textStyle="bold" />
     </FrameLayout>
 
     <!-- Title-card loading cover (Nuvio/Stremio style): the title's backdrop

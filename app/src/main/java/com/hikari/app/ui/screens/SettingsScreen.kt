@@ -894,6 +894,7 @@ fun SettingsScreen(nav: NavHostController) {
                     // lives here — it is a decision about SERVERS — and only here:
                     // the same card used to show up in the Player folder too.
                     item { SettingsCard { PlaybackStartCard(app) } }
+                    item { SettingsCard { NextPreviewCard(app) } }
                     // F5 — auto-rotate player with phone orientation
                     item { SettingsCard { AutoRotateCard(app) } }
                 }
@@ -1817,6 +1818,7 @@ private fun AdultContentCard(app: HikariApp) {
     }
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun AboutAppCard() {
     val context = LocalContext.current
@@ -1861,7 +1863,10 @@ private fun AboutAppCard() {
             color = MaterialTheme.colorScheme.onSurface,
         )
         Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalArrangement = Arrangement.spacedBy(0.dp),
+        ) {
             TextButton(onClick = {
                 com.hikari.app.ui.openInAppBrowser(
                     context,
@@ -1890,6 +1895,7 @@ private fun AboutAppCard() {
     }
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun UpdatesCard() {
     val context = LocalContext.current
@@ -1934,7 +1940,10 @@ private fun UpdatesCard() {
             )
         }
         Spacer(Modifier.height(12.dp))
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             Button(
                 onClick = {
                     if (checking) return@Button
@@ -5216,6 +5225,49 @@ private fun SlowConnectionCard(app: HikariApp) {
                 tipEnabled = it
                 scope.launch { runCatching { app.store.setSlowTipEnabled(it) } }
             },
+        )
+    }
+}
+
+@Composable
+private fun NextPreviewCard(app: HikariApp) {
+    val scope = rememberCoroutineScope()
+    var on by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        on = app.store.nextPreview()
+    }
+    Column(Modifier.padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Filled.PlayArrow,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                Text(
+                    tr("Next-video preview"),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    tr("Start the next episode muted in the corner ten seconds before the current one ends."),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = on,
+                onCheckedChange = { value ->
+                    on = value
+                    scope.launch { runCatching { app.store.setNextPreview(value) } }
+                },
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            tr("The preview continues fullscreen at the same timestamp when the video ends. Autoplay must also be on."),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

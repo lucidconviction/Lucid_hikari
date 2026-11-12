@@ -2,7 +2,7 @@
 
 **Lucid Hikari** is a universal streaming app for Android phones and TV. One place for your extensions and add-ons, live TV, sports, YouTube, music, manga and downloads — with a polished, glassy interface that stays out of the way.
 
-**Current version: 0.12.7.**
+**Current version: 0.12.8.**
 
 Lucid Hikari is a fork of **Hikari** by **Hikari Devs**. The original project and its developers deserve the credit for the foundation this app is built on.
 
@@ -15,14 +15,14 @@ Lucid Hikari is a fork of **Hikari** by **Hikari Devs**. The original project an
 - Global search across every enabled source at once, with results that stream in as each source answers.
 - Per-title servers, quality and codec details, subtitles, audio tracks and resume points.
 - Saved titles, collections, personal catalogs and a watch history that follows you across sources.
-- **Seamless autoplay**: the next episode starts muted in the corner ten seconds before the current one ends, then continues fullscreen at the same timestamp.
+- **Seamless autoplay**: the next episode starts muted in the corner ten seconds before the current one ends, then continues fullscreen at the same timestamp. A countdown labels the preview, tapping it takes over immediately, and Settings → Playback & Servers can switch the preview off.
 
 ### Live TV and IPTV
 - M3U playlists, local files and Xtream portals.
 - Xtream panels show their channel and group counts, account status and **expiry date** — on the account row and directly on the playlist tile.
 - **Generate portals** finds up to **15** verified Xtream accounts per run and parks them under Portal search results until you add one.
 - The panel's own XMLTV guide powers an **On now** strip — see what is airing before opening a channel.
-- Channel surfing with CH− / CH+, a full Channels list, and **Quick Ch** for jumping straight to news, sports or a network pattern. Quick Ch and Channels fall back to every installed playlist when the playing channel arrived without its list.
+- Channel surfing with CH− / CH+, a full Channels list, and **Quick Ch** for jumping straight to news, sports or a network pattern. Channels is a searchable sheet, and Quick Ch / Channels fall back to every installed playlist when the playing channel arrived without its list.
 - A deeper live buffer and a longer reconnect grace, so a short network dip does not immediately look like a dead channel.
 - **Channel Wall**: a curated, full-bleed wall of channels, with Music, Anime, Lifestyle, Black Media and Adult shelves. Long-press any tile to add it to **Favorites**; tap a tile to see every matching source in your playlists.
 
