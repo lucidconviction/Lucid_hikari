@@ -2,7 +2,7 @@
 
 **Lucid Hikari** is a universal streaming app for Android phones and TV. One place for your extensions and add-ons, live TV, sports, YouTube, music, manga and downloads — with a polished, glassy interface that stays out of the way.
 
-**Current version: 0.12.6.**
+**Current version: 0.12.7.**
 
 Lucid Hikari is a fork of **Hikari** by **Hikari Devs**. The original project and its developers deserve the credit for the foundation this app is built on.
 

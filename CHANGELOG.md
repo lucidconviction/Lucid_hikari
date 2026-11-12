@@ -1,3 +1,14 @@
+## 0.12.7
+
+**12 November 2026**
+
+### Autoplay handoff actually hands off
+
+- Fixed the next-video preview closing instead of taking over: the watcher no longer drops the pip when the fullscreen player pauses or reaches its end, so the handoff branch always sees a live preview.
+- Fixed shelf autoplay ending on the original description page: the player is `singleTop`, so starting the next title was delivered back to the SAME activity and the old screen then finished. The next title now recreates the player with the new intent instead of closing it.
+- The handoff continues at the preview's timestamp, with sound on, and the old preview/state can no longer overwrite the new title.
+- Verified end-to-end on the emulator: preview starts, the next video takes over fullscreen, and Back lands on the description page only when the user asks to leave.
+
 ## 0.12.6
 
 **12 November 2026**

@@ -1879,6 +1879,18 @@ class PlayerActivity : ComponentActivity() {
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        // Autoplay of a shelf title: the singleTop launch must not be treated as
+        // a channel switch. A new PlayerActivity would have been the usual way,
+        // but this activity is already at the top, so Android delivers the
+        // intent HERE instead of creating an instance — the old screen then
+        // finished and the user landed back on the detail page. Recreate this
+        // activity with the new intent: onCreate reads the new title/sources,
+        // and [restorePlaybackState] deliberately skips the old state bundle.
+        if (intent.getBooleanExtra("restartForAutoplay", false)) {
+            releaseNextPreview()
+            recreate()
+            return
+        }
         // Re-parse the channel-surf list from the NEW intent so the controller
         // points at the right playlist going forward.
         refreshChannelSurfController(intent)
@@ -9070,12 +9082,17 @@ class PlayerActivity : ComponentActivity() {
         val duration = p.duration
         if (duration <= 0L) return
         val remaining = duration - p.currentPosition
-        if (remaining > previewResolveLeadMs || !p.isPlaying) {
+        if (remaining > previewResolveLeadMs) {
             // Seeked back out of the window: stop the preview but keep the
             // already-resolved sources for the next approach.
             if (nextPreviewStarted) hideNextPreviewOnly()
             return
         }
+        // Do NOT hide the preview just because the main player paused or
+        // reached ENDED. That used to release it a beat before onPlaybackEnded,
+        // so the handoff branch was skipped and the old autoplay path ran. The
+        // preview is paused alongside the main player by onIsPlayingChanged and
+        // waits here for the handoff.
         if (nextPreview == null && nextPreviewJob?.isActive != true &&
             System.currentTimeMillis() - nextPreviewAttemptedAt > 15_000L
         ) {
@@ -9299,6 +9316,10 @@ class PlayerActivity : ComponentActivity() {
             putExtra("title", next.title)
             putExtra("sources", encodeSources(streams))
             putExtra("startPosition", startAtMs.coerceAtLeast(0L))
+            // singleTop will deliver this to this instance (see onNewIntent);
+            // recreate it with the new title instead of finishing, which used
+            // to reveal the detail page behind the player.
+            putExtra("restartForAutoplay", true)
             putExtra("askServer", false)
             putExtra("histProviderId", next.providerId)
             putExtra("histMediaId", next.id)
@@ -9317,7 +9338,9 @@ class PlayerActivity : ComponentActivity() {
             }
         }
         startActivity(intent)
-        finish()
+        // Do NOT finish(): singleTop delivers the new title to this instance,
+        // and onNewIntent recreates it. Finishing here was the bug that closed
+        // the player and showed the description page.
     }
 
     /** The Source pill: the same grouped picker, dismissible without a pick. */
@@ -13799,6 +13822,10 @@ class PlayerActivity : ComponentActivity() {
 
     /** Reads back what [onSaveInstanceState] wrote, or null for a normal launch. */
     private fun restorePlaybackState(saved: Bundle?): SavedPlaybackState? {
+        // A shelf-autoplay handoff reuses this activity through onNewIntent and
+        // recreate(); the state bundle still describes the video that just
+        // ended, so it must never win over the new intent.
+        if (intent.getBooleanExtra("restartForAutoplay", false)) return null
         saved ?: return null
         val raw = saved.getString(STATE_SOURCES).orEmpty()
         if (raw.isBlank()) return null
