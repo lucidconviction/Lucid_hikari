@@ -1,4 +1,7 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@file:OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.foundation.ExperimentalFoundationApi::class,
+)
 
 package com.hikari.app.ui.screens
 
@@ -9,6 +12,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,6 +46,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Check
@@ -118,6 +123,7 @@ private const val WALL_PREFS = "channel_wall"
 private const val WALL_CUSTOM = "custom_channels"
 private const val WALL_COUNTRIES = "countries"
 private const val WALL_LISTS = "lists"
+private const val WALL_FAVORITES = "favorites"
 
 private data class WallCountryOption(val label: String, val category: String)
 
@@ -180,6 +186,8 @@ private val WallListOptions = listOf(
     "Music",
     "Anime",
     "Lifestyle",
+    "Black Media",
+    "Adult (18+)",
     "News",
     "Discovery & Documentaries",
     "Kids & Family",
@@ -319,10 +327,21 @@ fun ChannelWallScreen(nav: NavHostController) {
     val allProviders by app.providers.providers.collectAsState()
     val playlists = remember(allProviders) { allProviders.filterIsInstance<IptvProvider>() }
     val prefs = remember { context.getSharedPreferences(WALL_PREFS, Context.MODE_PRIVATE) }
+    val nsfwOn = com.hikari.app.ui.rememberNsfwEnabled()
 
     var query by rememberSaveable { mutableStateOf("") }
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     var customChannels by remember { mutableStateOf<List<WallCustomChannel>>(emptyList()) }
+    var favoriteIds by remember {
+        mutableStateOf(
+            prefs.getString(WALL_FAVORITES, null)
+                ?.split(',')
+                ?.map { it.trim() }
+                ?.filter { it.isNotBlank() }
+                ?.toSet()
+                .orEmpty()
+        )
+    }
     var showAddCustom by remember { mutableStateOf(false) }
     var showCountries by remember { mutableStateOf(false) }
     var selectedCountries by remember {
@@ -372,6 +391,19 @@ fun ChannelWallScreen(nav: NavHostController) {
     fun saveCustomChannels(list: List<WallCustomChannel>) {
         customChannels = list
         prefs.edit().putString(WALL_CUSTOM, encodeCustomChannels(list)).apply()
+    }
+
+    fun toggleFavorite(channel: WallChannel) {
+        val next = if (channel.id in favoriteIds) favoriteIds - channel.id else favoriteIds + channel.id
+        favoriteIds = next
+        prefs.edit().putString(WALL_FAVORITES, next.joinToString(",")).apply()
+        toast(
+            if (channel.id in next) {
+                "\"${channel.name}\" added to favorites"
+            } else {
+                "\"${channel.name}\" removed from favorites"
+            }
+        )
     }
 
     LaunchedEffect(Unit) {
@@ -487,12 +519,13 @@ fun ChannelWallScreen(nav: NavHostController) {
     }
 
     val wallQuery = query.trim()
-    val searchResults = remember(wallQuery) {
+    val searchResults = remember(wallQuery, nsfwOn) {
         if (wallQuery.isBlank()) emptyList()
         else ChannelWallChannels.all.filter { channel ->
-            channel.name.contains(wallQuery, ignoreCase = true) ||
-                channel.category.contains(wallQuery, ignoreCase = true) ||
-                channel.keywords.any { it.contains(wallQuery, ignoreCase = true) }
+            (nsfwOn || channel.category != "Adult") &&
+                (channel.name.contains(wallQuery, ignoreCase = true) ||
+                    channel.category.contains(wallQuery, ignoreCase = true) ||
+                    channel.keywords.any { it.contains(wallQuery, ignoreCase = true) })
         }
     }
 
@@ -563,7 +596,12 @@ fun ChannelWallScreen(nav: NavHostController) {
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     gridItems(searchResults, key = { it.id }) { channel ->
-                        WallGridCard(channel) { openWall(channel) }
+                        WallGridCard(
+                            channel = channel,
+                            favorite = channel.id in favoriteIds,
+                            onClick = { openWall(channel) },
+                            onLongClick = { toggleFavorite(channel) },
+                        )
                     }
                 }
             }
@@ -575,6 +613,21 @@ fun ChannelWallScreen(nav: NavHostController) {
             ) {
                 item {
                     WallHero(heroChannels) { openWall(it) }
+                }
+                val favoriteChannels = ChannelWallChannels.all.filter {
+                    it.id in favoriteIds && (nsfwOn || it.category != "Adult")
+                }
+                if (favoriteChannels.isNotEmpty()) {
+                    item(key = "wall:favorites") {
+                        WallSection(
+                            "Favorites",
+                            "Long-press any channel to add it here, or to remove it",
+                            favoriteChannels,
+                            ::openWall,
+                            favoriteIds,
+                            ::toggleFavorite,
+                        )
+                    }
                 }
                 item {
                     WallQuickRow(
@@ -598,10 +651,10 @@ fun ChannelWallScreen(nav: NavHostController) {
                 val espn = espnIds.mapNotNull(ChannelWallChannels::byId)
                 val usLeagues = usLeagueIds.mapNotNull(ChannelWallChannels::byId)
                 if (espn.isNotEmpty()) {
-                    item { WallSection("ESPN & College", "Every ESPN feed, NCAA and the conference networks", espn, ::openWall) }
+                    item { WallSection("ESPN & College", "Every ESPN feed, NCAA and the conference networks", espn, ::openWall, favoriteIds, ::toggleFavorite) }
                 }
                 if (usLeagues.isNotEmpty()) {
-                    item { WallSection("US Major Leagues", "NBA, NFL, MLB, NHL and the national sports networks", usLeagues, ::openWall) }
+                    item { WallSection("US Major Leagues", "NBA, NFL, MLB, NHL and the national sports networks", usLeagues, ::openWall, favoriteIds, ::toggleFavorite) }
                 }
                 val categories = listOf(
                     Triple("Soccer", "Champions League, Premier League, beIN and more", "Soccer"),
@@ -611,6 +664,8 @@ fun ChannelWallScreen(nav: NavHostController) {
                     Triple("Music", "MTV, VH1, BET, CMT and the music channels", "Music"),
                     Triple("Anime", "Adult Swim, Toonami, Animax and animation", "Anime"),
                     Triple("Lifestyle", "Food, home, travel and reality", "Lifestyle"),
+                    Triple("Black Media", "TV One, Aspire, ALLBLK, TheGrio and more", "Black Media"),
+                    Triple("Adult (18+)", "Premium adult networks — hidden when NSFW is off", "Adult"),
                     Triple("News", "CNN, BBC, Sky News and the world's newsrooms", "News"),
                     Triple("Discovery & Documentaries", "Nat Geo, Discovery, History and more", "Discovery"),
                     Triple("Kids & Family", "Cartoon Network, Disney, Nickelodeon and more", "Kids"),
@@ -619,10 +674,11 @@ fun ChannelWallScreen(nav: NavHostController) {
                 )
                 categories.forEach { (title, subtitle, category) ->
                     if (title !in selectedLists) return@forEach
+                    if (category == "Adult" && !nsfwOn) return@forEach
                     val channels = ChannelWallChannels.byCategory(category)
                     if (channels.isNotEmpty()) {
                         item(key = "cat:$category") {
-                            WallSection(title, subtitle, channels, ::openWall)
+                            WallSection(title, subtitle, channels, ::openWall, favoriteIds, ::toggleFavorite)
                         }
                     }
                 }
@@ -637,6 +693,8 @@ fun ChannelWallScreen(nav: NavHostController) {
                                     "Popular and premium networks from ${country.label}",
                                     channels,
                                     ::openWall,
+                                    favoriteIds,
+                                    ::toggleFavorite,
                                 )
                             }
                         }
@@ -977,6 +1035,8 @@ private fun WallSection(
     subtitle: String,
     channels: List<WallChannel>,
     onOpen: (WallChannel) -> Unit,
+    favoriteIds: Set<String> = emptySet(),
+    onToggleFavorite: (WallChannel) -> Unit = {},
 ) {
     Column {
         Row(
@@ -1022,7 +1082,12 @@ private fun WallSection(
             itemsIndexed(channels, key = { _, channel -> channel.id }) { index, channel ->
                 RiseIn(index) {
                     Box(Modifier.width(138.dp)) {
-                        WallCard(channel) { onOpen(channel) }
+                        WallCard(
+                            channel = channel,
+                            favorite = channel.id in favoriteIds,
+                            onClick = { onOpen(channel) },
+                            onLongClick = { onToggleFavorite(channel) },
+                        )
                     }
                 }
             }
@@ -1083,7 +1148,12 @@ private fun WallPromoFallback(name: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun WallCard(channel: WallChannel, onClick: () -> Unit) {
+private fun WallCard(
+    channel: WallChannel,
+    favorite: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
     val colors = remember(channel.gradient) { channel.gradient.map(::Color) }
     Box(
         Modifier
@@ -1091,7 +1161,7 @@ private fun WallCard(channel: WallChannel, onClick: () -> Unit) {
             .height(168.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(Brush.linearGradient(colors.ifEmpty { listOf(Color(0xFF1A1A1A), Color(0xFF0B0B10)) }))
-            .clickable(onClick = onClick),
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
     ) {
         // The artwork is the tile: edge to edge, no inset logo panel. Channels
         // with no image at all get a generated initials poster (see
@@ -1108,6 +1178,17 @@ private fun WallCard(channel: WallChannel, onClick: () -> Unit) {
                     ),
                 ),
         )
+        if (favorite) {
+            Icon(
+                Icons.Filled.Favorite,
+                contentDescription = "Favorite",
+                tint = Color(0xFFFF5A7A),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+                    .size(18.dp),
+            )
+        }
         Column(Modifier.align(Alignment.BottomStart).padding(10.dp)) {
             Text(channel.name, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(channel.category, color = Color.White.copy(alpha = 0.65f), fontSize = 10.sp, maxLines = 1)
@@ -1116,7 +1197,12 @@ private fun WallCard(channel: WallChannel, onClick: () -> Unit) {
 }
 
 @Composable
-private fun WallGridCard(channel: WallChannel, onClick: () -> Unit) {
+private fun WallGridCard(
+    channel: WallChannel,
+    favorite: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
     val colors = remember(channel.gradient) { channel.gradient.map(::Color) }
     Box(
         Modifier
@@ -1124,7 +1210,7 @@ private fun WallGridCard(channel: WallChannel, onClick: () -> Unit) {
             .aspectRatio(0.82f)
             .clip(RoundedCornerShape(14.dp))
             .background(Brush.linearGradient(colors.ifEmpty { listOf(Color(0xFF1A1A1A), Color(0xFF0B0B10)) }))
-            .clickable(onClick = onClick),
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
     ) {
         WallFullBleedArt(channel)
         Box(
@@ -1138,6 +1224,17 @@ private fun WallGridCard(channel: WallChannel, onClick: () -> Unit) {
                     ),
                 ),
         )
+        if (favorite) {
+            Icon(
+                Icons.Filled.Favorite,
+                contentDescription = "Favorite",
+                tint = Color(0xFFFF5A7A),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp)
+                    .size(15.dp),
+            )
+        }
         Column(Modifier.align(Alignment.BottomStart).padding(8.dp)) {
             Text(channel.name, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(channel.category, color = Color.White.copy(alpha = 0.65f), fontSize = 9.sp, maxLines = 1)

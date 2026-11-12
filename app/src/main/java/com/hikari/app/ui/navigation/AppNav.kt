@@ -1920,6 +1920,54 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
             FirstVisitTutorial(route = currentRoute)
         }
 
+        // One-time "what's new" after the first tour: explains the pieces this
+        // release added (next-video preview, 15 generated portals, wall
+        // favorites, Telegram) without interrupting a brand-new user who is
+        // still reading the Home tour. It appears on the first start after that
+        // tour has been seen, then never again.
+        val whatsNewPrefs = remember { context.getSharedPreferences("whats_new", 0) }
+        var showWhatsNew by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) {
+            if (!whatsNewPrefs.getBoolean("v0_12_6_seen", false) &&
+                com.hikari.app.ui.tutorial.TutorialStore.hasSeen(context, "home")
+            ) {
+                delay(1_400)
+                showWhatsNew = true
+            }
+        }
+        if (showWhatsNew) {
+            AlertDialog(
+                onDismissRequest = {
+                    showWhatsNew = false
+                    whatsNewPrefs.edit().putBoolean("v0_12_6_seen", true).apply()
+                },
+                title = { Text(tr("What's new in 0.12.6")) },
+                text = {
+                    Text(
+                        tr(
+                            "• Next video preview: the next episode starts muted in the corner ten seconds before the current one ends, then continues fullscreen at the same timestamp.\n\n" +
+                                "• Generate portals now finds 15 verified panels per run, and Xtream tiles show their expiry date.\n\n" +
+                                "• Channel Wall has favorites (long-press any tile), plus new Black Media and Adult shelves.\n\n" +
+                                "• Join the community on Telegram: @lucidHikari"
+                        )
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showWhatsNew = false
+                        whatsNewPrefs.edit().putBoolean("v0_12_6_seen", true).apply()
+                    }) { Text(tr("Start watching")) }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showWhatsNew = false
+                        whatsNewPrefs.edit().putBoolean("v0_12_6_seen", true).apply()
+                        com.hikari.app.ui.openTelegram(context)
+                    }) { Text(tr("Join Telegram")) }
+                },
+            )
+        }
+
         // GitHub update check: once a day, quietly, only when there is a newer
         // release. Settings → About & Updates owns the switch and the manual
         // check; this is the same dialog on the same Updater so both agree.

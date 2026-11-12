@@ -16,6 +16,29 @@
         app:pause_icon="@drawable/hikari_pause"
         app:show_buffering="when_playing" />
 
+    <!-- Next-video preview: a muted player in the lower-right corner that
+         starts ten seconds before the current video ends. When the fullscreen
+         video stops, the next one takes over from this same timestamp. -->
+    <FrameLayout
+        android:id="@+id/next_preview_container"
+        android:layout_width="190dp"
+        android:layout_height="107dp"
+        android:layout_gravity="bottom|end"
+        android:layout_margin="14dp"
+        android:background="@drawable/next_preview_frame"
+        android:clipToOutline="true"
+        android:elevation="10dp"
+        android:visibility="gone">
+
+        <androidx.media3.ui.PlayerView
+            android:id="@+id/next_preview_view"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            app:controller_layout_id="@layout/player_controller"
+            app:show_buffering="never"
+            app:use_controller="false" />
+    </FrameLayout>
+
     <!-- Title-card loading cover (Nuvio/Stremio style): the title's backdrop
          with its name breathing in and out, shown from the instant the player
          opens until the first server paints its first frame. It replaces both

@@ -8,9 +8,9 @@ import android.net.Uri
 import android.widget.Toast
 import com.hikari.app.web.WebViewActivity
 
-/** Hikari's Telegram group — help, bug reports, title requests and release
- *  news. Single source of truth for every place that links to it. */
-const val TELEGRAM_CHANNEL_URL = "https://t.me/CodegeasseHikari"
+/** Lucid Hikari's Telegram group — help, bug reports, title requests and
+ *  release news. Single source of truth for every place that links to it. */
+const val TELEGRAM_CHANNEL_URL = "https://t.me/lucidHikari"
 
 /** Hikari's subreddit — help, discussion and release news. */
 const val REDDIT_COMMUNITY_URL = "https://www.reddit.com/r/HikariApp"

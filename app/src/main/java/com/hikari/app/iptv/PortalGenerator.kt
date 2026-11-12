@@ -28,7 +28,7 @@ import java.util.zip.GZIPInputStream
 object PortalGenerator {
 
     /** How many working portals one generation run should collect. */
-    const val TARGET = 25
+    const val TARGET = 15
 
     private const val CLOUD_PRIMARY =
         "https://pub-38f23eb5f3304328b9774fadfa233a38.r2.dev/xtreamity-plus-db.csv.gz"

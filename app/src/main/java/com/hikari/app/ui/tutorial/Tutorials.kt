@@ -146,6 +146,10 @@ object Tutorials {
                     "Use + to add an M3U link, a file, or an Xtream portal. Xtream portals are validated before they are saved and show their channel and group counts.",
                 ),
                 TutorialPage(
+                    "Generate portals",
+                    "Generate portals checks Cloud Vault and Reddit and keeps 15 working Xtream accounts per run. They wait under Portal search results — tap Add on the ones you want. Every Xtream tile also wears its expiry date.",
+                ),
+                TutorialPage(
                     "Know what is on",
                     "Each Xtream account shows its expiry date, with a warning when it is close. The On now strip reads the panel's own XMLTV guide, so you can see the current programme without opening a channel.",
                 ),
@@ -167,6 +171,10 @@ object Tutorials {
                 TutorialPage(
                     "Full-bleed artwork",
                     "Every tile — curated or one you add — uses a full-bleed channel icon or promo image behind its name, so the wall reads as a wall of programmes rather than a list of logos. Tap a tile to see every source found for it.",
+                ),
+                TutorialPage(
+                    "Favorites and new shelves",
+                    "Long-press any tile to add it to Favorites (long-press again to remove it); the shelf stays at the top only while it has channels. The wall also carries Music, Anime, Lifestyle, Black Media and an Adult shelf that appears only while NSFW is enabled.",
                 ),
             ),
         ),

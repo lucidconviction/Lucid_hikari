@@ -1902,6 +1902,43 @@ private data class IptvCard(
     val local: Boolean = false,
 )
 
+/** "Expires Aug 12" / "Expired Aug 12" for a provider's matching Xtream
+ *  account, matched by panel root + username. Null for ordinary M3U links. */
+private fun iptvExpiryLabel(
+    providerUrl: String,
+    accounts: List<com.hikari.app.data.XtreamAccount>,
+): String? {
+    val creds = com.hikari.app.data.XtreamCredentials.fromUrl(providerUrl) ?: return null
+    val acc = accounts.firstOrNull {
+        it.username.equals(creds.username, true) &&
+            it.baseUrl.trimEnd('/').equals(creds.root.trimEnd('/'), true)
+    } ?: return null
+    val exp = acc.expDate?.takeIf { it > 0L } ?: return null
+    val date = java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault())
+        .format(java.util.Date(exp))
+    val daysLeft = ((exp - System.currentTimeMillis()) / 86_400_000L).toInt()
+    return when {
+        daysLeft < 0 -> "Expired $date"
+        daysLeft <= 7 -> "Expires $date · ${daysLeft.coerceAtLeast(0)}d left"
+        else -> "Expires $date"
+    }
+}
+
+/** Expiry from the generator's saved portal record (a portal added without a
+ *  full Xtream account row). */
+private fun iptvPortalExpiry(
+    providerUrl: String,
+    portals: List<PortalStore.Saved>,
+): String? {
+    val creds = com.hikari.app.data.XtreamCredentials.fromUrl(providerUrl) ?: return null
+    val portal = portals.firstOrNull {
+        it.username.equals(creds.username, true) &&
+            it.baseUrl.trimEnd('/').equals(creds.root.trimEnd('/'), true)
+    } ?: return null
+    val expiry = portal.expiry?.takeIf { it.isNotBlank() } ?: return null
+    return if (expiry.equals("Unlimited", true)) "Expiry: Unlimited" else "Expires $expiry"
+}
+
 /**
  * The IPTV tab's tiles, remembered between visits.
  *
@@ -2307,6 +2344,12 @@ private fun IptvKindGrid(
     nav: NavHostController,
     onRemove: (IptvCard) -> Unit,
 ) {
+    // Xtream accounts carry the panel's expiry separately from the provider
+    // URL; read them here so every Xtream tile can wear its date.
+    val app = LocalContext.current.applicationContext as HikariApp
+    val xtreamAccounts by app.store.xtreamAccountsFlow().collectAsState(initial = emptyList())
+    val savedPortals by PortalStore.portals.collectAsState(initial = emptyList())
+    LaunchedEffect(Unit) { PortalStore.init(app) }
     when {
         showOnboarding || (cards.isEmpty() && !reading) -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -2452,6 +2495,10 @@ private fun IptvKindGrid(
                     },
                     shape = shape,
                     badge = if (card.error != null) tr("Didn't load") else null,
+                    expiry = remember(card.id, card.url, xtreamAccounts, savedPortals) {
+                        iptvExpiryLabel(card.url, xtreamAccounts)
+                            ?: iptvPortalExpiry(card.url, savedPortals)
+                    },
                     onRemove = { onRemove(card) },
                 ) {
                     if (card.torrent) {
@@ -2613,6 +2660,9 @@ private fun IptvTile(
     /** F2 — health dot drawn at the bottom-right of the cover: green all alive,
      *  yellow mixed, red all dead. NONE draws no dot. */
     health: HealthDot = HealthDot.NONE,
+    /** Xtream panel expiration, drawn on the cover so the date is visible
+     *  without opening the playlist. Null for ordinary M3U links. */
+    expiry: String? = null,
     onClick: () -> Unit,
 ) {
     val tokens = rememberGlassTokens()
@@ -2677,6 +2727,27 @@ private fun IptvTile(
                         .padding(6.dp)
                         .size(10.dp),
                 ) {}
+            }
+            if (!expiry.isNullOrBlank()) {
+                Surface(
+                    color = Color.Black.copy(alpha = 0.72f),
+                    shape = RoundedCornerShape(50),
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(5.dp),
+                ) {
+                    Text(
+                        expiry,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontSize = 9.sp,
+                        color = if (expiry.startsWith("Expired", true)) {
+                            Color(0xFFFF6B6B)
+                        } else {
+                            Color.White
+                        },
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
             }
             if (onRemove != null) {
                 Surface(
@@ -2931,7 +3002,10 @@ private fun GeneratedPortalsRow(app: HikariApp) {
                                 listOfNotNull(
                                     portal.host,
                                     portal.source,
-                                    portal.expiry,
+                                    portal.expiry?.let {
+                                        if (it.equals("Unlimited", true)) "Expiry: Unlimited"
+                                        else "Expires $it"
+                                    },
                                     portal.maxConnections?.let { "$it conn" },
                                 ).joinToString(" · "),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,

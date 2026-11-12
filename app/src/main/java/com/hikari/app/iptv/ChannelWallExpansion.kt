@@ -23,6 +23,8 @@ object ChannelWallExpansion {
         "Music" -> 0xFF7C3AEDL to 0xFF160B26L
         "Anime" -> 0xFFEC4899L to 0xFF1A0A14L
         "Lifestyle" -> 0xFFF59E0BL to 0xFF1A1406L
+        "Black Media" -> 0xFF7C3AEDL to 0xFF120A1FL
+        "Adult" -> 0xFFE11D48L to 0xFF1A060EL
         "Movies" -> 0xFFB8860BL to 0xFF12100AL
         "News" -> 0xFF0EA5E9L to 0xFF07131AL
         "Sports" -> 0xFF2563EBL to 0xFF070F1FL
@@ -261,5 +263,55 @@ object ChannelWallExpansion {
         ch("supercars", "Supercars", "SCAR", "Racing", null, "supercars", "v8 supercars"),
         ch("wrc_racing", "WRC", "WRC", "Racing", null, "wrc", "world rally"),
         ch("world_of_outlaws", "World of Outlaws", "WOO", "Racing", null, "world of outlaws", "outlaws"),
+
+        // ---- Black media ----------------------------------------------------
+        ch("tv_one", "TV One", "TV1", "Black Media", null, "tv one", "tvone"),
+        ch("aspire_tv", "Aspire TV", "ASPIRE", "Black Media", null, "aspire", "aspire tv"),
+        ch("cleo_tv", "Cleo TV", "CLEO", "Black Media", null, "cleo tv", "cleo"),
+        ch("bounce_tv", "Bounce TV", "BOUNCE", "Black Media", null, "bounce", "bounce tv"),
+        ch("thegrio", "TheGrio", "GRIO", "Black Media", null, "thegrio", "the grio"),
+        ch("fox_soul", "Fox Soul", "SOUL", "Black Media", null, "fox soul", "foxsoul"),
+        ch("allblk", "ALLBLK", "ALLBLK", "Black Media", null, "allblk", "all blk", "urban movie channel"),
+        ch("brown_sugar", "Brown Sugar", "BSUGAR", "Black Media", null, "brown sugar", "brownsugar"),
+        ch("kweli_tv", "KweliTV", "KWELI", "Black Media", null, "kweli", "kwelitv"),
+        ch("afroland_tv", "AfroLandTV", "AFRO", "Black Media", null, "afroland", "afrolandtv"),
+        ch("ebony_tv", "Ebony TV", "EBONY", "Black Media", null, "ebony tv", "ebony"),
+        ch("jet_tv", "JET TV", "JET", "Black Media", null, "jet tv", "jet"),
+        ch("black_star", "Black Star Network", "BSN", "Black Media", null, "black star", "blackstar"),
+        ch("newsone", "NewsOne", "NEWS1", "Black Media", null, "newsone", "news one"),
+        ch("revolt_tv", "Revolt", "RVLT", "Black Media", null, "revolt", "revolt tv"),
+        ch("tv_one_now", "TV One Now", "TV1N", "Black Media", null, "tv one now", "tvone now"),
+        ch("impact_tv", "Impact Network", "IMPACT", "Black Media", null, "impact network", "impact tv"),
+        ch("soul_of_the_south", "Soul of the South", "SOTS", "Black Media", null, "soul of the south", "sots"),
+        ch("black_enterprise", "Black Enterprise", "BE", "Black Media", null, "black enterprise", "blackenterprise"),
+        ch("the_shade_room", "The Shade Room", "TSR", "Black Media", null, "shade room", "theshaderoom"),
+
+        // ---- Adult premium networks (hidden when NSFW is off) ---------------
+        ch("playboy_tv", "Playboy TV", "PBTV", "Adult", null, "playboy", "playboy tv"),
+        ch("penthouse_tv", "Penthouse TV", "PENT", "Adult", null, "penthouse", "penthouse tv"),
+        ch("hustler_tv", "Hustler TV", "HUST", "Adult", null, "hustler", "hustler tv"),
+        ch("brazzers_tv", "Brazzers TV", "BRZ", "Adult", null, "brazzers", "brazzers tv"),
+        ch("reality_kings", "Reality Kings", "RK", "Adult", null, "reality kings", "realitykings"),
+        ch("naughty_america", "Naughty America", "NA", "Adult", null, "naughty america", "naughtyamerica"),
+        ch("vivid_tv", "Vivid TV", "VIVID", "Adult", null, "vivid", "vivid tv"),
+        ch("private_tv", "Private TV", "PRIV", "Adult", null, "private tv", "private"),
+        ch("dorcel_tv", "Dorcel TV", "DORCEL", "Adult", null, "dorcel", "dorcel tv"),
+        ch("blue_hustler", "Blue Hustler", "BHUST", "Adult", null, "blue hustler", "bluehustler"),
+        ch("erotic_1", "Erotic 1", "ER1", "Adult", null, "erotic 1", "erotic1"),
+        ch("erotic_2", "Erotic 2", "ER2", "Adult", null, "erotic 2", "erotic2"),
+        ch("erotic_3", "Erotic 3", "ER3", "Adult", null, "erotic 3", "erotic3"),
+        ch("erotic_4", "Erotic 4", "ER4", "Adult", null, "erotic 4", "erotic4"),
+        ch("evil_angel", "Evil Angel", "EVIL", "Adult", null, "evil angel", "evilangel"),
+        ch("jules_jordan", "Jules Jordan", "JJ", "Adult", null, "jules jordan", "julesjordan"),
+        ch("digital_playground", "Digital Playground", "DP", "Adult", null, "digital playground", "digitalplayground"),
+        ch("wicked_tv", "Wicked TV", "WICKED", "Adult", null, "wicked", "wicked tv"),
+        ch("vixen_tv", "Vixen TV", "VIXEN", "Adult", null, "vixen", "vixen tv"),
+        ch("blacked_tv", "Blacked", "BLACKED", "Adult", null, "blacked", "blacked tv"),
+        ch("tushy_tv", "Tushy", "TUSHY", "Adult", null, "tushy", "tushy tv"),
+        ch("deeper_tv", "Deeper", "DEEPER", "Adult", null, "deeper", "deeper tv"),
+        ch("twistys_tv", "Twistys TV", "TWST", "Adult", null, "twistys", "twistys tv"),
+        ch("xempire_tv", "XEmpire", "XEMP", "Adult", null, "xempire", "x empire"),
+        ch("redlight_tv", "RedLight TV", "REDL", "Adult", null, "redlight", "red light tv"),
+        ch("sct_tv", "SCT TV", "SCT", "Adult", null, "sct", "sct tv"),
     )
 }

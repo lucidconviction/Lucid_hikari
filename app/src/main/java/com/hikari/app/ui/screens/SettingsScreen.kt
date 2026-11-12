@@ -1883,6 +1883,9 @@ private fun AboutAppCard() {
                     "Lucid Hikari on GitHub",
                 )
             }) { Text(tr("Lucid Hikari")) }
+            TextButton(onClick = {
+                com.hikari.app.ui.openTelegram(context)
+            }) { Text(tr("Telegram @lucidHikari")) }
         }
     }
 }
@@ -1957,6 +1960,9 @@ private fun UpdatesCard() {
                     "Hikari releases",
                 )
             }) { Text(tr("Open releases")) }
+            TextButton(onClick = {
+                com.hikari.app.ui.openTelegram(context)
+            }) { Text(tr("Telegram @lucidHikari")) }
         }
         status?.let { s ->
             Spacer(Modifier.height(4.dp))

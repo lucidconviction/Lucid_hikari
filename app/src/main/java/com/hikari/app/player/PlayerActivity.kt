@@ -1932,6 +1932,8 @@ class PlayerActivity : ComponentActivity() {
         hideSystemUi()
 
         playerView = findViewById(R.id.player_view)
+        nextPreviewContainer = findViewById(R.id.next_preview_container)
+        nextPreviewView = findViewById(R.id.next_preview_view)
         // The progress bar is a real focus target on TV. Once it owns focus,
         // Left/Right scrubs the video instead of jumping between the buttons.
         // This complements the normal hidden-controller D-pad seek path.
@@ -5724,6 +5726,37 @@ class PlayerActivity : ComponentActivity() {
      *  another one behind it. */
     private var autoplayRunning = false
 
+    /** The next video, resolved early enough to start its muted preview before
+     *  the current one ends. [queueItem] is set when the next video belongs to
+     *  the shelf queue (a new player), null when it is the next episode of the
+     *  title already playing (switched in place). */
+    private data class NextPlaybackPreview(
+        val title: String,
+        val item: AppMediaItem?,
+        val episode: Episode?,
+        val queueItem: AppMediaItem?,
+        val sources: List<PlayerSource>,
+        val sourceIndex: Int = 0,
+    )
+
+    private var nextPreview: NextPlaybackPreview? = null
+    private var nextPreviewPlayer: ExoPlayer? = null
+    private var nextPreviewView: PlayerView? = null
+    private var nextPreviewContainer: View? = null
+    private var nextPreviewJob: Job? = null
+    private var nextPreviewWatch: Runnable? = null
+    private var nextPreviewStarted = false
+    private var nextPreviewAttemptedAt = 0L
+
+    /** Ten seconds before the end, per the user's request: mute the next video
+     *  in the corner, then continue from the same timestamp when the current
+     *  one ends. */
+    private val previewVisibleLeadMs: Long = 10_000L
+
+    /** Resolution starts earlier than that, so a slow provider still has time
+     *  to answer before the preview must be on screen. */
+    private val previewResolveLeadMs: Long = 28_000L
+
     /** Set when the device/stream refused the effects pipeline, so the menu can
      *  say so instead of silently doing nothing. */
     private var enhanceUnsupported = false
@@ -8080,6 +8113,12 @@ class PlayerActivity : ComponentActivity() {
     private fun isIptvStream(): Boolean {
         if (channelSurfController != null) return true
         if (com.hikari.app.data.IptvMark.isIptvProvider(originProviderId)) return true
+        if (originProviderId.equals("channel-wall", true)) return true
+        if (sources.any {
+                it.provider.equals("IPTV", true) ||
+                    com.hikari.app.data.IptvMark.isIptvProvider(it.providerId)
+            }
+        ) return true
         val item = favouriteItem ?: return false
         return com.hikari.app.data.IptvMark.of(item)
     }
@@ -8159,13 +8198,38 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun showChannelsDialog() {
-        val options = mutableListOf<GlassOption>()
         val channels = channelSurfController?.channels.orEmpty()
         val currentIndex = channelSurfController?.currentIndex ?: -1
         if (channels.isEmpty()) {
-            Toast.makeText(this, I18n.t("No active channel list"), Toast.LENGTH_SHORT).show()
+            // No playlist context was handed over (a single wall/network link,
+            // a direct channel open): fall back to every installed IPTV
+            // playlist, exactly like Quick Ch. The Channels pill must always
+            // list something when the user has playlists.
+            Toast.makeText(this, I18n.t("Loading channels from your playlists…"), Toast.LENGTH_SHORT).show()
+            lifecycleScope.launch {
+                val all = withContext(Dispatchers.IO) { gatherEveryIptvChannel(emptyList()) }
+                if (isFinishing || isDestroyed) return@launch
+                if (all.isEmpty()) {
+                    Toast.makeText(
+                        this@PlayerActivity,
+                        I18n.t("No IPTV playlists yet — add one in Live TV"),
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    return@launch
+                }
+                val rows = all.take(500)
+                showGlassMenu(
+                    I18n.t("IPTV Channels"),
+                    rows.map { GlassOption(it.name) },
+                    hint = I18n.t("${all.size} channels across every playlist"),
+                    iconRes = R.drawable.ic_episodes,
+                ) { which ->
+                    rows.getOrNull(which)?.let { channel -> switchToQuickChannel(channel, all) }
+                }
+            }
             return
         }
+        val options = mutableListOf<GlassOption>()
         channels.forEachIndexed { i, ch ->
             val isCurrent = i == currentIndex
             options.add(
@@ -8206,25 +8270,39 @@ class PlayerActivity : ComponentActivity() {
      */
     private fun showQuickChannelsDialog() {
         val current = channelSurfController?.channels.orEmpty()
-        if (current.isEmpty()) {
-            Toast.makeText(this, I18n.t("No active channel list"), Toast.LENGTH_SHORT).show()
-            return
-        }
         Toast.makeText(this, I18n.t("Searching all playlists…"), Toast.LENGTH_SHORT).show()
         lifecycleScope.launch {
             val all = withContext(kotlinx.coroutines.Dispatchers.IO) {
-                val app = applicationContext as? com.hikari.app.HikariApp
-                val playlists = app?.providers?.providers?.value
-                    ?.filterIsInstance<com.hikari.app.providers.IptvProvider>()
-                    .orEmpty()
-                val gathered = if (playlists.isEmpty()) emptyList() else {
-                    runCatching { com.hikari.app.providers.gatherIptvChannels(playlists) }
-                        .getOrDefault(emptyList())
-                }
-                (gathered + current).distinctBy { it.url }
+                gatherEveryIptvChannel(current)
             }
-            showQuickCategories(if (all.isEmpty()) current else all)
+            if (isFinishing || isDestroyed) return@launch
+            if (all.isEmpty()) {
+                Toast.makeText(
+                    this@PlayerActivity,
+                    I18n.t("No IPTV playlists yet — add one in Live TV"),
+                    Toast.LENGTH_LONG,
+                ).show()
+                return@launch
+            }
+            showQuickCategories(all)
         }
+    }
+
+    /** Every channel from every installed IPTV playlist, plus [current] (which
+     *  may be a list this player was handed directly). Used by Quick Ch and
+     *  by the Channels pill when no playlist context came with the stream. */
+    private suspend fun gatherEveryIptvChannel(
+        current: List<com.hikari.app.data.IptvChannel>,
+    ): List<com.hikari.app.data.IptvChannel> {
+        val app = applicationContext as? com.hikari.app.HikariApp
+        val playlists = app?.providers?.providers?.value
+            ?.filterIsInstance<com.hikari.app.providers.IptvProvider>()
+            .orEmpty()
+        val gathered = if (playlists.isEmpty()) emptyList() else {
+            runCatching { com.hikari.app.providers.gatherIptvChannels(playlists) }
+                .getOrDefault(emptyList())
+        }
+        return (gathered + current).distinctBy { it.url }
     }
 
     private fun showQuickCategories(channels: List<com.hikari.app.data.IptvChannel>) {
@@ -8587,6 +8665,9 @@ class PlayerActivity : ComponentActivity() {
         ep: Episode,
         playerSources: List<PlayerSource>,
         fromAutoplay: Boolean,
+        /** The preview player's position: resume the new episode here instead
+         *  of starting from zero (see [handOffNextPreview]). */
+        startAtMs: Long = 0L,
     ) {
         if (playerSources.isEmpty()) return
         // Same as the detail page's search: the server names are the only
@@ -8602,10 +8683,11 @@ class PlayerActivity : ComponentActivity() {
         liveSessionId = null
         // Adopt the new episode (top-bar episode line + watch-history key).
         applyLiveEpisode(ep)
-        // A fresh episode starts fresh: no resume position, no remembered
-        // server, and no memory of the old episode's failed URLs.
-        startPositionMs = 0L
-        seekPending = false
+        // A fresh episode starts fresh unless the next-episode preview already
+        // played its first seconds — then the handoff keeps that timestamp so
+        // the picture continues rather than jumping back to zero.
+        startPositionMs = startAtMs.coerceAtLeast(0L)
+        seekPending = startPositionMs > 0L
         resumeHintMs = 0L
         resumeHintDurMs = 0L
         refreshAttempts = 0
@@ -8832,6 +8914,12 @@ class PlayerActivity : ComponentActivity() {
             }
         }
         if (isFinishing || isDestroyed) return
+        // The corner preview has been playing the next video for the last ten
+        // seconds: continue it, same timestamp, instead of resolving again.
+        if (autoplayNextOn && nextPreviewStarted && nextPreview != null) {
+            handOffNextPreview(nextPreview!!)
+            return
+        }
         if (autoNextOn && channelSurfController != null && !autoNextRunning) {
             autoNextRunning = true
             val ctrl = channelSurfController
@@ -8916,49 +9004,15 @@ class PlayerActivity : ComponentActivity() {
                 hideLoadingBanner(immediate = true)
                 return@launch
             }
-            val payload = org.json.JSONArray()
-            streams.take(12).forEach { src ->
-                payload.put(
-                    org.json.JSONObject()
-                        .put("name", src.name)
-                        .put("url", src.url)
-                        .put("headers", org.json.JSONObject(src.headers as Map<*, *>))
-                        .put("isM3u8", src.isM3u8)
-                        .put("isMpd", src.isMpd)
-                        .put("provider", src.provider)
-                        .put("providerId", src.providerId)
-                        .put("providerName", src.providerName)
-                        .put("details", src.details)
-                        .put("thumbnail", src.thumbnail.orEmpty())
-                        .put("ytId", src.ytId.orEmpty())
-                        .put("isTorrent", false)
-                        .put("subtitles", org.json.JSONArray().also { arr ->
-                            src.subtitles.forEach { sub ->
-                                arr.put(org.json.JSONObject().put("lang", sub.lang).put("url", sub.url))
-                            }
-                        }),
-                )
-            }
-            val intent = Intent(this@PlayerActivity, PlayerActivity::class.java).apply {
-                putExtra("title", next.title)
-                putExtra("sources", payload.toString())
-                putExtra("askServer", false)
-                putExtra("histProviderId", next.providerId)
-                putExtra("histMediaId", next.id)
-                putExtra("histType", next.type.name)
-                putExtra("histTitle", next.title)
-                putExtra("histPoster", next.posterUrl.orEmpty())
-                (next.backdropUrl ?: next.posterUrl)?.takeIf { it.isNotBlank() }?.let { putExtra("bannerBackdrop", it) }
-                next.posterUrl?.takeIf { it.isNotBlank() }?.let { putExtra("titleLogo", it) }
-                episode?.let { ep ->
-                    putExtra("histEpisodeId", ep.id)
-                    putExtra("histEpisodeName", ep.name)
-                    putExtra("histEpisodeSeason", ep.season)
-                    putExtra("histEpisodeNumber", ep.number)
-                }
-            }
-            startActivity(intent)
-            finish()
+            startQueueTitle(
+                next = next,
+                episode = episode,
+                streams = streams
+                    .take(12)
+                    .map { it.toPlayerSource() }
+                    .distinctBy { it.identityKey() },
+                startAtMs = 0L,
+            )
         }
     }
 
@@ -8972,6 +9026,298 @@ class PlayerActivity : ComponentActivity() {
         Toast.makeText(this, I18n.t("Playing next episode…"), Toast.LENGTH_SHORT).show()
         switchToEpisode(next, fromAutoplay = true)
         return true
+    }
+
+    // --------------------------------------------------------------- Next preview
+    //
+    // Autoplay used to wait for the current video to reach ENDED and only then
+    // start looking for the next one, so the gap between episodes was however
+    // long the provider took to answer. This watches the last ~28 seconds,
+    // resolves the next video early, and starts it MUTED in the corner ten
+    // seconds before the end. At ENDED the preview takes over: same timestamp,
+    // sound on, no waiting on a provider.
+
+    /** Starts the 500 ms watcher that owns the preview window. Idempotent. */
+    private fun startNextPreviewWatch() {
+        if (nextPreviewWatch != null) return
+        val task = object : Runnable {
+            override fun run() {
+                if (isFinishing || isDestroyed) {
+                    nextPreviewWatch = null
+                    return
+                }
+                checkNextPreviewWindow()
+                bufferingWatchdog.postDelayed(this, 500L)
+            }
+        }
+        nextPreviewWatch = task
+        bufferingWatchdog.postDelayed(task, 700L)
+    }
+
+    private fun stopNextPreviewWatch() {
+        nextPreviewWatch?.let { bufferingWatchdog.removeCallbacks(it) }
+        nextPreviewWatch = null
+    }
+
+    private fun checkNextPreviewWindow() {
+        if (!autoplayNextOn) {
+            releaseNextPreview()
+            return
+        }
+        if (intent.getBooleanExtra("ytPlayback", false)) return
+        val p = player ?: return
+        if (p.isCurrentMediaItemLive) return
+        val duration = p.duration
+        if (duration <= 0L) return
+        val remaining = duration - p.currentPosition
+        if (remaining > previewResolveLeadMs || !p.isPlaying) {
+            // Seeked back out of the window: stop the preview but keep the
+            // already-resolved sources for the next approach.
+            if (nextPreviewStarted) hideNextPreviewOnly()
+            return
+        }
+        if (nextPreview == null && nextPreviewJob?.isActive != true &&
+            System.currentTimeMillis() - nextPreviewAttemptedAt > 15_000L
+        ) {
+            nextPreviewAttemptedAt = System.currentTimeMillis()
+            prepareNextPlaybackPreview()
+        }
+        if (remaining <= previewVisibleLeadMs && nextPreview != null) {
+            showNextPlaybackPreview()
+        }
+    }
+
+    /** Resolves the next episode (same title) or the next shelf item (a new
+     *  player), preferring the prefetch the player already warmed. */
+    private fun prepareNextPlaybackPreview() {
+        val item = favouriteItem
+        val current = currentEpisode()
+        val repo = contentRepo
+        nextPreviewJob = lifecycleScope.launch {
+            try {
+                if (item != null && item.type != MediaType.MOVIE && current != null) {
+                    var eps = playerEpisodes
+                    if (eps.isEmpty()) {
+                        eps = withTimeoutOrNull(12_000L) {
+                            runCatching { repo.episodesFor(item) }.getOrNull()
+                        }.orEmpty()
+                    }
+                    if (eps.isEmpty() || isFinishing || isDestroyed) return@launch
+                    playerEpisodes = eps
+                    val at = indexOfLive(eps)
+                    if (at < 0) return@launch
+                    val next = eps.getOrNull(at + 1) ?: return@launch
+                    var streams = takeEpisodePrefetch(next)
+                    if (streams.isEmpty()) {
+                        streams = withTimeoutOrNull(10_000L) {
+                            runCatching { repo.originStreams(item, next, 9_000L) }
+                                .getOrDefault(emptyList())
+                        }.orEmpty()
+                    }
+                    val previewSources = streams
+                        .filter { it.url.isNotBlank() && !it.externalUrl && !it.isTorrent }
+                        .map { it.toPlayerSource() }
+                        .distinctBy { it.identityKey() }
+                        .take(10)
+                    if (previewSources.isEmpty() || isFinishing || isDestroyed) return@launch
+                    nextPreview = NextPlaybackPreview(
+                        title = next.name.orEmpty().ifBlank { "Next episode" },
+                        item = item,
+                        episode = next,
+                        queueItem = null,
+                        sources = previewSources,
+                    )
+                    return@launch
+                }
+                val mediaId = intent.getStringExtra("histMediaId").orEmpty()
+                val providerId = intent.getStringExtra("histProviderId").orEmpty()
+                val next = PlaybackQueueStore.nextFor(providerId, mediaId) ?: return@launch
+                var episode: Episode? = null
+                if (next.type == MediaType.SERIES) {
+                    episode = withTimeoutOrNull(10_000L) {
+                        runCatching { repo.episodesFor(next) }.getOrNull()?.firstOrNull()
+                    }
+                }
+                val remembered = runCatching { repo.recentlyFoundStreams(next, episode) }
+                    .getOrDefault(emptyList())
+                val origin = if (remembered.isEmpty()) {
+                    withTimeoutOrNull(10_000L) {
+                        runCatching { repo.originStreams(next, episode, 9_000L) }
+                            .getOrDefault(emptyList())
+                    }.orEmpty()
+                } else {
+                    emptyList()
+                }
+                val previewSources = (remembered + origin)
+                    .filter { it.url.isNotBlank() && !it.externalUrl && !it.isTorrent }
+                    .map { it.toPlayerSource() }
+                    .distinctBy { it.identityKey() }
+                    .take(10)
+                if (previewSources.isEmpty() || isFinishing || isDestroyed) return@launch
+                nextPreview = NextPlaybackPreview(
+                    title = next.title,
+                    item = null,
+                    episode = episode,
+                    queueItem = next,
+                    sources = previewSources,
+                )
+            } finally {
+                nextPreviewJob = null
+            }
+        }
+    }
+
+    /** Starts the muted corner player. Video only: no audio focus, no sound. */
+    private fun showNextPlaybackPreview() {
+        if (nextPreviewStarted) return
+        val preview = nextPreview ?: return
+        val view = nextPreviewView ?: return
+        val src = preview.sources.getOrNull(preview.sourceIndex) ?: return
+        if (src.url.isBlank() || src.isTorrent) return
+        releaseNextPreviewPlayerOnly()
+        val network = OkHttpDataSource.Factory(PlayerHttp.client)
+            .setUserAgent(Http.UA)
+            .setDefaultRequestProperties(src.headers)
+        val mediaSourceFactory = DefaultMediaSourceFactory(
+            DefaultDataSource.Factory(this, network)
+        )
+        val p = runCatching {
+            ExoPlayer.Builder(this)
+                .setMediaSourceFactory(mediaSourceFactory)
+                // The preview shares RAM with the fullscreen player, so it banks
+                // a short, bounded cushion instead of the deep VOD buffer.
+                .setLoadControl(buildPreviewLoadControl())
+                .setWakeMode(C.WAKE_MODE_NETWORK)
+                .setAudioAttributes(
+                    androidx.media3.common.AudioAttributes.Builder()
+                        .setUsage(C.USAGE_MEDIA)
+                        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                        .build(),
+                    /* handleAudioFocus = */ false,
+                )
+                .build()
+        }.getOrNull() ?: return
+        p.volume = 0f
+        p.addListener(object : Player.Listener {
+            override fun onPlayerError(error: PlaybackException) {
+                com.hikari.app.data.Logs.log(
+                    "Player",
+                    "next preview failed on \"${src.name}\": " +
+                        rootMessage(error).take(180),
+                )
+                // Do not retry the same bad source every watcher tick: drop the
+                // resolved preview and let the normal end-of-video path resolve
+                // a fresh one when the current video actually finishes.
+                nextPreview = null
+                hideNextPreviewOnly()
+            }
+        })
+        val mediaItem = MediaItem.Builder()
+            .setUri(src.url)
+            .apply { mainMimeOf(src)?.let { setMimeType(it) } }
+            .build()
+        nextPreviewPlayer = p
+        view.player = p
+        nextPreviewContainer?.visibility = View.VISIBLE
+        nextPreviewStarted = true
+        p.setMediaItem(mediaItem)
+        p.prepare()
+        p.playWhenReady = true
+        com.hikari.app.data.Logs.log(
+            "Player",
+            "next preview started: \"${preview.title}\" (${src.name})",
+        )
+    }
+
+    /** Drops the corner player but keeps the resolved next sources. */
+    private fun hideNextPreviewOnly() {
+        nextPreviewStarted = false
+        releaseNextPreviewPlayerOnly()
+        nextPreviewContainer?.visibility = View.GONE
+    }
+
+    private fun releaseNextPreviewPlayerOnly() {
+        val view = nextPreviewView
+        runCatching { view?.player = null }
+        nextPreviewPlayer?.let { runCatching { it.release() } }
+        nextPreviewPlayer = null
+        nextPreviewStarted = false
+    }
+
+    private fun releaseNextPreview() {
+        nextPreviewJob?.cancel()
+        nextPreviewJob = null
+        hideNextPreviewOnly()
+        nextPreview = null
+        nextPreviewAttemptedAt = 0L
+        nextPreviewContainer?.visibility = View.GONE
+    }
+
+    /** The current video ended with a live preview: continue the next one from
+     *  exactly where the corner player is, sound restored by the main player. */
+    private fun handOffNextPreview(preview: NextPlaybackPreview) {
+        val p = nextPreviewPlayer
+        val position = p?.currentPosition?.coerceAtLeast(0L) ?: 0L
+        releaseNextPreview()
+        if (preview.queueItem != null) {
+            autoplayRunning = true
+            startQueueTitle(preview.queueItem, preview.episode, preview.sources, position)
+            return
+        }
+        val item = preview.item ?: return
+        val ep = preview.episode ?: return
+        liveEpisode = ep
+        episodeSwitchGen++
+        autoplayRunning = true
+        val repo = contentRepo
+        lifecycleScope.launch {
+            adoptEpisodeStreams(
+                item = item,
+                ep = ep,
+                playerSources = preview.sources,
+                fromAutoplay = true,
+                startAtMs = position,
+            )
+            autoplayRunning = false
+            // The preview used the fast origin rows; keep the full pass in the
+            // background so the chooser still learns every server.
+            val full = runCatching { repo.streamsFor(item, ep) }.getOrNull().orEmpty()
+            if (full.isNotEmpty()) appendSources(full)
+            prefetchNextEpisode(item, ep, repo)
+        }
+    }
+
+    /** Starts a shelf title in a fresh player at [startAtMs] (the preview's
+     *  timestamp), without repeating the server search that already answered. */
+    private fun startQueueTitle(
+        next: AppMediaItem,
+        episode: Episode?,
+        streams: List<PlayerSource>,
+        startAtMs: Long,
+    ) {
+        val intent = Intent(this@PlayerActivity, PlayerActivity::class.java).apply {
+            putExtra("title", next.title)
+            putExtra("sources", encodeSources(streams))
+            putExtra("startPosition", startAtMs.coerceAtLeast(0L))
+            putExtra("askServer", false)
+            putExtra("histProviderId", next.providerId)
+            putExtra("histMediaId", next.id)
+            putExtra("histType", next.type.name)
+            putExtra("histTitle", next.title)
+            putExtra("histPoster", next.posterUrl.orEmpty())
+            (next.backdropUrl ?: next.posterUrl)?.takeIf { it.isNotBlank() }?.let {
+                putExtra("bannerBackdrop", it)
+            }
+            next.posterUrl?.takeIf { it.isNotBlank() }?.let { putExtra("titleLogo", it) }
+            episode?.let { ep ->
+                putExtra("histEpisodeId", ep.id)
+                putExtra("histEpisodeName", ep.name)
+                putExtra("histEpisodeSeason", ep.season)
+                putExtra("histEpisodeNumber", ep.number)
+            }
+        }
+        startActivity(intent)
+        finish()
     }
 
     /** The Source pill: the same grouped picker, dismissible without a pick. */
@@ -12925,6 +13271,11 @@ class PlayerActivity : ComponentActivity() {
             showError(I18n.t("No more servers to try."), false)
             return
         }
+        // Choosing a different row is a new playback decision; a preview of a
+        // next episode that was already running no longer applies.
+        if (index != currentIndex || player?.playbackState == Player.STATE_ENDED) {
+            releaseNextPreview()
+        }
         // A new video server ends any cross-server audio pairing: the sound
         // belonged to the previous picture (see [startDualAudio]).
         stopDualAudio()
@@ -13607,9 +13958,10 @@ class PlayerActivity : ComponentActivity() {
      * the byte cap exactly as it did before — only low/medium-bitrate streams,
      * which have the memory to spare, get the deeper time buffer.
      *
-     * Start/resume thresholds keep media3's snappy defaults (1 s to start,
-     * 2 s to resume after a stall): a longer resume threshold would only make
-     * the spinner itself last longer.
+     * Start/resume thresholds keep media3's snappy defaults for VOD (1 s to
+     * start, 2 s to resume after a stall); IPTV gets a deeper live bank (see
+     * the choices below) so a short dip in the source does not drain the
+     * buffer and hand the viewer a spinner every few minutes.
      *
      * Telegram videos ([isTd]) ride MTProto instead of HTTP: no CDN, bursty
      * throughput that often dips under the bitrate mid-play. Starting is
@@ -13625,22 +13977,22 @@ class PlayerActivity : ComponentActivity() {
             .setBufferDurationsMs(
                 when {
                     isTd -> 90_000                         // minBufferMs — MTProto-tuned bank
-                    isLive -> 30_000                       // minBufferMs —IPTV live: fast start, shallow bank
+                    isLive -> 45_000                       // minBufferMs — IPTV live: a real pre-buffer bank
                     else -> 60_000                         // minBufferMs — default VOD bank
                 },
                 when {
                     isTd -> 180_000                        // maxBufferMs — MTProto ceiling
-                    isLive -> 60_000                       // maxBufferMs —IPTV live: never let the buffer grow too deep
+                    isLive -> 120_000                      // maxBufferMs — IPTV live: keep a deep cushion
                     else -> 150_000                        // maxBufferMs — VOD ceiling
                 },
                 when {
                     isTd -> 1_000                          // bufferForPlaybackMs — MTProto
-                    isLive -> 500                          // bufferForPlaybackMs — IPTV live: start sooner
+                    isLive -> 3_000                        // bufferForPlaybackMs — IPTV: a short start cushion
                     else -> 1_000                          // bufferForPlaybackMs — VOD
                 },
                 when {
                     isTd -> 8_000                          // bufferForPlaybackAfterRebufferMs — MTProto
-                    isLive -> 500                          // bufferForPlaybackAfterRebufferMs — IPTV live
+                    isLive -> 8_000                        // IPTV live: resume only with a real cushion
                     else -> if (isTd) 8_000 else 2_000    // VOD rebuffer resume
                 },
             )
@@ -13654,6 +14006,14 @@ class PlayerActivity : ComponentActivity() {
                     .coerceIn(24L * 1024 * 1024, 64L * 1024 * 1024)
                     .toInt()
             )
+            .build()
+
+    /** Small buffer for the corner preview: enough to start smoothly, not
+     *  another deep VOD bank next to the one already playing. */
+    private fun buildPreviewLoadControl(): DefaultLoadControl =
+        DefaultLoadControl.Builder()
+            .setBufferDurationsMs(6_000, 15_000, 1_000, 2_000)
+            .setTargetBufferBytes(12 * 1024 * 1024)
             .build()
 
     /** Safe entry point: any unexpected exception during player setup (a bad
@@ -14268,6 +14628,7 @@ class PlayerActivity : ComponentActivity() {
         player.setMediaItem(itemBuilder.build())
         player.prepare()
         player.playWhenReady = true
+        startNextPreviewWatch()
         applySpeed(SPEEDS[speedIndex])
         // Opened via a "download this" tap: the chooser is put up once a server
         // is actually PLAYING (see the STATE_READY branch of the player
@@ -14525,9 +14886,11 @@ class PlayerActivity : ComponentActivity() {
             retryLiveStart(liveStartBudgetMs)
         }
         liveReconnectTask = task
-        // Back off between re-opens (3s, 6s, 9s, then 12s): hammering a dead
-        // host every 3s helped nothing and kept the "Reconnecting…" loop
-        // spinning hot while the panel was down.
+        // Back off between re-opens (6s, 12s, 18s, then 24s): hammering a dead
+        // host every few seconds helped nothing and kept the "Reconnecting…"
+        // loop spinning hot while the panel was down. A longer first delay also
+        // gives a short buffer dip time to recover on its own instead of
+        // looking like a dead channel.
         val done = if (liveStartRetryIndex == currentIndex) liveStartRetries else 0
         val delay = liveReconnectDelayMs * (done + 1).coerceAtMost(4)
         bufferingWatchdog.postDelayed(task, delay)
@@ -15470,7 +15833,7 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
      * longer than a VOD file's first byte — but it is still a bounded wait, so
      * a genuinely offline channel does not spin forever.
      */
-    private val liveStartBudgetMs: Long = 30_000L
+    private val liveStartBudgetMs: Long = 40_000L
 
     /** How many times a live stream is re-opened before the player admits the
      *  channel is not coming up (see [retryLiveStart]). Long enough to ride out
@@ -15485,7 +15848,7 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
      *  deliberate pause rather than a busy loop: a live mirror that just dropped
      *  usually comes back on a fresh connection, but re-opening it the instant
      *  every error lands would spin against a server that needs a moment. */
-    private val liveReconnectDelayMs: Long = 3_000L
+    private val liveReconnectDelayMs: Long = 6_000L
 
     /** True while the current server has stalled and playback is waiting for the
      *  search to hand over a replacement (see
@@ -16288,6 +16651,7 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
         // while playback is paused (or before it has started).
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             playHint?.visibility = if (isPlaying) View.GONE else View.VISIBLE
+            runCatching { nextPreviewPlayer?.playWhenReady = isPlaying }
             syncDualAudio()
         }
 
@@ -16762,6 +17126,15 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
      * before reporting failure.
      */
     private fun failoverFromCurrent(details: String, code: Int, headerIssue: Boolean) {
+        // A LIVE channel never advances to another row on an error. A buffer
+        // dip, a timed-out segment or a 5xx is handled by re-opening the SAME
+        // channel after a grace period (see [failoverLiveChannel]); treating
+        // it like a dead VOD mirror is what made a short buffer look like a
+        // channel switch.
+        if (isLiveSource(sources.getOrNull(currentIndex))) {
+            failoverLiveChannel(details, code)
+            return
+        }
         // Like CloudStream: never strand the user — keep trying the next
         // server automatically on every failure. The ONE exception is a server
         // the user picked themselves in the chooser: silently sliding onto a
@@ -18388,6 +18761,8 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
         liveEpisodeJob = null
         liveStatusJob?.cancel()
         liveStatusJob = null
+        stopNextPreviewWatch()
+        releaseNextPreview()
         stopLoadingTicker()
         // holdSweep: the user left the player, so the title's background search
         // is stopped and held rather than released — a fresh nuvio sweep (one

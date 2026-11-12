@@ -1,3 +1,20 @@
+## 0.12.6
+
+**12 November 2026**
+
+### Seamless autoplay, wall favorites and a smarter Live TV page
+
+- **Next-video preview**: ten seconds before the current video ends, the next episode starts muted in a corner window. When the current video stops, the preview takes over fullscreen at the same timestamp, with sound.
+- **Autoplay is more reliable**: the next episode keeps its preview position, the next shelf title starts from the resolved source instead of a fresh search, and the duplicate player launch that could interrupt a handoff is gone.
+- **Channel Wall favorites**: long-press any tile to add it to a Favorites shelf at the top; long-press again to remove it. The shelf only exists while it has channels.
+- **More wall channels**: new **Black Media** and **Adult (18+)** shelves, with adult channels hidden again when NSFW is switched off.
+- **Generate portals** now collects **15** verified panels per run, and Xtream tiles show their **expiry date** on the artwork.
+- **Quick Ch and Channels always answer**: both now fall back to every installed IPTV playlist when the player was handed a single channel without its playlist context.
+- **IPTV buffering is calmer**: a deeper live pre-buffer (45s target, 120s ceiling), an 8s resume cushion, a longer first-frame budget and a slower reconnect backoff, so a short network dip no longer looks like a dead channel.
+- **Telegram**: About & Updates now links to **@lucidHikari**, and a one-time welcome popup after the first tour explains the new features.
+- **Tutorials**: Live TV now covers Generate portals and expiry dates; Channel Wall covers favorites and the new shelves.
+- README refreshed for 0.12.6.
+
 ## 0.12.5
 
 **11 November 2026**
