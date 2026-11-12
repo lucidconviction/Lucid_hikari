@@ -13,7 +13,7 @@
 - Added Settings → Playback & Servers → **Next-video preview** toggle.
 - **Channel Wall favorites** now have a visible focusable heart on every tile (long-press still works) and stale favorite IDs are pruned.
 - The Adult list option disappears from the wall picker when NSFW is off.
-- Portal generator shows its last run time; GitHub Actions now strips the machine-specific JDK path before building.
+- Portal generator shows its last run time.
 
 ## 0.12.7
 
