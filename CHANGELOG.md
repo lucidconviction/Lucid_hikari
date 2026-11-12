@@ -1,3 +1,15 @@
+## 0.12.9
+
+**13 November 2026**
+
+### Bigger streaming cache and full-bleed IPTV artwork
+
+- Added a **512 MB disk cache** for stream bytes. Re-opened segments, seeks, retries and the next-episode handoff read from disk instead of asking a flaky IPTV/aggregator host again.
+- Raised the playback bank: live gets a **60s minimum / 180s ceiling** with a 10s resume cushion; VOD gets **80s / 240s**. The memory byte budget was raised to **32–96 MB** by heap size.
+- IPTV playlist, group and “View All” tiles are now **full-bleed**: artwork fills the tile, with the name/count over a scrim at the bottom.
+- Group tiles use the **first real channel logo from that group** instead of a generated poster. Playlist and merged-group tiles do the same.
+- Channel grids continue to use each channel’s own `tvg-logo`/thumbnail from its playlist.
+
 ## 0.12.8
 
 **12 November 2026**

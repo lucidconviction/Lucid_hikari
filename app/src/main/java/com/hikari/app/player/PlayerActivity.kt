@@ -9334,9 +9334,10 @@ class PlayerActivity : ComponentActivity() {
         val network = OkHttpDataSource.Factory(PlayerHttp.client)
             .setUserAgent(Http.UA)
             .setDefaultRequestProperties(src.headers)
-        val mediaSourceFactory = DefaultMediaSourceFactory(
-            DefaultDataSource.Factory(this, network)
-        )
+        val previewDataSource = DefaultDataSource.Factory(this, network)
+        val previewPlaybackDataSource = if (src.local) previewDataSource else
+            PlayerMediaCache.wrap(this, previewDataSource)
+        val mediaSourceFactory = DefaultMediaSourceFactory(previewPlaybackDataSource)
         val p = runCatching {
             ExoPlayer.Builder(this)
                 .setMediaSourceFactory(mediaSourceFactory)
@@ -14156,34 +14157,36 @@ class PlayerActivity : ComponentActivity() {
         DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 when {
-                    isTd -> 90_000                         // minBufferMs — MTProto-tuned bank
-                    isLive -> 45_000                       // minBufferMs — IPTV live: a real pre-buffer bank
-                    else -> 60_000                         // minBufferMs — default VOD bank
+                    isTd -> 180_000                        // minBufferMs — MTProto-tuned bank
+                    isLive -> 60_000                       // minBufferMs — IPTV live: a deep pre-buffer bank
+                    else -> 80_000                         // minBufferMs — default VOD bank
                 },
                 when {
-                    isTd -> 180_000                        // maxBufferMs — MTProto ceiling
-                    isLive -> 120_000                      // maxBufferMs — IPTV live: keep a deep cushion
-                    else -> 150_000                        // maxBufferMs — VOD ceiling
+                    isTd -> 300_000                        // maxBufferMs — MTProto ceiling
+                    isLive -> 180_000                      // maxBufferMs — IPTV live: keep a deep cushion
+                    else -> 240_000                        // maxBufferMs — VOD ceiling
                 },
                 when {
                     isTd -> 1_000                          // bufferForPlaybackMs — MTProto
-                    isLive -> 3_000                        // bufferForPlaybackMs — IPTV: a short start cushion
+                    isLive -> 4_000                        // bufferForPlaybackMs — IPTV: a real start cushion
                     else -> 1_000                          // bufferForPlaybackMs — VOD
                 },
                 when {
                     isTd -> 8_000                          // bufferForPlaybackAfterRebufferMs — MTProto
-                    isLive -> 8_000                        // IPTV live: resume only with a real cushion
+                    isLive -> 10_000                       // IPTV live: resume only with a real cushion
                     else -> if (isTd) 8_000 else 2_000    // VOD rebuffer resume
                 },
             )
             .setTargetBufferBytes(
                 // media3's own byte target defaults to off, so without this a
-                // fast link banks the whole time ceiling: 150 s of a 25 Mbps
-                // stream is ~470 MB on the Java heap. Scale it like Coil's
+                // fast link banks the whole time ceiling: 240 s of a 25 Mbps
+                // stream is ~750 MB on the Java heap. Scale it like Coil's
                 // memory cache (see setupImageLoader) so small heaps stay
-                // alive and big heaps keep their depth.
-                (Runtime.getRuntime().maxMemory() / 8)
-                    .coerceIn(24L * 1024 * 1024, 64L * 1024 * 1024)
+                // alive and big heaps keep their depth. The 96 MB ceiling is
+                // deliberately larger than before: the extra runway is what
+                // stops a CDN dip from reaching the player as a spinner.
+                (Runtime.getRuntime().maxMemory() / 6)
+                    .coerceIn(32L * 1024 * 1024, 96L * 1024 * 1024)
                     .toInt()
             )
             .build()
@@ -14630,7 +14633,18 @@ class PlayerActivity : ComponentActivity() {
         // session manager; without it ExoPlayer opens the encrypted manifest
         // with no keys and renders a black screen while the timeline still runs.
         val drmManager = buildDrmSessionManager(src.drm, dataSourceFactory)
-        val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
+        // Stream bytes go through the shared 512 MB disk cache (local files and
+        // MTProto videos do not). Re-opened segments, seeks, retries and the
+        // next-episode handoff then read from disk instead of paying the flaky
+        // origin again.
+        val playbackDataSource = if (src.local ||
+            src.url.startsWith(com.hikari.app.telegram.TdFileDataSource.SCHEME + "://")
+        ) {
+            dataSourceFactory
+        } else {
+            PlayerMediaCache.wrap(this, dataSourceFactory)
+        }
+        val mediaSourceFactory = DefaultMediaSourceFactory(playbackDataSource)
             // Ride out transient CDN hiccups quietly — a fresh connection and a
             // Range-resumed read — instead of letting one dropped socket tear
             // the whole player down, while still failing FAST on terminal ones

@@ -86,6 +86,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
@@ -1644,10 +1645,11 @@ fun IptvPlaylistScreen(nav: NavHostController, providerId: String) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             items(loaded, key = { it.catalogId }) { g ->
-                // Drawn off the main thread: a group has no artwork of its own,
-                // so its tile is generated from its name (once — see IptvArt).
-                val art by produceState<String?>(initialValue = null, providerId, g.catalogId) {
-                    value = withContext(Dispatchers.IO) {
+                // Use the group's own first channel logo when it has one. Only
+                // groups with no artwork at all fall back to the generated
+                // poster.
+                val art by produceState<String?>(initialValue = null, providerId, g.catalogId, g.cover) {
+                    value = if (g.cover.isNullOrBlank()) withContext(Dispatchers.IO) {
                         IptvArt.tile(
                             MediaItem(
                                 providerId = providerId,
@@ -1657,7 +1659,7 @@ fun IptvPlaylistScreen(nav: NavHostController, providerId: String) {
                                 overview = name,
                             )
                         )
-                    }
+                    } else null
                 }
                 // F2 — compute health from the current channels
                 val groupChannels = remember(channels, validateVersion, g.catalogId) {
@@ -1667,7 +1669,7 @@ fun IptvPlaylistScreen(nav: NavHostController, providerId: String) {
                     healthOf(groupChannels)
                 }
                 IptvTile(
-                    cover = null,
+                    cover = g.cover,
                     art = art,
                     name = g.name,
                     subtitle = I18n.t("%s channels").replace("%s", g.count.toString()),
@@ -1698,6 +1700,8 @@ private data class AllPlaylistTile(
     val catalogId: String,
     val count: Int,
     val key: String,
+    /** First channel logo in this group, used full-bleed on the tile. */
+    val cover: String? = null,
 )
 
 /**
@@ -1735,6 +1739,7 @@ fun IptvAllPlaylistsScreen(nav: NavHostController) {
                         catalogId = IptvProvider.CATALOG_ALL,
                         count = channels.size,
                         key = "$pid|all",
+                        cover = channels.firstOrNull { !it.artwork.isNullOrBlank() }?.artwork,
                     )
                     channels.groupBy { IptvPlaylist.groupKey(it, m) }
                         .entries
@@ -1749,6 +1754,7 @@ fun IptvAllPlaylistsScreen(nav: NavHostController) {
                                 catalogId = IptvProvider.catalogIdForGroup(group),
                                 count = chs.size,
                                 key = "$pid|$group",
+                                cover = chs.firstOrNull { !it.artwork.isNullOrBlank() }?.artwork,
                             )
                         }
                 }
@@ -1804,7 +1810,7 @@ fun IptvAllPlaylistsScreen(nav: NavHostController) {
         ) {
             items(list, key = { it.key }) { tile ->
                 IptvTile(
-                    cover = null,
+                    cover = tile.cover,
                     name = tile.name,
                     subtitle = I18n.t("%s · %s channels")
                         .replace("%s", tile.provider.displayName)
@@ -2082,6 +2088,9 @@ private data class IptvGroupTile(
     val name: String,
     val catalogId: String,
     val count: Int,
+    /** First channel in this group that carries its own logo — the tile uses
+     *  the playlist's own artwork instead of a generated placeholder. */
+    val cover: String? = null,
 )
 
 /** Reads one playlist (its channel count, its groups, and a logo to wear). */
@@ -2125,6 +2134,7 @@ private suspend fun readGroups(p: IptvProvider, mode: String): List<IptvGroupTil
             name = I18n.t("All channels"),
             catalogId = IptvProvider.CATALOG_ALL,
             count = list.size,
+            cover = list.firstOrNull { !it.artwork.isNullOrBlank() }?.artwork,
         )
     }
     list.groupBy { IptvPlaylist.groupKey(it, m) }
@@ -2143,6 +2153,7 @@ private suspend fun readGroups(p: IptvProvider, mode: String): List<IptvGroupTil
                     else -> IptvProvider.catalogIdForGroup(group)
                 },
                 count = channels.size,
+                cover = channels.firstOrNull { !it.artwork.isNullOrBlank() }?.artwork,
             )
         }
     return out
@@ -2713,123 +2724,133 @@ private fun IptvTile(
 ) {
     val tokens = rememberGlassTokens()
     val model = cover ?: art
-    Column(
+    Box(
         Modifier
             .fillMaxWidth()
+            .aspectRatio(TileShapes.aspect(shape))
             .clip(RoundedCornerShape(14.dp))
             .background(tokens.fillTop)
             .border(1.dp, tokens.border, RoundedCornerShape(14.dp))
-            .clickable(onClick = onClick)
-            .padding(7.dp),
+            .clickable(onClick = onClick),
     ) {
+        Icon(
+            Icons.Filled.LiveTv,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
+            modifier = Modifier.align(Alignment.Center).size(26.dp),
+        )
+        AsyncImage(
+            model = model,
+            contentDescription = name,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize(),
+        )
+        // The image IS the tile: the name and count sit over a scrim at the
+        // bottom, exactly like the Channel Wall cards, instead of being a
+        // caption under an inset thumbnail.
         Box(
             Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color.Transparent,
+                        0.48f to Color(0x22000000),
+                        1f to Color(0xE6080A0F),
+                    ),
+                ),
+        )
+        Column(
+            Modifier
+                .align(Alignment.BottomStart)
                 .fillMaxWidth()
-                .aspectRatio(TileShapes.aspect(shape))
-                .clip(RoundedCornerShape(10.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-            contentAlignment = Alignment.Center,
+                .padding(horizontal = 10.dp, vertical = 9.dp),
         ) {
-            Icon(
-                Icons.Filled.LiveTv,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
-                modifier = Modifier.size(26.dp),
+            Text(
+                name,
+                color = Color.White,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
             )
-            AsyncImage(
-                model = model,
-                contentDescription = name,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
+            Text(
+                subtitle,
+                color = Color.White.copy(alpha = 0.72f),
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
-            if (badge != null) {
-                Surface(
-                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.85f),
-                    shape = RoundedCornerShape(50),
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(4.dp),
-                ) {
-                    Text(
-                        badge,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onError,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
-                    )
-                }
-            }
-            if (health != HealthDot.NONE) {
-                val dotColor = when (health) {
-                    HealthDot.ALL_ALIVE -> Color(0xFF4CAF50)
-                    HealthDot.MIXED -> Color(0xFFFFC107)
-                    HealthDot.ALL_DEAD -> Color(0xFFF44336)
-                    HealthDot.NONE -> Color.Transparent
-                }
-                Surface(
-                    color = dotColor,
-                    shape = CircleShape,
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(6.dp)
-                        .size(10.dp),
-                ) {}
-            }
-            if (!expiry.isNullOrBlank()) {
-                Surface(
-                    color = Color.Black.copy(alpha = 0.72f),
-                    shape = RoundedCornerShape(50),
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(5.dp),
-                ) {
-                    Text(
-                        expiry,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontSize = 9.sp,
-                        color = if (expiry.startsWith("Expired", true)) {
-                            Color(0xFFFF6B6B)
-                        } else {
-                            Color.White
-                        },
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                    )
-                }
-            }
-            if (onRemove != null) {
-                Surface(
-                    onClick = onRemove,
-                    color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.62f),
-                    shape = RoundedCornerShape(50),
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(4.dp),
-                ) {
-                    Icon(
-                        Icons.Filled.Delete,
-                        contentDescription = I18n.t("Remove %s").replace("%s", name),
-                        tint = MaterialTheme.colorScheme.onError,
-                        modifier = Modifier.padding(4.dp).size(15.dp),
-                    )
-                }
+        }
+        if (badge != null) {
+            Surface(
+                color = MaterialTheme.colorScheme.error.copy(alpha = 0.85f),
+                shape = RoundedCornerShape(50),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(4.dp),
+            ) {
+                Text(
+                    badge,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onError,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+                )
             }
         }
-        Spacer(Modifier.height(6.dp))
-        Text(
-            name,
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 3.dp),
-        )
-        Text(
-            subtitle,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 3.dp),
-        )
+        if (!expiry.isNullOrBlank()) {
+            Surface(
+                color = Color.Black.copy(alpha = 0.72f),
+                shape = RoundedCornerShape(50),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = if (badge != null) 30.dp else 5.dp, end = 5.dp),
+            ) {
+                Text(
+                    expiry,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 9.sp,
+                    color = if (expiry.startsWith("Expired", true)) {
+                        Color(0xFFFF6B6B)
+                    } else {
+                        Color.White
+                    },
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+            }
+        }
+        if (health != HealthDot.NONE) {
+            val dotColor = when (health) {
+                HealthDot.ALL_ALIVE -> Color(0xFF4CAF50)
+                HealthDot.MIXED -> Color(0xFFFFC107)
+                HealthDot.ALL_DEAD -> Color(0xFFF44336)
+                HealthDot.NONE -> Color.Transparent
+            }
+            Surface(
+                color = dotColor,
+                shape = CircleShape,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(8.dp)
+                    .size(10.dp),
+            ) {}
+        }
+        if (onRemove != null) {
+            Surface(
+                onClick = onRemove,
+                color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.62f),
+                shape = RoundedCornerShape(50),
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(4.dp),
+            ) {
+                Icon(
+                    Icons.Filled.Delete,
+                    contentDescription = I18n.t("Remove %s").replace("%s", name),
+                    tint = MaterialTheme.colorScheme.onError,
+                    modifier = Modifier.padding(4.dp).size(15.dp),
+                )
+            }
+        }
     }
 }
 

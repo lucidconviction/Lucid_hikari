@@ -2,7 +2,7 @@
 
 **Lucid Hikari** is a universal streaming app for Android phones and TV. One place for your extensions and add-ons, live TV, sports, YouTube, music, manga and downloads — with a polished, glassy interface that stays out of the way.
 
-**Current version: 0.12.8.**
+**Current version: 0.12.9.**
 
 Lucid Hikari is a fork of **Hikari** by **Hikari Devs**. The original project and its developers deserve the credit for the foundation this app is built on.
 
@@ -23,8 +23,9 @@ Lucid Hikari is a fork of **Hikari** by **Hikari Devs**. The original project an
 - **Generate portals** finds up to **15** verified Xtream accounts per run and parks them under Portal search results until you add one.
 - The panel's own XMLTV guide powers an **On now** strip — see what is airing before opening a channel.
 - Channel surfing with CH− / CH+, a full Channels list, and **Quick Ch** for jumping straight to news, sports or a network pattern. Channels is a searchable sheet, and Quick Ch / Channels fall back to every installed playlist when the playing channel arrived without its list.
-- A deeper live buffer and a longer reconnect grace, so a short network dip does not immediately look like a dead channel.
+- A deeper live buffer, a 512 MB disk cache for repeated segments, and a longer reconnect grace, so a short network dip does not immediately look like a dead channel.
 - **Channel Wall**: a curated, full-bleed wall of channels, with Music, Anime, Lifestyle, Black Media and Adult shelves. Long-press any tile to add it to **Favorites**; tap a tile to see every matching source in your playlists.
+- IPTV playlist, group and channel tiles are full-bleed, and groups use the first real channel logo from their own listings.
 
 ### Sports
 - Follow leagues and teams, and get their fixtures on one page.
