@@ -1,3 +1,14 @@
+## 0.12.10
+
+**13 November 2026**
+
+### No black screen at the video handoff
+
+- At the end of a video, the corner preview now **pauses and expands fullscreen** while the next episode’s real player prepares behind it. The black surface is no longer exposed.
+- The main player stays **muted until its first frame renders**, then the preview is hidden and sound is restored. A 12-second safety timeout returns to the main player if a source never draws.
+- Shelf autoplay now switches titles **in place** in the same player instead of recreating the activity, so the same preview promotion covers queue titles too.
+- The preview window is restored to its corner size the next time it is used.
+
 ## 0.12.9
 
 **13 November 2026**

@@ -1952,7 +1952,7 @@ class PlayerActivity : ComponentActivity() {
         nextPreviewView = findViewById(R.id.next_preview_view)
         nextPreviewLabel = findViewById(R.id.next_preview_label)
         nextPreviewContainer?.setOnClickListener {
-            if (nextPreviewStarted) nextPreview?.let { handOffNextPreview(it) }
+            if (nextPreviewStarted && !previewPromoted) nextPreview?.let { handOffNextPreview(it) }
         }
         // The progress bar is a real focus target on TV. Once it owns focus,
         // Left/Right scrubs the video instead of jumping between the buttons.
@@ -5780,6 +5780,10 @@ class PlayerActivity : ComponentActivity() {
     private var nextPreviewStarted = false
     private var nextPreviewAttemptedAt = 0L
     private var nextPreviewOn = true
+    /** True while the corner preview is covering the screen during the main
+     *  player's handoff preparation (see [promotePreviewFullscreen]). */
+    private var previewPromoted = false
+    private var previewPromotionTimeout: Runnable? = null
 
     /** All-playlist channel cache for Channels/Quick Ch (see
      *  [gatherEveryIptvChannel]); gathering thousands of channels is not
@@ -9200,6 +9204,7 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun checkNextPreviewWindow() {
+        if (previewPromoted) return
         if (!autoplayNextOn || !nextPreviewOn) {
             releaseNextPreview()
             return
@@ -9330,6 +9335,7 @@ class PlayerActivity : ComponentActivity() {
         val view = nextPreviewView ?: return
         val src = preview.sources.getOrNull(preview.sourceIndex) ?: return
         if (src.url.isBlank() || src.isTorrent) return
+        resetPreviewWindow()
         releaseNextPreviewPlayerOnly()
         val network = OkHttpDataSource.Factory(PlayerHttp.client)
             .setUserAgent(Http.UA)
@@ -9386,7 +9392,7 @@ class PlayerActivity : ComponentActivity() {
         nextPreviewPlayer = p
         view.player = p
         view.setOnClickListener {
-            if (nextPreviewStarted) nextPreview?.let { handOffNextPreview(it) }
+            if (nextPreviewStarted && !previewPromoted) nextPreview?.let { handOffNextPreview(it) }
         }
         nextPreviewContainer?.visibility = View.VISIBLE
         nextPreviewLabel?.text = "Up next"
@@ -9398,6 +9404,24 @@ class PlayerActivity : ComponentActivity() {
             "Player",
             "next preview started: \"${preview.title}\" (${src.name})",
         )
+    }
+
+    /** Restores the corner size after a promoted preview used the whole
+     *  screen. Called every time a new preview starts. */
+    private fun resetPreviewWindow() {
+        val container = nextPreviewContainer ?: return
+        val density = resources.displayMetrics.density
+        fun dp(v: Int) = (v * density + 0.5f).toInt()
+        val lp = container.layoutParams as? FrameLayout.LayoutParams ?: return
+        lp.width = dp(247)
+        lp.height = dp(139)
+        lp.gravity = Gravity.BOTTOM or Gravity.END
+        lp.setMargins(dp(14), dp(14), dp(14), dp(14))
+        container.layoutParams = lp
+        container.setBackgroundResource(R.drawable.next_preview_frame)
+        container.clipToOutline = true
+        container.elevation = dp(10).toFloat()
+        nextPreviewLabel?.visibility = View.VISIBLE
     }
 
     /** Drops the corner player but keeps the resolved next sources. */
@@ -9416,6 +9440,9 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun releaseNextPreview() {
+        previewPromotionTimeout?.let { bufferingWatchdog.removeCallbacks(it) }
+        previewPromotionTimeout = null
+        previewPromoted = false
         nextPreviewJob?.cancel()
         nextPreviewJob = null
         hideNextPreviewOnly()
@@ -9429,14 +9456,21 @@ class PlayerActivity : ComponentActivity() {
     private fun handOffNextPreview(preview: NextPlaybackPreview) {
         val p = nextPreviewPlayer
         val position = p?.currentPosition?.coerceAtLeast(0L) ?: 0L
-        releaseNextPreview()
         if (preview.queueItem != null) {
+            // Same treatment as the next episode: the frozen preview covers
+            // the screen while the new title's player prepares in place.
+            promotePreviewFullscreen()
             autoplayRunning = true
             startQueueTitle(preview.queueItem, preview.episode, preview.sources, position)
             return
         }
         val item = preview.item ?: return
         val ep = preview.episode ?: return
+        // Keep the preview's picture fullscreen while the main player for the
+        // next episode prepares behind it. The old implementation released the
+        // preview first, exposing the black surface until the new player drew
+        // its first frame.
+        promotePreviewFullscreen()
         liveEpisode = ep
         episodeSwitchGen++
         autoplayRunning = true
@@ -9458,22 +9492,76 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
-    /** Starts a shelf title in a fresh player at [startAtMs] (the preview's
-     *  timestamp), without repeating the server search that already answered. */
+    /** Freezes the corner preview and expands it over the whole player while
+     *  the next episode's main player prepares. The main player is muted until
+     *  its first frame, then [finishPreviewPromotion] hides the preview again. */
+    private fun promotePreviewFullscreen() {
+        val container = nextPreviewContainer ?: return
+        previewPromoted = true
+        val lp = container.layoutParams as? FrameLayout.LayoutParams ?: return
+        lp.width = ViewGroup.LayoutParams.MATCH_PARENT
+        lp.height = ViewGroup.LayoutParams.MATCH_PARENT
+        lp.gravity = Gravity.NO_GRAVITY
+        lp.setMargins(0, 0, 0, 0)
+        container.layoutParams = lp
+        container.setBackgroundColor(0xFF000000.toInt())
+        container.clipToOutline = false
+        container.elevation = 0f
+        container.visibility = View.VISIBLE
+        container.bringToFront()
+        nextPreviewLabel?.visibility = View.GONE
+        // A paused fullscreen frame is better than a black surface: the main
+        // player starts at this exact timestamp and takes over on its first
+        // rendered frame.
+        runCatching {
+            nextPreviewPlayer?.pause()
+            nextPreviewPlayer?.volume = 0f
+        }
+        previewPromotionTimeout?.let { bufferingWatchdog.removeCallbacks(it) }
+        val timeout = Runnable {
+            if (previewPromoted) {
+                com.hikari.app.data.Logs.log(
+                    "Player",
+                    "preview promotion timed out — returning to the main player",
+                )
+                finishPreviewPromotion()
+            }
+        }
+        previewPromotionTimeout = timeout
+        bufferingWatchdog.postDelayed(timeout, 12_000L)
+    }
+
+    private fun finishPreviewPromotion() {
+        if (!previewPromoted) return
+        previewPromoted = false
+        previewPromotionTimeout?.let { bufferingWatchdog.removeCallbacks(it) }
+        previewPromotionTimeout = null
+        releaseNextPreview()
+        runCatching { player?.volume = 1f }
+    }
+
+    /** Starts a shelf title in this same player at [startAtMs] (the preview's
+     *  timestamp), without repeating the server search that already answered.
+     *
+     *  This used to start a new PlayerActivity; the activity is singleTop, so
+     *  the intent came back through onNewIntent and the old instance finished,
+     *  revealing the description page. Updating the existing player in place
+     *  also lets a promoted preview cover the preparation gap. */
     private fun startQueueTitle(
         next: AppMediaItem,
         episode: Episode?,
         streams: List<PlayerSource>,
         startAtMs: Long,
     ) {
-        val intent = Intent(this@PlayerActivity, PlayerActivity::class.java).apply {
+        if (streams.isEmpty()) {
+            autoplayRunning = false
+            hideLoadingBanner(immediate = true)
+            return
+        }
+        val nextIntent = Intent(this@PlayerActivity, PlayerActivity::class.java).apply {
             putExtra("title", next.title)
             putExtra("sources", encodeSources(streams))
             putExtra("startPosition", startAtMs.coerceAtLeast(0L))
-            // singleTop will deliver this to this instance (see onNewIntent);
-            // recreate it with the new title instead of finishing, which used
-            // to reveal the detail page behind the player.
-            putExtra("restartForAutoplay", true)
             putExtra("askServer", false)
             putExtra("histProviderId", next.providerId)
             putExtra("histMediaId", next.id)
@@ -9491,10 +9579,78 @@ class PlayerActivity : ComponentActivity() {
                 putExtra("histEpisodeNumber", ep.number)
             }
         }
-        startActivity(intent)
-        // Do NOT finish(): singleTop delivers the new title to this instance,
-        // and onNewIntent recreates it. Finishing here was the bug that closed
-        // the player and showed the description page.
+        setIntent(nextIntent)
+        liveStreamsJob?.cancel()
+        liveStreamsJob = null
+        liveStatusJob?.cancel()
+        liveStatusJob = null
+        liveSessionId = null
+        channelSurfController = null
+        originProviderId = next.providerId
+        originProviderName = runCatching {
+            (applicationContext as HikariApp).providers.byId(next.providerId)?.config?.name
+        }.getOrNull().orEmpty()
+        historyEntry = HistoryEntry(
+            providerId = next.providerId,
+            mediaId = next.id,
+            type = next.type,
+            title = next.title,
+            posterUrl = next.posterUrl,
+            episodeId = episode?.id.orEmpty(),
+            episodeName = episode?.name.orEmpty(),
+            episodeNumber = episode?.number ?: 0,
+            seasonNumber = episode?.season ?: 0,
+        )
+        historyKey = historyEntry!!.uniqueKey
+        favouriteItem = AppMediaItem(
+            providerId = next.providerId,
+            id = next.id,
+            title = next.title,
+            type = next.type,
+            posterUrl = next.posterUrl,
+            backdropUrl = next.backdropUrl,
+        )
+        liveEpisode = episode
+        playerEpisodes = emptyList()
+        episodeSwitchGen++
+        sources = streams
+        currentIndex = 0
+        startPositionMs = startAtMs.coerceAtLeast(0L)
+        seekPending = startPositionMs > 0L
+        refreshAttempts = 0
+        noSubsRetry = false
+        resumeHintMs = 0L
+        resumeHintDurMs = 0L
+        resetHeaderWalk()
+        triedUrls.clear()
+        notifySourcesChanged()
+        findViewById<TextView>(R.id.title_text)?.text = next.title
+        findViewById<TextView>(R.id.subtitle_text)?.apply {
+            val label = when {
+                episode == null -> ""
+                episode.season > 1 && episode.number > 0 ->
+                    "S${episode.season} E${episode.number}" + episodeNameSuffix(episode.name)
+                episode.number > 0 -> "Episode ${episode.number}" + episodeNameSuffix(episode.name)
+                else -> episode.name.orEmpty()
+            }
+            text = label
+            visibility = if (label.isBlank()) View.GONE else View.VISIBLE
+        }
+        channelsBtn?.visibility = View.GONE
+        quickChBtn?.visibility = View.GONE
+        autoNextBtn?.visibility = View.GONE
+        val seriesKnown = next.type != MediaType.MOVIE
+        episodesBtn?.visibility = if (seriesKnown) View.VISIBLE else View.GONE
+        prevEpBtn?.visibility = if (seriesKnown) View.VISIBLE else View.GONE
+        nextEpBtn?.visibility = if (seriesKnown) View.VISIBLE else View.GONE
+        autoplayBtn?.visibility = if (seriesKnown) View.VISIBLE else View.GONE
+        showLoadingCover(
+            titleOverride = next.title,
+            logoOverride = next.posterUrl,
+            backdropOverride = next.backdropUrl ?: next.posterUrl,
+        )
+        playSource(0)
+        autoplayRunning = false
     }
 
     /** The Source pill: the same grouped picker, dismissible without a pick. */
@@ -13449,8 +13605,12 @@ class PlayerActivity : ComponentActivity() {
             return
         }
         // Choosing a different row is a new playback decision; a preview of a
-        // next episode that was already running no longer applies.
-        if (index != currentIndex || player?.playbackState == Player.STATE_ENDED) {
+        // next episode that was already running no longer applies. A promoted
+        // preview is the current handoff surface and must survive the new
+        // player's setup (see [promotePreviewFullscreen]).
+        if (!previewPromoted &&
+            (index != currentIndex || player?.playbackState == Player.STATE_ENDED)
+        ) {
             releaseNextPreview()
         }
         // A new video server ends any cross-server audio pairing: the sound
@@ -14724,6 +14884,9 @@ class PlayerActivity : ComponentActivity() {
             .build()
         this.player = player
         lastPlayedUrl = src.url
+        // During a promoted preview the new player prepares silently behind the
+        // fullscreen preview frame; [onRenderedFirstFrame] unmutes it.
+        if (previewPromoted) runCatching { player.volume = 0f }
         player.addAnalyticsListener(dropWatcher)
         // Battery saver on the device: video effects stay off for the session
         // (a GL grade is what drains a weak battery fastest) — but the PICTURE
@@ -16807,6 +16970,10 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
 
         override fun onRenderedFirstFrame() {
             renderedFirstFrame = true
+            // The next episode's fullscreen preview was covering the screen
+            // while this player prepared. Its first frame is here now, so hide
+            // the preview and give the player its sound.
+            finishPreviewPromotion()
             // A frame rendered: any software-prefer escalation armed for
             // this URL is spent and must not leak onto the next server.
             swPreferDecode = false
@@ -16928,6 +17095,9 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
         }
 
         override fun onPlayerError(error: PlaybackException) {
+            // Never leave the promoted preview frozen over a failure panel or
+            // the next source's error: hand the screen back to the main player.
+            if (previewPromoted) finishPreviewPromotion()
             hideLoadingBanner(immediate = true)
             // This server is not playing, so there is nothing left to protect
             // from the background search — and the sweep is exactly what may

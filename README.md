@@ -2,7 +2,7 @@
 
 **Lucid Hikari** is a universal streaming app for Android phones and TV. One place for your extensions and add-ons, live TV, sports, YouTube, music, manga and downloads — with a polished, glassy interface that stays out of the way.
 
-**Current version: 0.12.9.**
+**Current version: 0.12.10.**
 
 Lucid Hikari is a fork of **Hikari** by **Hikari Devs**. The original project and its developers deserve the credit for the foundation this app is built on.
 
@@ -15,7 +15,7 @@ Lucid Hikari is a fork of **Hikari** by **Hikari Devs**. The original project an
 - Global search across every enabled source at once, with results that stream in as each source answers.
 - Per-title servers, quality and codec details, subtitles, audio tracks and resume points.
 - Saved titles, collections, personal catalogs and a watch history that follows you across sources.
-- **Seamless autoplay**: the next episode starts muted in the corner ten seconds before the current one ends, then continues fullscreen at the same timestamp. A countdown labels the preview, tapping it takes over immediately, and Settings → Playback & Servers can switch the preview off.
+- **Seamless autoplay**: the next episode starts muted in the corner ten seconds before the current one ends, then pauses and expands fullscreen while the real player prepares — no black gap — and continues at the same timestamp. A countdown labels the preview, tapping it takes over immediately, and Settings → Playback & Servers can switch the preview off.
 
 ### Live TV and IPTV
 - M3U playlists, local files and Xtream portals.
