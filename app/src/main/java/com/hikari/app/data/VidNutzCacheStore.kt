@@ -11,10 +11,10 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import com.hikari.app.HikariApp
 
-private val Context.hubDataStore by preferencesDataStore("hikari_hub")
+private val Context.hubDataStore by preferencesDataStore(name = "hikari_hub", corruptionHandler = ReplaceCorruptPreferences)
 private val HUB_CATALOG_KEY = stringPreferencesKey("vid_nutz_hub_catalog")
 
-private val Context.searchDataStore by preferencesDataStore("hikari_search")
+private val Context.searchDataStore by preferencesDataStore(name = "hikari_search", corruptionHandler = ReplaceCorruptPreferences)
 private val RECENT_SEARCHES_KEY = stringPreferencesKey("vid_nutz_recent_searches")
 private val SAVED_SEARCHES_KEY = stringPreferencesKey("vid_nutz_saved_searches")
 

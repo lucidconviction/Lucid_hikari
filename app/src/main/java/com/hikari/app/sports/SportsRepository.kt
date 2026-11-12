@@ -74,7 +74,7 @@ object SportsRepository {
     private val SETTINGS_PREF_KEY = stringPreferencesKey(SETTINGS_KEY)
     private val FOLLOWS_PREF_KEY = stringPreferencesKey(FOLLOWS_KEY)
 
-    private val Context.sportsDataStore by preferencesDataStore(name = "sports")
+    private val Context.sportsDataStore by preferencesDataStore(name = "sports", corruptionHandler = com.hikari.app.data.ReplaceCorruptPreferences)
 
     fun init(ctx: Context) {
         if (initialized) return

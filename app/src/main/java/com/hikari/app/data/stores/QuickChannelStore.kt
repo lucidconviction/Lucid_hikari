@@ -20,7 +20,7 @@ import kotlinx.serialization.json.Json
  * DataStore-backed store for quick/pinned channels.
  * Channels are stored as JSON-serialized IptvChannel objects in a JSON string.
  */
-private val Context.quickChannelDataStore by preferencesDataStore(name = "quick_channels")
+private val Context.quickChannelDataStore by preferencesDataStore(name = "quick_channels", corruptionHandler = com.hikari.app.data.ReplaceCorruptPreferences)
 
 class QuickChannelStore(private val ctx: Context) {
 

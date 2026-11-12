@@ -12,19 +12,26 @@ import com.hikari.app.data.ProviderConfig
 import com.hikari.app.data.ProviderType
 import com.hikari.app.data.XtreamCredentials
 import com.hikari.app.data.StreamSource
+import com.hikari.app.iptv.IptvSearch
 import com.hikari.app.net.Http
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import java.util.zip.GZIPInputStream
+import java.util.zip.GZIPOutputStream
 
 /** F3 — a validated Xtream panel, counted before it is saved. */
 data class XtreamPreview(
@@ -130,6 +137,135 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
             hit
         }
 
+        // ---- On-disk channel cache ------------------------------------------
+        // The in-memory cache dies with the process, so every cold launch used
+        // to download and parse every playlist again (up to 45 s each). The
+        // parsed list is now written next to the app's own playlist copies and
+        // read back on the next launch: the IPTV tab paints from it, while a
+        // stale copy is refreshed in the background.
+        private const val DISK_VERSION = 1
+        private val diskScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        private val refreshing = ConcurrentHashMap.newKeySet<String>()
+
+        private fun diskDir(): File? = runCatching {
+            File(com.hikari.app.HikariApp.instance.filesDir, "iptv/cache").apply { mkdirs() }
+        }.getOrNull()
+
+        private fun diskFile(providerId: String): File? = diskDir()?.let {
+            File(it, providerId.replace(Regex("[^A-Za-z0-9._-]"), "_") + ".json.gz")
+        }
+
+        private fun IptvChannel.toCacheJson(): JSONObject = JSONObject().apply {
+            put("name", name)
+            put("url", url)
+            logo?.let { put("logo", it) }
+            thumbnail?.let { put("thumb", it) }
+            put("group", group)
+            tvgId?.let { put("tvg", it) }
+            put("lang", language)
+            put("country", country)
+            if (headers.isNotEmpty()) put("headers", JSONObject(headers as Map<*, *>))
+            drmKid?.let { put("kid", it) }
+            drmKey?.let { put("key", it) }
+            cookie?.let { put("cookie", it) }
+            if (kind.isNotBlank()) put("kind", kind)
+            if (providerId.isNotBlank()) put("provider", providerId)
+        }
+
+        private fun JSONObject.toCachedChannel(): IptvChannel? {
+            val name = optString("name")
+            val url = optString("url")
+            if (name.isBlank() || url.isBlank()) return null
+            val headerMap = optJSONObject("headers")?.let { o ->
+                buildMap {
+                    o.keys().forEach { k -> o.optString(k)?.takeIf { it.isNotBlank() }?.let { put(k, it) } }
+                }
+            }.orEmpty()
+            return IptvChannel(
+                name = name,
+                url = url,
+                logo = optString("logo").takeIf { it.isNotBlank() },
+                thumbnail = optString("thumb").takeIf { it.isNotBlank() },
+                group = optString("group"),
+                tvgId = optString("tvg").takeIf { it.isNotBlank() },
+                language = optString("lang"),
+                country = optString("country"),
+                headers = headerMap,
+                drmKid = optString("kid").takeIf { it.isNotBlank() },
+                drmKey = optString("key").takeIf { it.isNotBlank() },
+                cookie = optString("cookie").takeIf { it.isNotBlank() },
+                kind = optString("kind"),
+                providerId = optString("provider"),
+            )
+        }
+
+        /** Best-effort write: a cache failure must never fail the playlist. */
+        private fun saveDisk(provider: IptvProvider, list: List<IptvChannel>) {
+            val file = diskFile(provider.config.id) ?: return
+            val tmp = File(file.parentFile, file.name + ".tmp")
+            runCatching {
+                GZIPOutputStream(tmp.outputStream().buffered()).bufferedWriter().use { w ->
+                    w.write(
+                        JSONObject()
+                            .put("v", DISK_VERSION)
+                            .put("url", provider.config.url)
+                            .put("at", System.currentTimeMillis())
+                            .toString(),
+                    )
+                    w.write("\n")
+                    list.forEach { channel ->
+                        w.write(channel.toCacheJson().toString())
+                        w.write("\n")
+                    }
+                }
+                if (file.exists()) file.delete()
+                if (!tmp.renameTo(file)) {
+                    tmp.copyTo(file, overwrite = true)
+                    tmp.delete()
+                }
+            }.onFailure { runCatching { tmp.delete() } }
+        }
+
+        /** The last successful read of [provider]'s playlist, with its age. */
+        private fun loadDisk(provider: IptvProvider): Pair<List<IptvChannel>, Long>? {
+            val file = diskFile(provider.config.id) ?: return null
+            if (!file.exists() || file.length() == 0L) return null
+            return runCatching {
+                GZIPInputStream(file.inputStream().buffered()).bufferedReader().use { r ->
+                    val head = JSONObject(r.readLine() ?: return@use null)
+                    if (head.optInt("v") != DISK_VERSION) return@use null
+                    if (head.optString("url") != provider.config.url) return@use null
+                    val at = head.optLong("at")
+                    val out = ArrayList<IptvChannel>(2048)
+                    while (true) {
+                        val line = r.readLine() ?: break
+                        if (line.isBlank()) continue
+                        runCatching { JSONObject(line).toCachedChannel() }.getOrNull()?.let { out += it }
+                    }
+                    if (out.isEmpty()) null else out to at
+                }
+            }.getOrNull()
+        }
+
+        private fun deleteDisk(providerId: String) {
+            runCatching { diskFile(providerId)?.delete() }
+        }
+
+        /** Re-reads a stale playlist off the UI thread, at most once per id. */
+        private fun scheduleRefresh(provider: IptvProvider) {
+            val id = provider.config.id
+            if (!refreshing.add(id)) return
+            diskScope.launch {
+                try {
+                    provider.channels(force = true)
+                } catch (_: Throwable) {
+                    // channels() already recorded the failure for the tile.
+                } finally {
+                    refreshing.remove(id)
+                }
+            }
+        }
+
         /** How long a parsed playlist is trusted before it is re-read. */
         const val TTL_MS = 30 * 60 * 1000L
 
@@ -189,6 +325,7 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
             channelCounts.remove(providerId)
             loadedAt.remove(providerId)
             dropCache(providerId)
+            deleteDisk(providerId)
         }
 
         /** The group name inside a [catalogIdForGroup] id (null for anything
@@ -472,9 +609,29 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
      * previously parsed list in place, so a dead panel does not empty Home.
      */
     suspend fun channels(force: Boolean = false): List<IptvChannel> = loadLock.withLock {
+        val now = System.currentTimeMillis()
         val cached = cachedFor(config.id)
-        if (!force && cached != null && System.currentTimeMillis() - (loadedAt[config.id] ?: 0L) < TTL_MS) {
+        if (!force && cached != null) {
+            // Stale-while-revalidate: the tab never waits for a whole M3U
+            // download just because the 30-minute window elapsed. The cached
+            // list paints now; the fresh copy lands for the next visit.
+            if (now - (loadedAt[config.id] ?: 0L) < TTL_MS) return@withLock cached
+            scheduleRefresh(this)
             return@withLock cached
+        }
+        if (!force) {
+            // First call after a process restart: the parsed list written on
+            // the last successful read is the difference between "IPTV opens
+            // instantly" and "IPTV downloads every playlist again".
+            val disk = withContext(Dispatchers.IO) { loadDisk(this@IptvProvider) }
+            if (disk != null) {
+                putCache(this, disk.first)
+                loadedAt[config.id] = disk.second
+                channelCounts[config.id] = disk.first.size
+                if (now - disk.second < TTL_MS) return@withLock disk.first
+                scheduleRefresh(this)
+                return@withLock disk.first
+            }
         }
         // A link with no `#EXTINF` at all is a bare m3u8/m3u stream rather than a
         // list: the URL itself is the one channel. That is what makes "just paste
@@ -562,6 +719,7 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
         putCache(this, tagged)
         loadedAt[config.id] = System.currentTimeMillis()
         channelCounts[config.id] = tagged.size
+        withContext(Dispatchers.IO) { saveDisk(this@IptvProvider, tagged) }
         tagged
     }
 
@@ -667,7 +825,7 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
         val q = query.trim()
         if (q.isBlank()) return emptyList()
         val all = channels()
-        val hit = all.filter { it.name.contains(q, ignoreCase = true) || it.group.contains(q, ignoreCase = true) }
+        val hit = IptvSearch.filter(q, all) { listOf(it.name, it.group) }
         if (hit.isEmpty()) return emptyList()
         val from = (page.coerceAtLeast(1) - 1) * PAGE
         if (from >= hit.size) return emptyList()
@@ -684,7 +842,7 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
         val q = query.trim()
         if (q.isBlank()) return emptyList()
         val scoped = channelsInCatalog(channels(), refId)
-        val hit = scoped.filter { it.name.contains(q, ignoreCase = true) || it.group.contains(q, ignoreCase = true) }
+        val hit = IptvSearch.filter(q, scoped) { listOf(it.name, it.group) }
         if (hit.isEmpty()) return emptyList()
         val from = (page.coerceAtLeast(1) - 1) * PAGE
         if (from >= hit.size) return emptyList()

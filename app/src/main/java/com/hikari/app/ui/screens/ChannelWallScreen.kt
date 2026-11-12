@@ -12,6 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -75,6 +76,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -95,14 +97,19 @@ import com.hikari.app.data.IptvChannel
 import com.hikari.app.data.XtreamCredentials
 import com.hikari.app.iptv.ChannelWallChannels
 import com.hikari.app.iptv.WallChannel
+import com.hikari.app.net.StreamProbe
 import com.hikari.app.providers.IptvProvider
 import com.hikari.app.providers.gatherIptvChannels
 import com.hikari.app.ui.navigation.Routes
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -170,6 +177,9 @@ private val WallListOptions = listOf(
     "Combat",
     "Racing",
     "Movies & Premium",
+    "Music",
+    "Anime",
+    "Lifestyle",
     "News",
     "Discovery & Documentaries",
     "Kids & Family",
@@ -236,6 +246,61 @@ private object ChannelWallArt {
     val byChannel = androidx.compose.runtime.mutableStateMapOf<String, String>()
 }
 
+/** Per-match health, filled as probes finish. [probed] is separate from
+ *  [results] because a dead stream is stored as a null result. */
+private class WallProbeState {
+    var probed by mutableStateOf<Set<String>>(emptySet())
+    var results by mutableStateOf<Map<String, StreamProbe.ProbeResult?>>(emptyMap())
+    var job: Job? = null
+}
+
+private fun probeHeaders(ch: IptvChannel): Map<String, String> = buildMap {
+    putAll(ch.headers)
+    ch.cookie?.takeIf { it.isNotBlank() }?.let { put("Cookie", it) }
+}
+
+/**
+ * Validates every match in the background, four at a time. Cached results
+ * (including cached failures) paint immediately; only the unknown URLs hit
+ * the network. Dead rows are filtered by the sheet, so a source that cannot
+ * answer never gets a Play button.
+ */
+private fun startWallProbes(
+    scope: kotlinx.coroutines.CoroutineScope,
+    state: WallProbeState,
+    matches: List<IptvChannel>,
+    force: Boolean,
+) {
+    state.job?.cancel()
+    val seed = LinkedHashMap<String, StreamProbe.ProbeResult?>()
+    if (!force) {
+        matches.forEach { ch ->
+            if (IptvProbeCache.has(ch.url)) seed[ch.url] = IptvProbeCache.get(ch.url)
+        }
+    }
+    state.results = seed
+    state.probed = seed.keys
+    val pending = matches.filter { it.url !in seed }
+    if (pending.isEmpty()) return
+    state.job = scope.launch {
+        val gate = Semaphore(4)
+        coroutineScope {
+            pending.forEach { ch ->
+                launch(Dispatchers.IO) {
+                    gate.withPermit {
+                        val result = StreamProbe.probe(ch.url, probeHeaders(ch))
+                        IptvProbeCache.put(ch.url, result)
+                        withContext(Dispatchers.Main) {
+                            state.results = state.results + (ch.url to result)
+                            state.probed = state.probed + ch.url
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /**
  * The Live TV directory from PlayTorrio, rebuilt as Hikari's Channel Wall.
  *
@@ -284,6 +349,8 @@ fun ChannelWallScreen(nav: NavHostController) {
     var customTarget by remember { mutableStateOf<WallCustomChannel?>(null) }
     var customMatches by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
     var customLoading by remember { mutableStateOf(false) }
+    val wallProbes = remember { WallProbeState() }
+    val customProbes = remember { WallProbeState() }
     var allChannels by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
     var channelsLoading by remember { mutableStateOf(false) }
     var channelsJob by remember { mutableStateOf<Deferred<List<IptvChannel>>?>(null) }
@@ -351,24 +418,31 @@ fun ChannelWallScreen(nav: NavHostController) {
         selectedWall = channel
         wallMatches = emptyList()
         wallLoading = true
+        wallProbes.job?.cancel()
+        wallProbes.probed = emptySet()
+        wallProbes.results = emptyMap()
         scope.launch {
             val channels = if (allChannels.isNotEmpty()) allChannels else requestChannels().await()
             if (allChannels.isEmpty()) allChannels = channels
-            wallMatches = withContext(Dispatchers.Default) {
+            val found = withContext(Dispatchers.Default) {
                 channels
                     .filter { ChannelWallChannels.matches(channel, it.name) || ChannelWallChannels.matches(channel, it.group) }
                     .distinctBy { it.url }
             }
-            wallMatches.firstOrNull()?.artwork?.takeIf { it.isNotBlank() }?.let {
+            wallMatches = found
+            found.firstOrNull()?.artwork?.takeIf { it.isNotBlank() }?.let {
                 ChannelWallArt.byChannel[channel.id] = it
             }
             wallLoading = false
+            startWallProbes(scope, wallProbes, found, force = false)
         }
     }
 
     fun playChannel(channel: IptvChannel) {
         selectedWall = null
         customTarget = null
+        wallProbes.job?.cancel()
+        customProbes.job?.cancel()
         playIptvChannel(context, channel)
     }
 
@@ -391,19 +465,24 @@ fun ChannelWallScreen(nav: NavHostController) {
         customTarget = custom
         customMatches = emptyList()
         customLoading = true
+        customProbes.job?.cancel()
+        customProbes.probed = emptySet()
+        customProbes.results = emptyMap()
         scope.launch {
             val channels = if (allChannels.isNotEmpty()) allChannels else requestChannels().await()
             if (allChannels.isEmpty()) allChannels = channels
             val aliases = custom.aliases.ifEmpty { listOf(custom.name) }
                 .map { it.trim().lowercase() }
                 .filter { it.isNotEmpty() }
-            customMatches = withContext(Dispatchers.Default) {
+            val found = withContext(Dispatchers.Default) {
                 channels.filter { ch ->
                     val hay = (ch.name + " " + ch.group).lowercase()
                     aliases.any { hay.contains(it) }
                 }.distinctBy { it.url }
             }
+            customMatches = found
             customLoading = false
+            startWallProbes(scope, customProbes, found, force = false)
         }
     }
 
@@ -529,6 +608,9 @@ fun ChannelWallScreen(nav: NavHostController) {
                     Triple("Combat", "UFC, WWE, AEW, boxing and PPV", "Combat"),
                     Triple("Racing", "Formula 1, MotoGP, NASCAR and rally", "Racing"),
                     Triple("Movies & Premium", "HBO, Showtime, Starz and the movie channels", "Movies"),
+                    Triple("Music", "MTV, VH1, BET, CMT and the music channels", "Music"),
+                    Triple("Anime", "Adult Swim, Toonami, Animax and animation", "Anime"),
+                    Triple("Lifestyle", "Food, home, travel and reality", "Lifestyle"),
                     Triple("News", "CNN, BBC, Sky News and the world's newsrooms", "News"),
                     Triple("Discovery & Documentaries", "Nat Geo, Discovery, History and more", "Discovery"),
                     Triple("Kids & Family", "Cartoon Network, Disney, Nickelodeon and more", "Kids"),
@@ -568,8 +650,13 @@ fun ChannelWallScreen(nav: NavHostController) {
             channel = channel,
             matches = wallMatches,
             loading = wallLoading,
-            onDismiss = { selectedWall = null },
+            probes = wallProbes,
+            onDismiss = {
+                selectedWall = null
+                wallProbes.job?.cancel()
+            },
             onPlay = { playChannel(it) },
+            onRecheck = { startWallProbes(scope, wallProbes, wallMatches, force = true) },
         )
     }
 
@@ -578,8 +665,13 @@ fun ChannelWallScreen(nav: NavHostController) {
             channel = custom,
             matches = customMatches,
             loading = customLoading,
-            onDismiss = { customTarget = null },
+            probes = customProbes,
+            onDismiss = {
+                customTarget = null
+                customProbes.job?.cancel()
+            },
             onPlay = { playChannel(it) },
+            onRecheck = { startWallProbes(scope, customProbes, customMatches, force = true) },
         )
     }
 
@@ -993,7 +1085,6 @@ private fun WallPromoFallback(name: String, modifier: Modifier = Modifier) {
 @Composable
 private fun WallCard(channel: WallChannel, onClick: () -> Unit) {
     val colors = remember(channel.gradient) { channel.gradient.map(::Color) }
-    val hasArt = !(channel.backdropUrl ?: ChannelWallArt.byChannel[channel.id] ?: channel.iconUrl).isNullOrBlank()
     Box(
         Modifier
             .width(138.dp)
@@ -1017,11 +1108,6 @@ private fun WallCard(channel: WallChannel, onClick: () -> Unit) {
                     ),
                 ),
         )
-        if (hasArt) {
-            Box(Modifier.align(Alignment.TopStart).padding(8.dp)) {
-                WallLogo(channel, 32)
-            }
-        }
         Column(Modifier.align(Alignment.BottomStart).padding(10.dp)) {
             Text(channel.name, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(channel.category, color = Color.White.copy(alpha = 0.65f), fontSize = 10.sp, maxLines = 1)
@@ -1032,7 +1118,6 @@ private fun WallCard(channel: WallChannel, onClick: () -> Unit) {
 @Composable
 private fun WallGridCard(channel: WallChannel, onClick: () -> Unit) {
     val colors = remember(channel.gradient) { channel.gradient.map(::Color) }
-    val hasArt = !(channel.backdropUrl ?: ChannelWallArt.byChannel[channel.id] ?: channel.iconUrl).isNullOrBlank()
     Box(
         Modifier
             .fillMaxWidth()
@@ -1053,11 +1138,6 @@ private fun WallGridCard(channel: WallChannel, onClick: () -> Unit) {
                     ),
                 ),
         )
-        if (hasArt) {
-            Box(Modifier.align(Alignment.TopStart).padding(7.dp)) {
-                WallLogo(channel, 28)
-            }
-        }
         Column(Modifier.align(Alignment.BottomStart).padding(8.dp)) {
             Text(channel.name, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(channel.category, color = Color.White.copy(alpha = 0.65f), fontSize = 9.sp, maxLines = 1)
@@ -1144,8 +1224,10 @@ private fun WallCustomMatchSheet(
     channel: WallCustomChannel,
     matches: List<IptvChannel>,
     loading: Boolean,
+    probes: WallProbeState,
     onDismiss: () -> Unit,
     onPlay: (IptvChannel) -> Unit,
+    onRecheck: () -> Unit,
 ) {
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
@@ -1185,46 +1267,12 @@ private fun WallCustomMatchSheet(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                else -> {
-                    Text("${matches.size} matches found", color = Color.White.copy(alpha = 0.55f), fontSize = 11.sp)
-                    LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false), contentPadding = PaddingValues(vertical = 6.dp)) {
-                        items(matches, key = { it.url }) { match ->
-                            Row(
-                                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
-                                    .clickable { onPlay(match) }
-                                    .padding(vertical = 7.dp, horizontal = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                val logo = match.artwork
-                                if (!logo.isNullOrBlank()) {
-                                    AsyncImage(
-                                        model = logo,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(42.dp).clip(RoundedCornerShape(8.dp)),
-                                        contentScale = ContentScale.Fit,
-                                    )
-                                } else {
-                                    Box(Modifier.size(42.dp), contentAlignment = Alignment.Center) {
-                                        Icon(Icons.Filled.LiveTv, contentDescription = null, tint = Color.White.copy(alpha = 0.5f))
-                                    }
-                                }
-                                Spacer(Modifier.width(10.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(match.name, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text(
-                                        listOfNotNull(match.group.takeIf { it.isNotBlank() }, match.providerId.takeIf { it.isNotBlank() })
-                                            .joinToString(" · "),
-                                        color = Color.White.copy(alpha = 0.5f),
-                                        fontSize = 11.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                                Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color(0xFF00D2EF))
-                            }
-                        }
-                    }
-                }
+                else -> WallSourceRows(
+                    matches = matches,
+                    probes = probes,
+                    onPlay = onPlay,
+                    onRecheck = onRecheck,
+                )
             }
             Spacer(Modifier.height(6.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -1240,9 +1288,14 @@ private fun WallMatchSheet(
     channel: WallChannel,
     matches: List<IptvChannel>,
     loading: Boolean,
+    probes: WallProbeState,
     onDismiss: () -> Unit,
     onPlay: (IptvChannel) -> Unit,
+    onRecheck: () -> Unit,
 ) {
+    val best = matches
+        .filter { probes.probed.contains(it.url) && probes.results[it.url]?.isAlive == true }
+        .minByOrNull { probes.results[it.url]?.latencyMs ?: Long.MAX_VALUE }
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
         Column(Modifier.fillMaxWidth().heightIn(max = 620.dp).padding(horizontal = 16.dp)) {
@@ -1253,8 +1306,8 @@ private fun WallMatchSheet(
                     Text(channel.name, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(channel.category, color = Color.White.copy(alpha = 0.55f), fontSize = 12.sp)
                 }
-                if (matches.isNotEmpty()) {
-                    IconButton(onClick = { onPlay(matches.first()) }) {
+                best?.let { play ->
+                    IconButton(onClick = { onPlay(play) }) {
                         Icon(Icons.Filled.PlayArrow, contentDescription = "Play best match", tint = Color(0xFF00D2EF), modifier = Modifier.size(32.dp))
                     }
                 }
@@ -1277,54 +1330,139 @@ private fun WallMatchSheet(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                else -> {
-                    Text("${matches.size} source${if (matches.size == 1) "" else "s"} found", color = Color.White.copy(alpha = 0.55f), fontSize = 11.sp)
-                    LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false), contentPadding = PaddingValues(vertical = 6.dp)) {
-                        items(matches, key = { it.url }) { match ->
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .clickable { onPlay(match) }
-                                    .padding(vertical = 7.dp, horizontal = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                val logo = match.artwork
-                                if (!logo.isNullOrBlank()) {
-                                    AsyncImage(
-                                        model = logo,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(42.dp).clip(RoundedCornerShape(8.dp)),
-                                        contentScale = ContentScale.Fit,
-                                    )
-                                } else {
-                                    Box(Modifier.size(42.dp), contentAlignment = Alignment.Center) {
-                                        Icon(Icons.Filled.LiveTv, contentDescription = null, tint = Color.White.copy(alpha = 0.5f))
-                                    }
-                                }
-                                Spacer(Modifier.width(10.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(match.name, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text(
-                                        listOfNotNull(match.group.takeIf { it.isNotBlank() }, match.providerId.takeIf { it.isNotBlank() })
-                                            .joinToString(" · "),
-                                        color = Color.White.copy(alpha = 0.5f),
-                                        fontSize = 11.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                                Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color(0xFF00D2EF))
-                            }
-                        }
-                    }
-                }
+                else -> WallSourceRows(
+                    matches = matches,
+                    probes = probes,
+                    onPlay = onPlay,
+                    onRecheck = onRecheck,
+                )
             }
             Spacer(Modifier.height(6.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 TextButton(onClick = onDismiss) { Text("Close") }
             }
             Spacer(Modifier.height(10.dp))
+        }
+    }
+}
+
+/**
+ * The validated source list shared by both wall sheets. Only sources that
+ * answered the health check are playable; dead rows are removed entirely.
+ * While probes are still running the unknown rows stay visible with a
+ * "Checking…" label, then disappear if they fail.
+ */
+@Composable
+private fun ColumnScope.WallSourceRows(
+    matches: List<IptvChannel>,
+    probes: WallProbeState,
+    onPlay: (IptvChannel) -> Unit,
+    onRecheck: () -> Unit,
+) {
+    val alive = matches
+        .filter { probes.probed.contains(it.url) && probes.results[it.url]?.isAlive == true }
+        .sortedBy { probes.results[it.url]?.latencyMs ?: Long.MAX_VALUE }
+    val pending = matches.filter { it.url !in probes.probed }
+    val dead = (matches.size - alive.size - pending.size).coerceAtLeast(0)
+    val rows = alive + pending
+
+    if (rows.isEmpty()) {
+        Column(
+            Modifier.fillMaxWidth().weight(1f, fill = false),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                "No working streams found",
+                color = Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "${matches.size} matching source${if (matches.size == 1) "" else "s"} did not answer the health check.",
+                color = Color.White.copy(alpha = 0.6f),
+                fontSize = 12.sp,
+            )
+            Spacer(Modifier.height(14.dp))
+            OutlinedButton(onClick = onRecheck) {
+                Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Re-check")
+            }
+        }
+        return
+    }
+
+    Text(
+        buildString {
+            append(if (alive.isEmpty()) "Checking ${pending.size} source" else "${alive.size} working source")
+            if (alive.isEmpty() && pending.size != 1) append("s")
+            if (alive.isNotEmpty() && alive.size != 1) append("s")
+            if (pending.isNotEmpty() && alive.isNotEmpty()) append(" · ${pending.size} still checking")
+            if (dead > 0) append(" · $dead offline hidden")
+        },
+        color = Color.White.copy(alpha = 0.55f),
+        fontSize = 11.sp,
+    )
+    LazyColumn(
+        Modifier.fillMaxWidth().weight(1f),
+        contentPadding = PaddingValues(vertical = 6.dp),
+    ) {
+        items(rows, key = { it.url }) { match ->
+            val checking = match.url !in probes.probed
+            val result = probes.results[match.url]
+            val playable = !checking && result?.isAlive == true
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable(enabled = playable) { onPlay(match) }
+                    .alpha(if (playable) 1f else 0.68f)
+                    .padding(vertical = 7.dp, horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                val logo = match.artwork
+                if (!logo.isNullOrBlank()) {
+                    AsyncImage(
+                        model = logo,
+                        contentDescription = null,
+                        modifier = Modifier.size(42.dp).clip(RoundedCornerShape(8.dp)),
+                        contentScale = ContentScale.Fit,
+                    )
+                } else {
+                    Box(Modifier.size(42.dp), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Filled.LiveTv, contentDescription = null, tint = Color.White.copy(alpha = 0.5f))
+                    }
+                }
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(match.name, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        listOfNotNull(match.group.takeIf { it.isNotBlank() }, match.providerId.takeIf { it.isNotBlank() })
+                            .joinToString(" · "),
+                        color = Color.White.copy(alpha = 0.5f),
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (checking) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(13.dp),
+                        color = Color.White.copy(alpha = 0.7f),
+                        strokeWidth = 1.5.dp,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text("Checking", color = Color.White.copy(alpha = 0.55f), fontSize = 10.sp)
+                } else {
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF34D399)))
+                    Spacer(Modifier.width(6.dp))
+                    Text("${result?.latencyMs ?: 0} ms", color = Color.White.copy(alpha = 0.55f), fontSize = 10.sp)
+                    Spacer(Modifier.width(6.dp))
+                    Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color(0xFF00D2EF))
+                }
+            }
         }
     }
 }

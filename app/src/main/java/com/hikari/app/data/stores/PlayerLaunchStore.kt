@@ -28,7 +28,7 @@ data class PlayerLaunch(
     @SerialName("title") val title: String = "",
 )
 
-private val Context.playerLaunchDataStore by preferencesDataStore(name = "player_launch")
+private val Context.playerLaunchDataStore by preferencesDataStore(name = "player_launch", corruptionHandler = com.hikari.app.data.ReplaceCorruptPreferences)
 
 /**
  * DataStore-backed store for coordinating player launches across screens.

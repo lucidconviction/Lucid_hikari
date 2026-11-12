@@ -17,7 +17,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
-private val Context.youTubeChannelDataStore by preferencesDataStore(name = "youtube_channels")
+private val Context.youTubeChannelDataStore by preferencesDataStore(name = "youtube_channels", corruptionHandler = com.hikari.app.data.ReplaceCorruptPreferences)
 
 class YouTubeChannelStore(private val ctx: Context) {
 

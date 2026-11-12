@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -143,6 +145,7 @@ object YouTubeVideoDetails {
  * video and a full-height panel on the right, so the three buttons live in one
  * continuous surface instead of three different UI languages.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun YouTubeVideoPanel(
     videoId: String,
@@ -178,11 +181,13 @@ fun YouTubeVideoPanel(
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        // Exactly the More Videos geometry: a quarter of the player width for
-        // the card, plus its padding, capped at 60% of the screen. The Info and
-        // Comments panels therefore line up with the list they sit beside.
-        val thumbnailWidth = (maxWidth / 4).coerceIn(150.dp, 360.dp)
-        val panelWidth = (thumbnailWidth + 28.dp).coerceAtMost(maxWidth * 0.6f)
+        // Info and Comments are reading panels, not the narrow More Videos
+        // rail: they need enough width for a comment to wrap at word
+        // boundaries instead of one or two words per line. Keep them wide but
+        // leave a strip of the video visible so the player still feels live.
+        val panelWidth = (maxWidth * 0.46f)
+            .coerceIn(320.dp, 560.dp)
+            .coerceAtMost(maxWidth * 0.88f)
         Box(
             Modifier
                 .fillMaxSize()
@@ -194,8 +199,8 @@ fun YouTubeVideoPanel(
                 .align(Alignment.CenterEnd)
                 .fillMaxHeight()
                 .width(panelWidth)
-                // Fully opaque, 25% stronger than the previous translucent panel.
-                .background(Color(0xFF111114))
+                // 30% opaque: the panel tints the picture without hiding it.
+                .background(Color(0x4D111114))
                 .clickable(enabled = false) {},
         ) {
             Column(Modifier.fillMaxSize()) {
@@ -372,12 +377,14 @@ private fun ReplyHeader(comment: YtComment) {
             comment.message,
             color = Color(0xFFC8C8C8),
             fontSize = 11.sp,
-            maxLines = 2,
+            softWrap = true,
+            maxLines = 4,
             overflow = TextOverflow.Ellipsis,
         )
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CommentRow(comment: YtComment, canOpenReplies: Boolean, onClick: () -> Unit) {
     Row(
@@ -412,8 +419,22 @@ private fun CommentRow(comment: YtComment, canOpenReplies: Boolean, onClick: () 
                 overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(2.dp))
-            Text(comment.message, color = Color.White, fontSize = 12.sp)
-            Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+                comment.message,
+                color = Color.White,
+                fontSize = 12.sp,
+                softWrap = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            // FlowRow, not Row: on a narrow phone panel the likes, reply count
+            // and "View replies" together are wider than the comment column,
+            // and a Row silently clipped the last one. This wraps the actions
+            // onto a second line instead.
+            FlowRow(
+                modifier = Modifier.padding(top = 4.dp).fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
                 if (comment.likes.isNotBlank()) {
                     Text("👍 ${comment.likes}", color = Color(0xFF9A9A9A), fontSize = 10.sp)
                 }

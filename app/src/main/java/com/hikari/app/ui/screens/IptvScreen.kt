@@ -119,6 +119,7 @@ import com.hikari.app.data.ProviderType
 import com.hikari.app.data.TileShapes
 import com.hikari.app.i18n.I18n
 import com.hikari.app.i18n.tr
+import com.hikari.app.iptv.IptvSearch
 import com.hikari.app.iptv.PortalStore
 import com.hikari.app.providers.IptvProvider
 import com.hikari.app.providers.gatherIptvChannels
@@ -476,6 +477,21 @@ addStream = false
         IptvCardCache.get(ids)?.let { cached ->
             cards = cached
             reading = false
+            if (!IptvCardCache.isFresh(ids)) {
+                // Stale tiles are already on screen; re-read them quietly.
+                // IptvProvider now returns its own disk copy immediately, so
+                // this never puts a playlist download in front of the user.
+                scope.launch {
+                    delay(1200)
+                    if (playlists.map { it.config.id } != ids) return@launch
+                    val out = ArrayList<IptvCard>(playlists.size)
+                    playlists.chunked(3).forEach { chunk ->
+                        out += withContext(Dispatchers.IO) { chunk.map { readCard(it) } }
+                    }
+                    cards = out.toList()
+                    IptvCardCache.put(ids, out.toList())
+                }
+            }
             return@LaunchedEffect
         }
         reading = true
@@ -1824,6 +1840,18 @@ internal object IptvProbeCache {
         return cache[url]
     }
 
+    /** True when [url] has a result, including a cached FAILURE (a null value).
+     *  [get] alone cannot tell "never probed" from "probed and dead". */
+    fun has(url: String): Boolean {
+        val ts = timestamps[url] ?: return false
+        if (System.currentTimeMillis() - ts > TTL_MS) {
+            cache.remove(url)
+            timestamps.remove(url)
+            return false
+        }
+        return true
+    }
+
     fun clear() {
         cache.clear()
         timestamps.clear()
@@ -1885,22 +1913,106 @@ private data class IptvCard(
  */
 private object IptvCardCache {
     private const val TTL_MS = 30 * 60 * 1000L
+    private const val DISK_VERSION = 1
     private var savedAt = 0L
     private var savedIds: List<String> = emptyList()
     private var cards: List<IptvCard> = emptyList()
+    private var diskLoaded = false
+
+    private fun cardFile(): File? = runCatching {
+        File(HikariApp.instance.filesDir, "iptv/cards.json")
+    }.getOrNull()
+
+    /** The cards are tiny, so the whole set is one file. It is loaded once per
+     *  process: after a cold start the tab paints before any playlist is read. */
+    private fun loadDisk(): List<IptvCard> {
+        if (diskLoaded) return cards
+        diskLoaded = true
+        val f = cardFile() ?: return emptyList()
+        if (!f.exists() || f.length() == 0L) return emptyList()
+        return runCatching {
+            val root = org.json.JSONObject(f.readText())
+            if (root.optInt("v") != DISK_VERSION) return@runCatching emptyList()
+            savedAt = root.optLong("at")
+            savedIds = root.optJSONArray("ids")?.let { arr ->
+                (0 until arr.length()).map { arr.optString(it) }
+            }.orEmpty()
+            val arr = root.optJSONArray("cards") ?: return@runCatching emptyList()
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                val id = o.optString("id")
+                if (id.isBlank()) return@mapNotNull null
+                IptvCard(
+                    id = id,
+                    name = o.optString("name"),
+                    url = o.optString("url"),
+                    channels = o.optInt("channels"),
+                    groups = o.optInt("groups"),
+                    cover = o.optString("cover").takeIf { it.isNotBlank() },
+                    error = o.optString("error").takeIf { it.isNotBlank() },
+                    stream = o.optBoolean("stream"),
+                    torrent = o.optBoolean("torrent"),
+                    local = o.optBoolean("local"),
+                )
+            }
+        }.getOrDefault(emptyList())
+    }
 
     @Synchronized
     fun get(ids: List<String>): List<IptvCard>? {
+        if (cards.isEmpty()) loadDisk()
         if (cards.isEmpty() || ids != savedIds) return null
-        if (System.currentTimeMillis() - savedAt >= TTL_MS) return null
         return cards
     }
+
+    @Synchronized
+    fun isFresh(ids: List<String>): Boolean =
+        ids == savedIds && savedAt > 0L && System.currentTimeMillis() - savedAt < TTL_MS
 
     @Synchronized
     fun put(ids: List<String>, list: List<IptvCard>) {
         savedIds = ids
         cards = list
         savedAt = System.currentTimeMillis()
+        val stamp = savedAt
+        val snapshot = list
+        // A few KB, but the caller is the main thread: hand the write to a
+        // daemon thread so a slow flash device cannot jank the tab.
+        Thread({
+            val f = cardFile()
+            if (f != null) runCatching {
+                val arr = org.json.JSONArray()
+                snapshot.forEach { c ->
+                    arr.put(
+                        org.json.JSONObject()
+                            .put("id", c.id)
+                            .put("name", c.name)
+                            .put("url", c.url)
+                            .put("channels", c.channels)
+                            .put("groups", c.groups)
+                            .put("cover", c.cover.orEmpty())
+                            .put("error", c.error.orEmpty())
+                            .put("stream", c.stream)
+                            .put("torrent", c.torrent)
+                            .put("local", c.local),
+                    )
+                }
+                val idsJson = org.json.JSONArray()
+                ids.forEach { idsJson.put(it) }
+                val root = org.json.JSONObject()
+                    .put("v", DISK_VERSION)
+                    .put("at", stamp)
+                    .put("ids", idsJson)
+                    .put("cards", arr)
+                val tmp = File(f.parentFile, f.name + ".tmp")
+                tmp.writeText(root.toString())
+                if (f.exists()) f.delete()
+                if (!tmp.renameTo(f)) {
+                    tmp.copyTo(f, overwrite = true)
+                    tmp.delete()
+                }
+            }
+        }, "iptv-cards").apply { isDaemon = true }.start()
     }
 
     @Synchronized
@@ -4186,7 +4298,9 @@ fun PlayerChannelListDialog(
 
                         val filtered = remember(allChannels, searchQuery) {
                             if (searchQuery.isBlank()) allChannels
-                            else allChannels.filter { it.name.contains(searchQuery, ignoreCase = true) || (it.group != null && it.group.contains(searchQuery, ignoreCase = true)) }
+                            else IptvSearch.filter(searchQuery, allChannels) {
+                                listOf(it.name, it.group)
+                            }
                         }
 
                         if (loading) {

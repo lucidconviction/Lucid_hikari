@@ -15,7 +15,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
-private val Context.multiWindowStore: DataStore<Preferences> by preferencesDataStore(name = "multi_window")
+private val Context.multiWindowStore: DataStore<Preferences> by preferencesDataStore(name = "multi_window", corruptionHandler = com.hikari.app.data.ReplaceCorruptPreferences)
 
 private val KEY_SLOTS = stringPreferencesKey("slots")
 private val KEY_STREAMS = stringPreferencesKey("streams")

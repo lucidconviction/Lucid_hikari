@@ -161,7 +161,7 @@ fun YouTubeMoreVideos(
                 modifier = Modifier
                     .fillMaxHeight()
                     .width(panelWidth)
-                    .background(Color(0xF5111114)),
+                    .background(Color(0x4D111114)),
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 4.dp, top = 6.dp),

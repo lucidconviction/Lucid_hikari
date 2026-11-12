@@ -284,6 +284,16 @@ class PlayerActivity : ComponentActivity() {
                 !StreamProbe.knownBad(url) && StreamProbe.cached(url) != null
     }
 
+    /** The live playback state [onSaveInstanceState] keeps so a process death
+     *  between an episode/channel switch and the return lands back on the same
+     *  server and position. */
+    private data class SavedPlaybackState(
+        val sources: List<PlayerSource>,
+        val index: Int,
+        val positionMs: Long,
+        val episode: Episode?,
+    )
+
     /** Subtitle tracks contributed by the installed SUBTITLE addons
      *  (OpenSubtitles v3, SubDL…), merged into the playing source's own tracks. */
     private var addonSubs: List<SubtitleSource> = emptyList()
@@ -2826,7 +2836,22 @@ class PlayerActivity : ComponentActivity() {
         quickChBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
         multiWindowBtn?.visibility = View.VISIBLE
 
-        sources = parseIntentSources()
+        // A process death between an in-player episode/channel switch and the
+        // return to this screen hands back the LAUNCH Intent, which still
+        // describes the title/episode that was open when the player first
+        // started. The state bundle is the only place the switched list and
+        // its position survive (see [onSaveInstanceState]); a normal launch
+        // has no such bundle and reads the Intent exactly as before.
+        val restoredPlayback = restorePlaybackState(savedInstanceState)
+        if (restoredPlayback != null) {
+            sources = restoredPlayback.sources
+            currentIndex = restoredPlayback.index
+            startPositionMs = restoredPlayback.positionMs
+            seekPending = restoredPlayback.positionMs > 0L
+            restoredPlayback.episode?.let { applyLiveEpisode(it) }
+        } else {
+            sources = parseIntentSources()
+        }
 
         val liveId = intent.getStringExtra("streamsLiveId")
         liveSessionId = liveId
@@ -3166,7 +3191,11 @@ class PlayerActivity : ComponentActivity() {
             // adopt the episode the detail screen settles on, so the title card,
             // resume key and watch history are per-episode rather than the
             // movie-level entry.
-            liveEpisodeJob = lifecycleScope.launch {
+            // Skipped on a restored playback: the live session still answers
+            // with the episode that was playing when the player first opened,
+            // which would overwrite the switched episode the state bundle just
+            // restored. The saved list's own history entry is authoritative.
+            if (restoredPlayback?.episode == null) liveEpisodeJob = lifecycleScope.launch {
                 StreamsLive.episodeFlow(liveId).collect { ep ->
                     if (ep != null) applyLiveEpisode(ep)
                 }
@@ -3202,7 +3231,14 @@ class PlayerActivity : ComponentActivity() {
         // + a live session), so the chooser comes up the moment the player does
         // and fills in as servers are found, rather than after the first (or
         // fifth) one finally lands.
-        if (sources.isNotEmpty() || liveId != null) startOrAsk()
+        if (restoredPlayback != null) {
+            // Resume exactly where the process died: the saved index instead
+            // of the remembered/first-server heuristics, and no chooser even
+            // when "don't play directly" is on — the user was already playing.
+            playSource(restoredPlayback.index)
+        } else if (sources.isNotEmpty() || liveId != null) {
+            startOrAsk()
+        }
     }
 
     /** Index of the server the user last played this video with — matched by
@@ -5667,6 +5703,11 @@ class PlayerActivity : ComponentActivity() {
     /** In-player episode switches, newest wins: a slow search for an earlier
      *  pick must never overwrite a later one (see [switchToEpisode]). */
     private var episodeSwitchGen = 0
+    /** The next episode's origin servers, fetched while the current one is
+     *  still playing. Signed URLs rotate, so entries age out quickly. */
+    private data class EpisodePrefetch(val episodeId: String, val at: Long, val streams: List<StreamSource>)
+    private val episodePrefetches = ArrayDeque<EpisodePrefetch>()
+    private var episodePrefetchJob: Job? = null
     /** The title's episode list as the player last saw it (the Episodes dialog
      *  refreshes it). Next/Previous/autoplay step through it in ROW order, so
      *  duplicate-numbered rows advance one row at a time like the detail page. */
@@ -8413,14 +8454,18 @@ class PlayerActivity : ComponentActivity() {
             Toast.makeText(this, I18n.t("Loading next episode…"), Toast.LENGTH_SHORT).show()
         }
         lifecycleScope.launch {
-            // FAST: the title's own extension resolves its own episode ids in
-            // seconds; the full cross-extension pass is what takes a minute.
+            // FAST: a prefetch from the previous episode starts instantly; then
+            // the title's own extension resolves its own episode ids in
+            // seconds. The full cross-extension pass is what takes a minute.
             // Bounded: an origin that never answers used to hold this launch
             // forever on "Loading episode". Past the bound the search falls
             // through to the full pass (with the box up) instead of hanging.
-            val fast = withTimeoutOrNull(45_000L) {
-                runCatching { repo.originStreams(item, ep) }.getOrDefault(emptyList())
-            }.orEmpty()
+            val prefetched = takeEpisodePrefetch(ep)
+            val fast = prefetched.ifEmpty {
+                withTimeoutOrNull(45_000L) {
+                    runCatching { repo.originStreams(item, ep) }.getOrDefault(emptyList())
+                }.orEmpty()
+            }
             if (gen != episodeSwitchGen || cancelled) {
                 dismissDialog()
                 if (gen == episodeSwitchGen) autoplayRunning = false
@@ -8443,6 +8488,7 @@ class PlayerActivity : ComponentActivity() {
                     if (gen == episodeSwitchGen) {
                         withContext(Dispatchers.Main) { appendSources(full) }
                         autoplayRunning = false
+                        prefetchNextEpisode(item, ep, repo)
                     }
                 }
                 return@launch
@@ -8484,6 +8530,49 @@ class PlayerActivity : ComponentActivity() {
             }
             adoptEpisodeStreams(item, ep, streams.map { it.toPlayerSource() }, fromAutoplay)
             autoplayRunning = false
+            prefetchNextEpisode(item, ep, repo)
+        }
+    }
+
+    private fun episodePrefetchKey(ep: Episode): String =
+        ep.id.ifBlank { "s${ep.season}e${ep.number}" }
+
+    /** A still-fresh prefetch for [ep], removed as it is consumed. */
+    private fun takeEpisodePrefetch(ep: Episode): List<StreamSource> {
+        val key = episodePrefetchKey(ep)
+        val now = System.currentTimeMillis()
+        episodePrefetches.removeAll { now - it.at > 4 * 60 * 1000L }
+        val hit = episodePrefetches.firstOrNull { it.episodeId == key } ?: return emptyList()
+        episodePrefetches.remove(hit)
+        return hit.streams
+    }
+
+    /**
+     * Warms the next episode's origin servers while the current one plays.
+     * Sequential with the active search (never parallel: two calls on one
+     * plugin instance corrupt its state), so this is only called after the
+     * full enrichment pass for the current episode has finished.
+     */
+    private fun prefetchNextEpisode(item: AppMediaItem, ep: Episode, repo: ContentRepository) {
+        if (episodePrefetchJob?.isActive == true) return
+        episodePrefetchJob = lifecycleScope.launch {
+            val eps = playerEpisodes.ifEmpty {
+                runCatching { repo.episodesFor(item) }.getOrNull().orEmpty()
+            }
+            val key = episodePrefetchKey(ep)
+            val at = eps.indexOfFirst { episodePrefetchKey(it) == key }
+            val next = eps.getOrNull(at + 1) ?: return@launch
+            val nextKey = episodePrefetchKey(next)
+            if (episodePrefetches.any { it.episodeId == nextKey && System.currentTimeMillis() - it.at < 4 * 60 * 1000L }) {
+                return@launch
+            }
+            val streams = withTimeoutOrNull(20_000L) {
+                runCatching { repo.originStreams(item, next) }.getOrDefault(emptyList())
+            }.orEmpty().filter { it.url.isNotBlank() && !it.externalUrl && !it.isTorrent }
+            if (streams.isEmpty() || isFinishing || isDestroyed) return@launch
+            episodePrefetches.removeAll { it.episodeId == nextKey }
+            episodePrefetches.addLast(EpisodePrefetch(nextKey, System.currentTimeMillis(), streams))
+            while (episodePrefetches.size > 3) episodePrefetches.removeFirst()
         }
     }
 
@@ -8803,8 +8892,25 @@ class PlayerActivity : ComponentActivity() {
                 episode = runCatching { repo.episodesFor(next) }.getOrNull()
                     ?.firstOrNull()
             }
-            val streams = runCatching { repo.streamsFor(next, episode) }.getOrDefault(emptyList())
+            // Start on the server that worked minutes ago, or the title's own
+            // addon/origin, instead of making the viewer wait for the whole
+            // cross-extension sweep before the next title appears. The full
+            // pass is still the fallback when neither answers.
+            val remembered = runCatching { repo.recentlyFoundStreams(next, episode) }
+                .getOrDefault(emptyList())
                 .filter { it.url.isNotBlank() && !it.externalUrl && !it.isTorrent }
+            val origin = if (remembered.isEmpty()) {
+                withTimeoutOrNull(15_000L) {
+                    runCatching { repo.originStreams(next, episode) }.getOrDefault(emptyList())
+                }.orEmpty().filter { it.url.isNotBlank() && !it.externalUrl && !it.isTorrent }
+            } else {
+                emptyList()
+            }
+            var streams = (remembered + origin).distinctBy { it.url }
+            if (streams.isEmpty()) {
+                streams = runCatching { repo.streamsFor(next, episode) }.getOrDefault(emptyList())
+                    .filter { it.url.isNotBlank() && !it.externalUrl && !it.isTorrent }
+            }
             if (streams.isEmpty()) {
                 autoplayRunning = false
                 hideLoadingBanner(immediate = true)
@@ -13189,9 +13295,15 @@ class PlayerActivity : ComponentActivity() {
 
     /** The sources in the launch intent (and, after an in-player YouTube
      *  switch, the freshly set intent). */
-    private fun parseIntentSources(): List<PlayerSource> {
+    private fun parseIntentSources(): List<PlayerSource> =
+        parseSourcesPayload(intent.getStringExtra("sources").orEmpty())
+
+    /** Parses a `sources` JSON array (see [parseIntentSources]) from an
+     *  already-read string, so the same parser also serves the process-death
+     *  snapshot saved in [onSaveInstanceState]. */
+    private fun parseSourcesPayload(raw: String): List<PlayerSource> {
         return runCatching {
-            val arr = JSONArray(intent.getStringExtra("sources").orEmpty())
+            val arr = JSONArray(raw)
             (0 until arr.length()).mapNotNull { i ->
                 // One poison row must never void the whole handoff: the old
                 // all-or-nothing parse turned N found servers into an empty
@@ -13232,6 +13344,7 @@ class PlayerActivity : ComponentActivity() {
                     trackers,
                     drm = parseDrmSpec(o.optJSONObject("drm")),
                     local = o.optBoolean("local"),
+                    torrentStream = o.optBoolean("torrentStream"),
                     provider = o.optString("provider"),
                     providerId = o.optString("providerId"),
                     providerName = o.optString("providerName"),
@@ -13254,6 +13367,147 @@ class PlayerActivity : ComponentActivity() {
             // one it actually came from — "on MovieBox, play MovieBox". Stable
             // sort, so every other engine keeps the order the repo sent.
             .sortedBy { if (it.isFromOrigin()) 0 else 1 }
+    }
+
+    /**
+     * Serializes the live source list for [onSaveInstanceState] — the exact
+     * field names [parseSourcesPayload] reads back. Only the state bundle
+     * needs this: every launch path still hands sources in through the Intent.
+     */
+    private fun encodeSources(state: List<PlayerSource>): String {
+        val arr = JSONArray()
+        state.forEach { s ->
+            val o = JSONObject()
+                .put("name", s.name)
+                .put("url", s.url)
+                .put("isM3u8", s.isM3u8)
+                .put("isMpd", s.isMpd)
+                .put("isTorrent", s.isTorrent)
+                .put("torrentStream", s.torrentStream)
+                .put("local", s.local)
+                .put("provider", s.provider)
+                .put("providerId", s.providerId)
+                .put("providerName", s.providerName)
+                .put("details", s.details)
+                .put("thumbnail", s.thumbnail.orEmpty())
+            s.infoHash?.let { o.put("infoHash", it) }
+            s.fileIdx?.let { o.put("fileIdx", it) }
+            s.torrentFileHint?.let { o.put("torrentFileHint", it) }
+            if (s.torrentFileSize > 0L) o.put("torrentFileSize", s.torrentFileSize)
+            o.put(
+                "headers",
+                JSONObject().also { h -> s.headers.forEach { (k, v) -> h.put(k, v) } },
+            )
+            o.put(
+                "subtitles",
+                JSONArray().also { subs ->
+                    s.subtitles.forEach { sub ->
+                        subs.put(
+                            JSONObject()
+                                .put("lang", sub.lang)
+                                .put("url", sub.url)
+                                .put("name", sub.name)
+                                .put(
+                                    "headers",
+                                    JSONObject().also { h ->
+                                        sub.headers.forEach { (k, v) -> h.put(k, v) }
+                                    },
+                                ),
+                        )
+                    }
+                },
+            )
+            if (s.trackers.isNotEmpty()) {
+                o.put(
+                    "trackers",
+                    JSONArray().also { t -> s.trackers.forEach { t.put(it) } },
+                )
+            }
+            s.drm?.let { drm ->
+                o.put(
+                    "drm",
+                    JSONObject().apply {
+                        drm.kid?.let { put("kid", it) }
+                        drm.key?.let { put("key", it) }
+                        drm.uuid?.let { put("uuid", it) }
+                        drm.kty?.let { put("kty", it) }
+                        drm.licenseUrl?.let { put("licenseUrl", it) }
+                        put(
+                            "keyRequestParameters",
+                            JSONObject().also { p ->
+                                drm.keyRequestParameters.forEach { (k, v) -> p.put(k, v) }
+                            },
+                        )
+                    },
+                )
+            }
+            arr.put(o)
+        }
+        return arr.toString()
+    }
+
+    /** Reads back what [onSaveInstanceState] wrote, or null for a normal launch. */
+    private fun restorePlaybackState(saved: Bundle?): SavedPlaybackState? {
+        saved ?: return null
+        val raw = saved.getString(STATE_SOURCES).orEmpty()
+        if (raw.isBlank()) return null
+        val list = parseSourcesPayload(raw)
+        if (list.isEmpty()) return null
+        val episode = saved.getString(STATE_EPISODE_ID).orEmpty()
+            .takeIf { it.isNotBlank() }
+            ?.let { id ->
+                Episode(
+                    number = saved.getInt(STATE_EPISODE_NUMBER, 0),
+                    id = id,
+                    name = saved.getString(STATE_EPISODE_NAME).orEmpty().takeIf { it.isNotBlank() },
+                    season = saved.getInt(STATE_EPISODE_SEASON, 1),
+                )
+            }
+        return SavedPlaybackState(
+            sources = list,
+            index = saved.getInt(STATE_SOURCE_INDEX, 0).coerceIn(0, list.lastIndex),
+            positionMs = saved.getLong(STATE_POSITION, 0L).coerceAtLeast(0L),
+            episode = episode,
+        )
+    }
+
+    /**
+     * Process death is not a user action: Android may kill a paused player and
+     * recreate it from its launch Intent, which still points at the episode
+     * that was open when the player FIRST started. When the user had advanced
+     * to another episode (or switched playlist channel) in place, that Intent
+     * is stale — the rebuilt player would silently reopen the old episode.
+     * Saving the live list, row, position and episode fields here keeps the
+     * return seamless; [restorePlaybackState] consumes it before any of the
+     * normal launch paths run.
+     */
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        if (sources.isEmpty()) return
+        // A search can hand over hundreds of rows; the state bundle is a
+        // Binder transaction (about 1 MB for the whole activity), so keep a
+        // window around the playing row instead of the entire list. The
+        // window is plenty of failover material for a resumed playback.
+        val start = (currentIndex - 20)
+            .coerceIn(0, (sources.size - MAX_SAVED_SOURCES).coerceAtLeast(0))
+        val slice = sources.subList(start, minOf(sources.size, start + MAX_SAVED_SOURCES))
+        val payload = runCatching { encodeSources(slice) }.getOrNull() ?: return
+        outState.putString(STATE_SOURCES, payload)
+        outState.putInt(STATE_SOURCE_INDEX, (currentIndex - start).coerceIn(0, slice.lastIndex))
+        val p = player
+        if (p != null) {
+            val position = p.currentPosition
+            // VOD only: a live channel's clock is not a resume point.
+            if (position > 0L && !p.isCurrentMediaItemLive) {
+                outState.putLong(STATE_POSITION, position)
+            }
+        }
+        historyEntry?.let { e ->
+            outState.putString(STATE_EPISODE_ID, e.episodeId)
+            outState.putString(STATE_EPISODE_NAME, e.episodeName)
+            outState.putInt(STATE_EPISODE_NUMBER, e.episodeNumber)
+            outState.putInt(STATE_EPISODE_SEASON, e.seasonNumber)
+        }
     }
 
     /** Parses the "drm" object of the sources payload (see `playerPayload`). */
@@ -18183,6 +18437,20 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
     }
 
     companion object {
+        /** State-bundle keys for the process-death playback snapshot (see
+         *  [onSaveInstanceState] / [restorePlaybackState]). */
+        private const val STATE_SOURCES = "hikari.playback.sources"
+        private const val STATE_SOURCE_INDEX = "hikari.playback.sourceIndex"
+        private const val STATE_POSITION = "hikari.playback.position"
+        private const val STATE_EPISODE_ID = "hikari.playback.episodeId"
+        private const val STATE_EPISODE_NAME = "hikari.playback.episodeName"
+        private const val STATE_EPISODE_NUMBER = "hikari.playback.episodeNumber"
+        private const val STATE_EPISODE_SEASON = "hikari.playback.episodeSeason"
+
+        /** How many rows the process-death snapshot keeps (see
+         *  [onSaveInstanceState]); the state bundle is not a database. */
+        private const val MAX_SAVED_SOURCES = 80
+
         /** Safety ceiling on how long an instantly-opened player waits for the
          *  first server from the detail screen's live search. The detail screen
          *  normally signals completion ([StreamsLive.markDone]) long before

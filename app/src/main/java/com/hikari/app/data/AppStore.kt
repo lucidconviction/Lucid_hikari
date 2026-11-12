@@ -32,7 +32,7 @@ import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 
-private val Context.hkDataStore by preferencesDataStore(name = "hikari")
+private val Context.hkDataStore by preferencesDataStore(name = "hikari", corruptionHandler = ReplaceCorruptPreferences)
 
 /** The stream server a video was last played with, remembered so a replay
  *  starts on the same server — instantly, with the same header variant that

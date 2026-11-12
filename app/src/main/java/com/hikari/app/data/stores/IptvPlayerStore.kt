@@ -14,7 +14,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
 
-private val Context.iptvPlayerDataStore by preferencesDataStore(name = "iptv_player")
+private val Context.iptvPlayerDataStore by preferencesDataStore(name = "iptv_player", corruptionHandler = com.hikari.app.data.ReplaceCorruptPreferences)
 
 /**
  * DataStore-backed store for coordinating IPTV player interactions.

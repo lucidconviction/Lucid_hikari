@@ -12,6 +12,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -23,29 +24,42 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import com.hikari.app.BuildConfig
 import com.hikari.app.HikariApp
@@ -73,6 +87,29 @@ fun LogsPage(app: HikariApp, onBack: () -> Unit) {
     val context = LocalContext.current
     var refreshTick by remember { mutableStateOf(0) }
     var showClearDialog by remember { mutableStateOf(false) }
+    // Live tail: the ring is in memory, so a one-second refresh costs no disk
+    // I/O. Pausing freezes the lines that are on screen while the app carries
+    // on logging around them.
+    var livePaused by remember { mutableStateOf(false) }
+    var liveFilter by remember { mutableStateOf("") }
+    var liveTick by remember { mutableIntStateOf(0) }
+    val clipboard = LocalClipboardManager.current
+    LaunchedEffect(livePaused) {
+        while (!livePaused) {
+            kotlinx.coroutines.delay(1_000)
+            liveTick++
+        }
+    }
+    val liveLines = remember(liveTick, liveFilter) {
+        val q = liveFilter.trim()
+        Logs.recentLines(300).filter { q.isBlank() || it.contains(q, ignoreCase = true) }
+    }
+    val tailState = rememberLazyListState()
+    LaunchedEffect(liveLines.size, livePaused) {
+        if (!livePaused && liveLines.isNotEmpty()) {
+            tailState.scrollToItem(liveLines.lastIndex)
+        }
+    }
     // Log page position held across visits (see ScrollKeeper).
     val listState = com.hikari.app.ui.components.keptListState("logs")
 
@@ -152,6 +189,110 @@ fun LogsPage(app: HikariApp, onBack: () -> Unit) {
                                     }
                                 )
                             }
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            GlassCard(Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                Column(Modifier.padding(14.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            tr("Live log"),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        ActionPill(
+                            icon = if (livePaused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
+                            label = tr(if (livePaused) "Resume" else "Pause"),
+                            primary = !livePaused,
+                        ) { livePaused = !livePaused }
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        tr("The newest lines this session wrote, refreshed every second."),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = liveFilter,
+                        onValueChange = { liveFilter = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodySmall,
+                        placeholder = {
+                            Text(
+                                tr("Filter by tag, message or thread"),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        },
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(240.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)),
+                    ) {
+                        if (liveLines.isEmpty()) {
+                            Text(
+                                if (liveFilter.isBlank()) tr("Nothing logged yet this session.")
+                                else tr("No log lines match that filter."),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.align(Alignment.Center).padding(12.dp),
+                            )
+                        } else {
+                            LazyColumn(
+                                state = tailState,
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(1.dp),
+                            ) {
+                                items(liveLines) { line ->
+                                    val isError = line.contains("[crash]") ||
+                                        line.contains("!:") ||
+                                        line.contains("FAILED")
+                                    Text(
+                                        line,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 9.5.sp,
+                                        lineHeight = 12.sp,
+                                        color = if (isError) {
+                                            MaterialTheme.colorScheme.error
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurface
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "${liveLines.size} line${if (liveLines.size == 1) "" else "s"} · " +
+                                if (livePaused) tr("paused") else tr("live"),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        TextButton(onClick = {
+                            clipboard.setText(AnnotatedString(liveLines.joinToString("\n")))
+                            toast("Copied")
+                        }) {
+                            Icon(
+                                Icons.Filled.ContentCopy,
+                                contentDescription = null,
+                                modifier = Modifier.size(15.dp),
+                            )
+                            Spacer(Modifier.width(5.dp))
+                            Text(tr("Copy"), style = MaterialTheme.typography.labelMedium)
                         }
                     }
                 }

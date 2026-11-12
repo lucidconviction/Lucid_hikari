@@ -1,3 +1,20 @@
+## 0.12.5
+
+**11 November 2026**
+
+### A faster player, a bigger wall and sturdier settings
+
+- **Autoplay starts sooner**: the next episode now plays the addon/origin stream first instead of waiting for a full provider sweep, and a series prefetches its next episode in the background while the current one is still enriching.
+- **IPTV opens instantly after the first time**: parsed playlists and artwork are cached on disk, and a stale cache paints immediately while a quiet background refresh keeps it current.
+- **YouTube comments and panels are readable**: Info and Comments are wider, wrap long lines and action rows properly, and their panels are a true 30% dark tint so the video stays visible behind them.
+- **The Channel Wall is much bigger**: 135 more channels across new **Music**, **Anime** and **Lifestyle** shelves, plus more movies, news, sports, kids, discovery, US, UK, Canada, soccer, combat and racing networks. Country and category headers now use the same full-bleed artwork as the tiles.
+- **Only working wall streams are shown**: tiles are probed a few at a time, dead links are hidden entirely, and a shelf with nothing alive offers a single Re-check action instead of failing taps.
+- **Fixed network artwork**: repaired the curated logo URLs against the live tv-logo repository; networks with no drawable logo now get a generated initials poster rather than a broken image.
+- **Player process-death restore**: if Android kills the player in the background, returning restores the episode/channel you switched to, the same server and its position instead of reopening the original launch episode.
+- **Typo-tolerant IPTV search**: "epsn", "skysprots" and "carton network" now find the channel, with exact matches still ranked first.
+- **Live logs**: the Logs page tails the current session in real time, with pause/resume, a text filter, error highlighting and Copy.
+- **Corruption-safe settings**: every preferences store now recovers from a damaged file instead of taking the app down on startup.
+
 ## 0.12.4
 
 **10 November 2026**

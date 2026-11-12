@@ -28,7 +28,7 @@ data class PageState(
     @SerialName("selectedTabIndex") val selectedTabIndex: Int = 0,
 )
 
-private val Context.pageStateDataStore by preferencesDataStore(name = "page_states")
+private val Context.pageStateDataStore by preferencesDataStore(name = "page_states", corruptionHandler = com.hikari.app.data.ReplaceCorruptPreferences)
 
 /**
  * DataStore-backed store for page/screen UI state persistence.

@@ -326,6 +326,18 @@ object Logs {
     /** The in-memory breadcrumb snapshot, newest last. */
     fun snapshot(): String = synchronized(lock) { snapshotLocked(RING_MAX).joinToString("\n") }
 
+    /**
+     * The newest [limit] lines this process has logged, oldest first.
+     *
+     * The in-memory ring is the live tail: it is appended on every [log] call
+     * without touching disk, so Logs → Live log can refresh once a second
+     * without putting any I/O on the main thread. Lines from before the last
+     * process start are in `app.log`, not here — the share buttons cover those.
+     */
+    fun recentLines(limit: Int = 200): List<String> = synchronized(lock) {
+        snapshotLocked(limit.coerceIn(1, RING_MAX))
+    }
+
     private fun snapshotLocked(limit: Int): List<String> =
         ring.toList().takeLast(limit)
 

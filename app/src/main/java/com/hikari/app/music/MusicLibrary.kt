@@ -20,7 +20,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
-private val Context.musicDataStore: DataStore<Preferences> by preferencesDataStore(name = "music_library")
+private val Context.musicDataStore: DataStore<Preferences> by preferencesDataStore(name = "music_library", corruptionHandler = com.hikari.app.data.ReplaceCorruptPreferences)
 
 /**
  * The Music page's own store: liked songs, user playlists, recently played,

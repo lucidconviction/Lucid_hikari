@@ -69,11 +69,18 @@ object StreamProbe {
     /** Probes [url] once and returns the result (or null on any failure).
      *  Uses a short 5-second GET with no body; suitable for bulk group-level
      *  validation without hammering the provider. */
-    suspend fun probe(url: String): ProbeResult? = withContext(Dispatchers.IO) {
+    suspend fun probe(url: String): ProbeResult? = probe(url, emptyMap())
+
+    /**
+     * Headers-aware probe. A channel's User-Agent/Referer/Cookie often decide
+     * whether the origin answers at all, so validating a credentialed IPTV
+     * stream without them reports a perfectly good channel as dead.
+     */
+    suspend fun probe(url: String, headers: Map<String, String>): ProbeResult? = withContext(Dispatchers.IO) {
         if (url.isBlank() || !url.startsWith("http")) return@withContext null
         runCatching {
             val t0 = System.currentTimeMillis()
-            val response = get(url, emptyMap()) ?: return@runCatching null
+            val response = get(url, headers) ?: return@runCatching null
             response.use { r ->
                 val code = r.code
                 val latency = System.currentTimeMillis() - t0

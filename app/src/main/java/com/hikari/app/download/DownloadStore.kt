@@ -9,7 +9,7 @@ import org.json.JSONArray
 
 /** Its own DataStore file, so a large download queue never bloats the main
  *  `hikari` preferences blob the rest of the app reads on every launch. */
-private val Context.downloadDataStore by preferencesDataStore(name = "hikari_downloads")
+private val Context.downloadDataStore by preferencesDataStore(name = "hikari_downloads", corruptionHandler = com.hikari.app.data.ReplaceCorruptPreferences)
 
 private val TASKS_KEY = stringPreferencesKey("tasks")
 
