@@ -1137,7 +1137,15 @@ class PlayerActivity : ComponentActivity() {
     private var watchdogTask: Runnable? = null
 
     /** True once the current source has drawn its first video frame. */
-    private var renderedFirstFrame = false
+    @Volatile private var renderedFirstFrame = false
+
+    /**
+     * Sources whose probes were deferred because the first picture had not
+     * rendered yet. Probing every server while ExoPlayer is trying to open the
+     * first one competes for the same small pipe (and on TV boxes, the same
+     * CPU); they are warmed after playback is actually on screen instead.
+     */
+    private val pendingWarmSources = java.util.Collections.synchronizedList(mutableListOf<StreamSource>())
 
     /** True once the current source has been restarted by the first-frame
      *  watchdog (guards against an infinite restart loop). */
@@ -3168,9 +3176,8 @@ class PlayerActivity : ComponentActivity() {
                     notifySourcesChanged()
                     // Resolve the new servers in the background too, so picking
                     // one from "Select server" doesn't fall back to a probe wait.
-                    lifecycleScope.launch(Dispatchers.IO) {
-                        runCatching { StreamProbe.warm(fresh.map { it.toStreamSource() }) }
-                    }
+                    // Deferred while the first picture is still being prepared.
+                    warmPlaybackSources(fresh.map { it.toStreamSource() })
                     // A stalled server (see [awaitReplacementForStalledServer])
                     // is replaced by the first thing that lands here, so a
                     // playback that opened on one slow server recovers by
@@ -3242,15 +3249,12 @@ class PlayerActivity : ComponentActivity() {
         // paid again when ExoPlayer starts pulling.
         client = PlayerHttp.client
 
-        // Resolve every not-yet-known server while the first one starts: the
-        // probe cache then answers instantly for a "Select server" pick, a
-        // failover, a retry, or a later replay of the same video. Skipped in
-        // download-pick mode: nothing is going to play there, so probing (and
-        // holding network bandwidth) while the user chooses a server is pure
-        // waste.
-        if (!downloadPickMode) lifecycleScope.launch(Dispatchers.IO) {
-            runCatching { StreamProbe.warm(sources.map { it.toStreamSource() }) }
-        }
+        // Resolve every not-yet-known server in the background, so a "Select
+        // server" pick or a failover is usually already cached. Deferred until
+        // the first picture is on screen (see [flushPendingWarmSources]):
+        // probing the whole list while ExoPlayer opens the first one made
+        // startup slower on weak links and TV boxes.
+        if (!downloadPickMode) warmPlaybackSources(sources.map { it.toStreamSource() })
 
         // If servers are already here (e.g. WebView playback or a source list
         // handed in directly), start on the server this video was last played
@@ -5791,10 +5795,11 @@ class PlayerActivity : ComponentActivity() {
     private var allIptvChannelsCache: List<com.hikari.app.data.IptvChannel> = emptyList()
     private var allIptvChannelsAt = 0L
 
-    /** Ten seconds before the end, per the user's request: mute the next video
-     *  in the corner, then continue from the same timestamp when the current
-     *  one ends. */
-    private val previewVisibleLeadMs: Long = 10_000L
+    /** Six seconds before the end: mute the next video in the corner, then
+     *  continue from the same timestamp when the current one ends. (It used to
+     *  be ten, but the preview's own buffering then competed with the last
+     *  seconds of the episode on a weak link.) */
+    private val previewVisibleLeadMs: Long = 6_000L
 
     /** Resolution starts earlier than that, so a slow provider still has time
      *  to answer before the preview must be on screen. */
@@ -9363,12 +9368,14 @@ class PlayerActivity : ComponentActivity() {
         p.volume = 0f
         // Muted is not the same as silent: the preview should not decode an
         // audio track or a 4K rendition while the fullscreen video is still
-        // using the device's decoders. Cap it at 720p and disable audio.
+        // using the device's decoders. Cap it at 480p / 1 Mbps: the preview is
+        // a thumbnail, and at 720p/2.5 Mbps it competed with the last seconds
+        // of the main episode on a weak link.
         runCatching {
             p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
                 .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
-                .setMaxVideoSize(1280, 720)
-                .setMaxVideoBitrate(2_500_000)
+                .setMaxVideoSize(854, 480)
+                .setMaxVideoBitrate(1_000_000)
                 .build()
         }
         p.addListener(object : Player.Listener {
@@ -14280,73 +14287,98 @@ class PlayerActivity : ComponentActivity() {
     }
 
     /**
-     * Deep-buffer load control tuned for aggregator CDNs.
+     * Warms the probe cache for servers the user has NOT started on. This is a
+     * convenience for failover and the server picker, not part of starting
+     * playback, so it is deliberately gentle: two probes at a time and never
+     * before the first picture has rendered. Warming the whole list on player
+     * creation used to put six simultaneous HTTP requests in front of the one
+     * segment ExoPlayer needed, which is exactly what made a weak connection
+     * take longer to show its first frame.
+     */
+    private fun warmPlaybackSources(list: List<StreamSource>) {
+        if (list.isEmpty() || downloadPickMode) return
+        if (!renderedFirstFrame) {
+            pendingWarmSources.addAll(list)
+            return
+        }
+        val batch = list
+            .filter { it.url.isNotBlank() }
+            .distinctBy { it.identityKey() }
+            .take(8)
+        if (batch.isEmpty()) return
+        lifecycleScope.launch(Dispatchers.IO) {
+            // Let the player finish filling its first cushion before spending
+            // the same link on speculative probes. Since the first frame has
+            // already rendered, this is background work.
+            delay(10_000L)
+            runCatching { StreamProbe.warm(batch, concurrency = 2) }
+        }
+    }
+
+    /** Drains the probes queued while the first picture was being prepared. */
+    private fun flushPendingWarmSources() {
+        if (pendingWarmSources.isEmpty()) return
+        val queued = synchronized(pendingWarmSources) {
+            pendingWarmSources.toList().also { pendingWarmSources.clear() }
+        }
+        // The source already playing needs no probe; warming it would only
+        // compete with its own download.
+        val playing = sources.getOrNull(currentIndex)?.url
+        warmPlaybackSources(queued.filter { it.url != playing })
+    }
+
+    /**
+     * Load control tuned for aggregator CDNs and live IPTV.
      *
-     * media3's defaults cap the buffer at 50 s (`minBufferMs == maxBufferMs`)
-     * and stop loading there. That is fine for a CDN that always delivers
-     * faster than real time, but it leaves no reserve for the ones that only
-     * burst: the moment throughput dips below the stream's bitrate the 50 s
-     * drains away and the user sees the spinner. Raising the ceiling lets
-     * ExoPlayer keep downloading ahead whenever the source can outrun
-     * playback, banking minutes of runway on a link that has the headroom.
+     * media3's defaults cap the buffer at 50 s; a deeper bank helps a source
+     * that only bursts, but past a point it stops helping and starts hurting:
+     * the player keeps every connection busy filling a bank nobody will watch
+     * (live TV runs minutes behind), and on a weak link that background pull
+     * competes with the segment the viewer is waiting on right now. These
+     * ceilings keep a useful cushion (30 s VOD, 20 s live) while leaving
+     * bandwidth for the start and for recovery.
      *
-     * This cannot grow memory without bound: besides the time ceilings below,
-     * the buffer is byte-capped to a heap-scaled budget (the same 1/8-of-heap
-     * shaping as Coil's memory cache, floored at 24 MB and capped at 64 MB, so
-     * a 512 MB-heap phone never lets one fast link bank hundreds of megabytes
-     * of high-bitrate video on top of an already-full heap — that pileup is
-     * what OOM-killed the app mid-playback). A high-bitrate stream stops at
-     * the byte cap exactly as it did before — only low/medium-bitrate streams,
-     * which have the memory to spare, get the deeper time buffer.
+     * The byte cap is heap-scaled (1/8 of heap, 24–64 MB) so one fast link
+     * cannot bank hundreds of megabytes of high-bitrate video and OOM-kill
+     * the app mid-playback.
      *
-     * Start/resume thresholds keep media3's snappy defaults for VOD (1 s to
-     * start, 2 s to resume after a stall); IPTV gets a deeper live bank (see
-     * the choices below) so a short dip in the source does not drain the
-     * buffer and hand the viewer a spinner every few minutes.
-     *
-     * Telegram videos ([isTd]) ride MTProto instead of HTTP: no CDN, bursty
-     * throughput that often dips under the bitrate mid-play. Starting is
-     * already fast (TdFileDataSource primes 128KB, not the whole window), so
-     * what "buffers too much" means there is the STALL LOOP — resume on 2s of
-     * media, stall again seconds later. The TD policy keeps the 1s start but
-     * resumes only on an 8s cushion inside a deeper RAM buffer, so one dip
-     * costs one pause instead of ten. RAM only: TDLib's on-disk store and the
-     * video quality are untouched.
+     * Start/resume thresholds stay snappy: 1 s to start VOD, 2.5 s for live,
+     * 3–4 s to resume after a stall. Telegram videos ([isTd]) ride MTProto
+     * instead of HTTP: bursty throughput that dips under the bitrate mid-play.
+     * The TD policy keeps the 1 s start but resumes on a 4 s cushion inside a
+     * 60 s bank, so one dip costs one pause instead of ten.
      */
     private fun buildLoadControl(isTd: Boolean = false, isLive: Boolean = false): DefaultLoadControl =
         DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 when {
-                    isTd -> 180_000                        // minBufferMs — MTProto-tuned bank
-                    isLive -> 60_000                       // minBufferMs — IPTV live: a deep pre-buffer bank
-                    else -> 80_000                         // minBufferMs — default VOD bank
+                    isTd -> 60_000                         // minBufferMs — MTProto-tuned bank
+                    isLive -> 20_000                       // minBufferMs — IPTV live: enough to ride a dip, not a minute of latency
+                    else -> 30_000                         // minBufferMs — default VOD bank
                 },
                 when {
-                    isTd -> 300_000                        // maxBufferMs — MTProto ceiling
-                    isLive -> 180_000                      // maxBufferMs — IPTV live: keep a deep cushion
-                    else -> 240_000                        // maxBufferMs — VOD ceiling
+                    isTd -> 180_000                        // maxBufferMs — MTProto ceiling
+                    isLive -> 60_000                       // maxBufferMs — IPTV live ceiling
+                    else -> 120_000                        // maxBufferMs — VOD ceiling
                 },
                 when {
                     isTd -> 1_000                          // bufferForPlaybackMs — MTProto
-                    isLive -> 4_000                        // bufferForPlaybackMs — IPTV: a real start cushion
+                    isLive -> 2_500                        // bufferForPlaybackMs — IPTV: a small start cushion
                     else -> 1_000                          // bufferForPlaybackMs — VOD
                 },
                 when {
-                    isTd -> 8_000                          // bufferForPlaybackAfterRebufferMs — MTProto
-                    isLive -> 10_000                       // IPTV live: resume only with a real cushion
-                    else -> if (isTd) 8_000 else 2_000    // VOD rebuffer resume
+                    isTd -> 4_000                          // bufferForPlaybackAfterRebufferMs — MTProto
+                    isLive -> 4_000                        // IPTV live: resume on a short cushion
+                    else -> 3_000                          // VOD rebuffer resume
                 },
             )
             .setTargetBufferBytes(
-                // media3's own byte target defaults to off, so without this a
-                // fast link banks the whole time ceiling: 240 s of a 25 Mbps
-                // stream is ~750 MB on the Java heap. Scale it like Coil's
-                // memory cache (see setupImageLoader) so small heaps stay
-                // alive and big heaps keep their depth. The 96 MB ceiling is
-                // deliberately larger than before: the extra runway is what
-                // stops a CDN dip from reaching the player as a spinner.
-                (Runtime.getRuntime().maxMemory() / 6)
-                    .coerceIn(32L * 1024 * 1024, 96L * 1024 * 1024)
+                // The time ceilings above already cap what a fast link can bank;
+                // this byte ceiling keeps that bank from becoming hundreds of
+                // megabytes of Java heap on a mid-range phone. Large heaps still
+                // get a useful 64 MB runway, small ones are left alone.
+                (Runtime.getRuntime().maxMemory() / 8)
+                    .coerceIn(24L * 1024 * 1024, 64L * 1024 * 1024)
                     .toInt()
             )
             .build()
@@ -14793,11 +14825,14 @@ class PlayerActivity : ComponentActivity() {
         // session manager; without it ExoPlayer opens the encrypted manifest
         // with no keys and renders a black screen while the timeline still runs.
         val drmManager = buildDrmSessionManager(src.drm, dataSourceFactory)
-        // Stream bytes go through the shared 512 MB disk cache (local files and
-        // MTProto videos do not). Re-opened segments, seeks, retries and the
-        // next-episode handoff then read from disk instead of paying the flaky
-        // origin again.
+        // Stream bytes go through the shared 512 MB disk cache for on-demand
+        // video (local files and MTProto videos do not). Re-opened segments,
+        // seeks, retries and the next-episode handoff then read from disk
+        // instead of paying the flaky origin again. Live channels skip it: a
+        // live segment is never replayed, so caching it only adds disk I/O and
+        // evicts the VOD spans that are actually reused.
         val playbackDataSource = if (src.local ||
+            isLiveSource(src) ||
             src.url.startsWith(com.hikari.app.telegram.TdFileDataSource.SCHEME + "://")
         ) {
             dataSourceFactory
@@ -16165,7 +16200,7 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
      *  get to spend it in front of the user: past this the raw URL goes to
      *  ExoPlayer and the walk's answer is applied when it lands. Most probes
      *  finish in one round trip, so this is rarely reached. */
-    private val firstProbeWaitMs: Long = 2_500L
+    private val firstProbeWaitMs: Long = 1_500L
 
     /** How long a committed server may take to draw a picture before it is
      *  treated as a dud (see [recoverNoPicture]). Deliberately the same 20s the
@@ -16986,6 +17021,10 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
             // [releaseSweepThrottled]). Its finds are only ever ADDED to
             // this playing server list, so the wait costs nothing.
             releaseSweepThrottled()
+            // Probes for the remaining servers were queued at player creation;
+            // now that the first picture is on screen they no longer compete
+            // with it.
+            flushPendingWarmSources()
             firstFrameTask?.let { bufferingWatchdog.removeCallbacks(it) }
             firstFrameTask = null
             // A picture rendered: whatever re-opens this live stream has taken

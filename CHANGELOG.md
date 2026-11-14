@@ -1,3 +1,17 @@
+## 0.12.11
+
+**13 November 2026**
+
+### A compact Search page, a faster player and complete sports feeds
+
+- **Search is one compact header again**: the search bar, source picker and a single **Filters** button. Kind, year and genre now live in a bottom sheet, so a long source list no longer pushes results off the screen. Each provider shelf keeps its own scroll position, and opening the sheet hides the keyboard so all filters are visible.
+- **The player starts leaner**: speculative server probes wait until the first frame is on screen (then run two at a time), live channels skip the disk cache, and the live start cushion is smaller. VOD and IPTV buffers were trimmed from minutes to a useful 30 s / 20 s bank, with the heap-scaled byte ceiling kept.
+- **The next-episode preview competes less**: it appears 6 s before the end instead of 10, and is capped at 480p / 1 Mbps.
+- **Sports pulls the complete feeds**: the nuvio-data TheSportsDB index adds **29 extra leagues** (non-league football, rugby league, racing, netball, Scottish leagues), with cricket, HockeyTech (AHL, ECHL, PWHL, OHL, WHL, QMJHL, USHL) and Minor League Baseball routed through their own live-score APIs.
+- **Wrestling and boxing cards come from the nuvio-data file** instead of an API-key feed, including venue/city and event dates; boxing now falls back to sporting-events only if that file is unavailable.
+- The sports window looks **seven days back**, cricket's `pre`/`in`/`post` status is read correctly (it used to classify every match as off), and TheSportsDB season files are trimmed to the visible window before parsing.
+- **More glass, less empty space**: richer dark glass tokens, a specular sheen on cards/search/taskbar, radial aurora backdrops, and the donate banner is now a single compact row with the button inline.
+
 ## 0.12.10
 
 **13 November 2026**

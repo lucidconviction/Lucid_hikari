@@ -12,6 +12,8 @@ import android.app.Application
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,12 +46,15 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -382,6 +387,7 @@ fun SearchScreen(
             keyboard?.show()
         }
     }
+
     val overscanFlow = remember(context) {
         (context.applicationContext as HikariApp).store.tvOverscanFlow()
     }
@@ -438,6 +444,27 @@ fun SearchScreen(
     // A filter is only "on" when it can actually hide something.
     val filterOn = kindFilter != SearchKindFilter.ALL ||
         yearsFilter.isNotEmpty() || genreFilter.isNotEmpty()
+    // How many filter groups are in force, for the compact header's badge.
+    val activeFilterCount = (if (kindFilter != SearchKindFilter.ALL) 1 else 0) +
+        (if (yearsFilter.isNotEmpty()) 1 else 0) +
+        (if (genreFilter.isNotEmpty()) 1 else 0)
+    // The kind/year/genre controls used to be five fixed rows above the
+    // results. With a long source list that header could take half the phone
+    // before a single poster was visible, and the results themselves never got
+    // the screen. They now live in one sheet behind this flag, so the search
+    // field + scope + Filters pill is the whole fixed header.
+    var filtersOpen by rememberSaveable { mutableStateOf(false) }
+    // The filter sheet is a panel of controls, not a text field: if the search
+    // bar still holds focus its keyboard covers the year and genre strips and
+    // the sheet looks like it only has a kind row. Opening it drops focus so
+    // the whole sheet is visible at once.
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    LaunchedEffect(filtersOpen) {
+        if (filtersOpen) {
+            focusManager.clearFocus()
+            keyboard?.hide()
+        }
+    }
     val filtered = remember(results, kindFilter, yearsKey, genreKey) {
         if (!filterOn) results
         else results.filter { it.passesSearchFilter(kindFilter, yearsFilter, genreFilter) }
@@ -787,15 +814,28 @@ fun SearchScreen(
             // The same sentence the old status line carried, now the button's
             // second line: a scoped search announces its scope by NAME.
             val scopeNote = when {
-                selected.isEmpty() -> tr("Searching every source")
+                selected.isEmpty() -> tr("Every source")
                 soleName != null -> I18n.t("Searching in %s").replace("%s", soleName)
                 else -> I18n.t("%s sources selected").replace("%s", selected.size.toString())
             }
-            ProviderScopeButton(
-                label = scopeLabel,
-                supporting = scopeNote,
-                onClick = { showProviders = true },
-            )
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ProviderScopeButton(
+                    label = scopeLabel,
+                    supporting = scopeNote,
+                    onClick = { showProviders = true },
+                    modifier = Modifier.weight(1f),
+                )
+                SearchFilterPill(
+                    activeCount = activeFilterCount,
+                    onClick = { filtersOpen = true },
+                )
+            }
             if (showProviders) {
                 if (searchIsTv) {
                     // Television gets the same big reference-style Select
@@ -856,303 +896,45 @@ fun SearchScreen(
                     onDismiss = { showTvFeed = false },
                 )
             }
-        }
-        // ---- Result filters: kind + year (see the state at the top) ---------
-        //
-        // Same chip row as the providers above, so the two read as one control
-        // strip: what to search, then what to keep. The kind chips and the year
-        // strip are shown from the moment the screen is up — NOT only once
-        // results exist — because the filter is meant to be chosen BEFORE (or
-        // while) the scan runs.
-        //
-        // Television hides the whole block: the TV screen is provider
-        // selection + the search box only.
-        if (!searchIsTv) {
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(top = 2.dp),
-            ) {
-                item {
-                    FilterChip(
-                        selected = kindFilter == SearchKindFilter.ALL,
-                        onClick = { kindFilterKey = SearchKindFilter.ALL.key },
-                        label = { Text(tr("Both")) },
-                        shape = RoundedCornerShape(24.dp),
-                        colors = FilterChipDefaults.filterChipColors(
-                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
-                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
-                            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            selectedLabelColor = MaterialTheme.colorScheme.primary,
-                        )
-                    )
-                }
-                item {
-                    FilterChip(
-                        selected = kindFilter == SearchKindFilter.MOVIES,
-                        onClick = { kindFilterKey = SearchKindFilter.MOVIES.key },
-                        label = { Text(tr("Movies")) },
-                        shape = RoundedCornerShape(24.dp),
-                        colors = FilterChipDefaults.filterChipColors(
-                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
-                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
-                            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            selectedLabelColor = MaterialTheme.colorScheme.primary,
-                        )
-                    )
-                }
-                item {
-                    FilterChip(
-                        selected = kindFilter == SearchKindFilter.SERIES,
-                        onClick = { kindFilterKey = SearchKindFilter.SERIES.key },
-                        label = { Text(tr("Series")) },
-                        shape = RoundedCornerShape(24.dp),
-                        colors = FilterChipDefaults.filterChipColors(
-                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
-                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
-                            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            selectedLabelColor = MaterialTheme.colorScheme.primary,
-                        )
-                    )
-                }
-                item {
-                    // Anime: a KIND of its own, though no provider has an
-                    // "anime" media type — see [MediaItem.looksAnime] for what
-                    // the filter counts as one (the addon's type string, an
-                    // "Anime" tag, or TMDB's "Animation", which is the genre
-                    // every TMDB-sourced anime title carries).
-                    FilterChip(
-                        selected = kindFilter == SearchKindFilter.ANIME,
-                        onClick = { kindFilterKey = SearchKindFilter.ANIME.key },
-                        label = { Text(tr("Anime")) },
-                        shape = RoundedCornerShape(24.dp),
-                        colors = FilterChipDefaults.filterChipColors(
-                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
-                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
-                            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            selectedLabelColor = MaterialTheme.colorScheme.primary,
-                        )
-                    )
-                }
-                item {
-                    // The filter's own status, and the way to clear it: it lists
-                    // what is picked (with a ✕ to drop it) and nothing else — the
-                    // years themselves are the strip below, which is where they
-                    // are chosen. It reads "Any year" and stays a no-op while
-                    // nothing is picked.
-                    val picked = when {
-                        yearsFilter.isEmpty() -> tr("Any year")
-                        yearsFilter.size <= 3 ->
-                            yearsFilter.sortedDescending().joinToString(", ")
-                        else -> tr("%s years").replace("%s", yearsFilter.size.toString())
-                    }
-                    FilterChip(
-                        selected = yearsFilter.isNotEmpty(),
-                        onClick = { setYears(emptySet()) },
-                        label = { Text(if (yearsFilter.isEmpty()) picked else "$picked ✕") },
-                        shape = RoundedCornerShape(24.dp),
-                        colors = FilterChipDefaults.filterChipColors(
-                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
-                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
-                            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            selectedLabelColor = MaterialTheme.colorScheme.primary,
-                        )
-                    )
-                }
-            }
-            // The YEAR strip: every year there is, in one slim scroller of its
-            // own, tapped to toggle (multi-select — 2001 · 2002 · 2004 keeps
-            // all three at once). It is deliberately a short, thin box: a year
-            // is four digits, so the control needs no more height than a chip
-            // row, and a fixed list means a year can be picked before the
-            // search has found a single title.
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.35f),
-                border = BorderStroke(
-                    1.dp,
-                    MaterialTheme.colorScheme.outline.copy(alpha = 0.22f),
-                ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 16.dp, end = 16.dp, top = 6.dp)
-                    .height(34.dp),
-            ) {
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    item {
-                        YearChip(
-                            label = tr("Any"),
-                            selected = yearsFilter.isEmpty(),
-                            onClick = { setYears(emptySet()) },
-                        )
-                    }
-                    items(SEARCH_YEARS) { year ->
-                        YearChip(
-                            label = year.toString(),
-                            selected = year in yearsFilter,
-                            onClick = { toggleYear(year) },
-                        )
-                    }
-                }
-            }
-            // ---- The genre strip ----
-            //
-            // The same shape as the year strip above it (a thin box of chips),
-            // because it is the same kind of control: a FIXED list of every
-            // genre, tapped to toggle, multi-select ("action, comedy" keeps both).
-            // A small caption says what it is and how many are picked, since
-            // unlike a year a genre cannot be recognised from the chip alone.
-            //
-            // The strip is also searchable now, the way Home's "Browse by genre"
-            // row is: the vocabulary is TMDB's film and television names plus
-            // every anime/manga tag, so "Isekai" or "Comedy" sits far along a
-            // row that has to be dragged to reach it. The field beside the
-            // caption filters the chips as they are typed and matches both the
-            // name a chip prints and the English name it is filed under, so a
-            // translated chip is still found by its English word.
-            var genreQuery by rememberSaveable { mutableStateOf("") }
-            val genreChips = remember(genreQuery) {
-                val q = genreQuery.trim().lowercase()
-                if (q.isEmpty()) SEARCH_GENRES
-                else SEARCH_GENRES.filter { g ->
-                    g.lowercase().contains(q) || I18n.t(g).lowercase().contains(q)
-                }
-            }
-            // A new filter starts at the top of the strip: a match that happens
-            // to sort late would otherwise be filtered in BEHIND the scrolled-away
-            // chips and the strip would look like it had found nothing.
-            val genreStripState = rememberLazyListState()
-            LaunchedEffect(genreQuery) {
-                if (genreChips.isNotEmpty()) genreStripState.scrollToItem(0)
-            }
+        } else if (!searchIsTv) {
+            // No providers yet (a fresh install): the scope picker has nothing
+            // to show, but the result filters still do.
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(start = 16.dp, end = 16.dp, top = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                    .padding(horizontal = 16.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.End,
             ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        tr("Genre"),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        if (genreFilter.isEmpty()) tr("Any genre")
-                        else I18n.t("%s picked").replace("%s", genreFilter.size.toString()),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (genreFilter.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant
-                        else MaterialTheme.colorScheme.primary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                Spacer(Modifier.width(8.dp))
-                GlassSearchField(
-                    value = genreQuery,
-                    onValueChange = { genreQuery = it },
-                    placeholder = tr("Search genres"),
-                    height = 36.dp,
-                    modifier = Modifier.width(172.dp),
+                SearchFilterPill(
+                    activeCount = activeFilterCount,
+                    onClick = { filtersOpen = true },
                 )
             }
-            if (genreChips.isEmpty()) {
-                Text(
-                    tr("No genre matches") + " \u201c${genreQuery.trim()}\u201d",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp),
-                )
-            } else {
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.35f),
-                border = BorderStroke(
-                    1.dp,
-                    MaterialTheme.colorScheme.outline.copy(alpha = 0.22f),
-                ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 16.dp, end = 16.dp, top = 6.dp)
-                    .height(34.dp),
-            ) {
-                LazyRow(
-                    state = genreStripState,
-                    contentPadding = PaddingValues(horizontal = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    item {
-                        GenreChip(
-                            label = tr("Any"),
-                            selected = genreFilter.isEmpty(),
-                            onClick = { setGenres(emptySet()) },
-                        )
-                    }
-                    items(genreChips) { genre ->
-                        GenreChip(
-                            // `trTag`, not `tr`: a genre is CONTENT (it comes
-                            // from TMDB's own vocabulary and from extension
-                            // tags), so it goes through the same dictionary and
-                            // tag translator a title's genre chips do.
-                            label = trTag(genre),
-                            selected = genre.trim().lowercase() in genreFilter,
-                            onClick = { toggleGenre(genre) },
-                        )
-                    }
-                }
-            }
-            }
-            if ((filterOn || activeEngine.isNotBlank()) && results.isNotEmpty()) {
-                Column(Modifier.padding(horizontal = 16.dp, vertical = 2.dp)) {
-                    Text(
-                        if (visible.isEmpty()) {
-                            tr("Nothing in these results matches the filter.")
-                        } else {
-                            // Two single-placeholder phrases joined the way the
-                            // rest of the app joins counted labels (see
-                            // ExtensionsScreen's "N repos · M enabled"), so each
-                            // half is a key the dictionaries can hold.
-                            tr("%s shown").replace("%s", visible.size.toString()) +
-                                " · " +
-                                tr("%s found").replace("%s", results.size.toString())
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    if (visible.isNotEmpty() && keptUnknownKind > 0) {
-                        Text(
-                            tr("%s have no year or kind, so they are kept")
-                                .replace("%s", keptUnknownKind.toString()),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    if (hiddenNoYear > 0) {
-                        Text(
-                            tr("%s have no year, so they are hidden")
-                                .replace("%s", hiddenNoYear.toString()),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    if (hiddenNoGenre > 0) {
-                        Text(
-                            tr("%s have no genre, so they are hidden")
-                                .replace("%s", hiddenNoGenre.toString()),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
+        }
+        // ---- Result filters: kind + year (see the state at the top) ---------
+        //
+        // The controls themselves are in a sheet behind the header's Filters
+        // pill. They used to be five fixed rows here, which with many sources
+        // left almost no room for the results; the sheet keeps the same
+        // controls without costing the list a single row.
+        if (!searchIsTv && filtersOpen) {
+            SearchFiltersSheet(
+                kind = kindFilter,
+                onKind = { kindFilterKey = it.key },
+                years = yearsFilter,
+                onClearYears = { setYears(emptySet()) },
+                onToggleYear = ::toggleYear,
+                genres = genreFilter,
+                onClearGenres = { setGenres(emptySet()) },
+                onToggleGenre = ::toggleGenre,
+                shownCount = visible.size,
+                foundCount = results.size,
+                keptUnknownKind = keptUnknownKind,
+                hiddenNoYear = hiddenNoYear,
+                hiddenNoGenre = hiddenNoGenre,
+                filterActive = filterOn || activeEngine.isNotBlank(),
+                onDismiss = { filtersOpen = false },
+            )
         }
         if (searching) {
             LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -1283,8 +1065,18 @@ fun SearchScreen(
                 val searchKeys = remember(gridItems) { gridItems.map { it.uniqueId } }
                 val gridStateKey = if (tvSearch) "search:$query|$activeEngine"
                     else "search:$query|$activeEngine|$effectiveExpanded"
+                // The grouped phone list is keyed per shelf, so the scroll
+                // keeper can follow the shelf at the top instead of an index
+                // that shifts every time another provider answers.
+                val groupedKeys = remember(groupedVisible) {
+                    groupedVisible.keys.flatMap { listOf("grp|$it", "row|$it") }
+                }
                 if (!tvSearch && effectiveExpanded == null) {
                     LazyColumn(
+                        state = com.hikari.app.ui.components.keptListState(
+                            "search-groups:$query|$activeEngine",
+                            itemKeys = groupedKeys,
+                        ),
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f),
@@ -1720,6 +1512,336 @@ private fun EngineChip(label: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 /**
+ * The header's filter entry point: one small glass pill beside the source
+ * scope, with a count of the filter groups in force. It opens
+ * [SearchFiltersSheet], so the kind/year/genre controls never occupy a fixed
+ * band above the results.
+ */
+@Composable
+private fun SearchFilterPill(
+    activeCount: Int,
+    onClick: () -> Unit,
+) {
+    val accent = MaterialTheme.colorScheme.primary
+    val on = activeCount > 0
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(50),
+        color = if (on) accent.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
+        border = BorderStroke(
+            1.dp,
+            if (on) accent.copy(alpha = 0.55f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+        ),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Filled.Tune,
+                contentDescription = null,
+                tint = if (on) accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                if (on) tr("Filters") + " · " + activeCount else tr("Filters"),
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (on) accent else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+/**
+ * The kind / year / genre filters, in a bottom sheet.
+ *
+ * Every one of these narrows what has ALREADY been found: changing one never
+ * re-runs the multi-source search. The sheet is the same set of controls the
+ * screen used to keep pinned above the results — it just no longer pushes them
+ * off the screen while the user is trying to reach a poster.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SearchFiltersSheet(
+    kind: SearchKindFilter,
+    onKind: (SearchKindFilter) -> Unit,
+    years: Set<Int>,
+    onClearYears: () -> Unit,
+    onToggleYear: (Int) -> Unit,
+    genres: Set<String>,
+    onClearGenres: () -> Unit,
+    onToggleGenre: (String) -> Unit,
+    shownCount: Int,
+    foundCount: Int,
+    keptUnknownKind: Int,
+    hiddenNoYear: Int,
+    hiddenNoGenre: Int,
+    filterActive: Boolean,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var genreQuery by rememberSaveable { mutableStateOf("") }
+    val genreChips = remember(genreQuery) {
+        val q = genreQuery.trim().lowercase()
+        if (q.isEmpty()) SEARCH_GENRES
+        else SEARCH_GENRES.filter { g ->
+            g.lowercase().contains(q) || I18n.t(g).lowercase().contains(q)
+        }
+    }
+    // A new filter starts at the top of the strip: a match that happens to
+    // sort late would otherwise be filtered in BEHIND the scrolled-away chips
+    // and the strip would look like it had found nothing.
+    val genreStripState = rememberLazyListState()
+    LaunchedEffect(genreQuery) {
+        if (genreChips.isNotEmpty()) genreStripState.scrollToItem(0)
+    }
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 28.dp),
+        ) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 12.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        tr("Filters"),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        tr("Narrow these results without searching again"),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                    )
+                }
+                if (kind != SearchKindFilter.ALL || years.isNotEmpty() || genres.isNotEmpty()) {
+                    TextButton(
+                        onClick = {
+                            onKind(SearchKindFilter.ALL)
+                            onClearYears()
+                            onClearGenres()
+                        },
+                    ) {
+                        Text(tr("Clear all"), style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            }
+            // Kind chips: Both / Movies / Series / Anime.
+            val kinds = listOf(
+                SearchKindFilter.ALL to tr("Both"),
+                SearchKindFilter.MOVIES to tr("Movies"),
+                SearchKindFilter.SERIES to tr("Series"),
+                SearchKindFilter.ANIME to tr("Anime"),
+            )
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(top = 4.dp),
+            ) {
+                items(kinds, key = { it.first.key }) { (option, label) ->
+                    FilterChip(
+                        selected = kind == option,
+                        onClick = { onKind(option) },
+                        label = { Text(label) },
+                        shape = RoundedCornerShape(24.dp),
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
+                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
+                            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            selectedLabelColor = MaterialTheme.colorScheme.primary,
+                        ),
+                    )
+                }
+            }
+            // Year strip: a fixed list, so a year can be picked before the
+            // search has found a single title.
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    tr("Year"),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                if (years.isNotEmpty()) {
+                    TextButton(onClick = onClearYears) {
+                        Text(tr("Any year"), style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.35f),
+                border = BorderStroke(
+                    1.dp,
+                    MaterialTheme.colorScheme.outline.copy(alpha = 0.22f),
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .height(36.dp),
+            ) {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    item {
+                        YearChip(
+                            label = tr("Any"),
+                            selected = years.isEmpty(),
+                            onClick = onClearYears,
+                        )
+                    }
+                    items(SEARCH_YEARS) { year ->
+                        YearChip(
+                            label = year.toString(),
+                            selected = year in years,
+                            onClick = { onToggleYear(year) },
+                        )
+                    }
+                }
+            }
+            // Genre strip: the same thin-box control, with a search field
+            // because the vocabulary is long and a genre can sit far along it.
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    tr("Genre"),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    if (genres.isEmpty()) " · " + tr("Any genre")
+                    else " · " + I18n.t("%s picked").replace("%s", genres.size.toString()),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (genres.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant
+                    else MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (genres.isNotEmpty()) {
+                    TextButton(onClick = onClearGenres) {
+                        Text(tr("Clear"), style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+            GlassSearchField(
+                value = genreQuery,
+                onValueChange = { genreQuery = it },
+                placeholder = tr("Search genres"),
+                height = 38.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+            )
+            if (genreChips.isEmpty()) {
+                Text(
+                    tr("No genre matches") + " \u201c${genreQuery.trim()}\u201d",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                )
+            } else {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.35f),
+                    border = BorderStroke(
+                        1.dp,
+                        MaterialTheme.colorScheme.outline.copy(alpha = 0.22f),
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, top = 8.dp)
+                        .height(36.dp),
+                ) {
+                    LazyRow(
+                        state = genreStripState,
+                        contentPadding = PaddingValues(horizontal = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        item {
+                            GenreChip(
+                                label = tr("Any"),
+                                selected = genres.isEmpty(),
+                                onClick = onClearGenres,
+                            )
+                        }
+                        items(genreChips) { genre ->
+                            GenreChip(
+                                label = trTag(genre),
+                                selected = genre.trim().lowercase() in genres,
+                                onClick = { onToggleGenre(genre) },
+                            )
+                        }
+                    }
+                }
+            }
+            if (filterActive) {
+                Column(Modifier.padding(horizontal = 20.dp, vertical = 10.dp)) {
+                    Text(
+                        if (shownCount == 0) {
+                            tr("Nothing in these results matches the filter.")
+                        } else {
+                            tr("%s shown").replace("%s", shownCount.toString()) +
+                                " · " +
+                                tr("%s found").replace("%s", foundCount.toString())
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (shownCount > 0 && keptUnknownKind > 0) {
+                        Text(
+                            tr("%s have no year or kind, so they are kept")
+                                .replace("%s", keptUnknownKind.toString()),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (hiddenNoYear > 0) {
+                        Text(
+                            tr("%s have no year, so they are hidden")
+                                .replace("%s", hiddenNoYear.toString()),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (hiddenNoGenre > 0) {
+                        Text(
+                            tr("%s have no genre, so they are hidden")
+                                .replace("%s", hiddenNoGenre.toString()),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
  * One remembered search: the query, and the way to forget that one.
  *
  * The chip itself re-runs the search — that is what a history chip is for — and
@@ -1848,15 +1970,14 @@ private fun ProviderScopeButton(
     label: String,
     supporting: String,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(50),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 2.dp),
+        modifier = modifier,
     ) {
         // One compact line — icon, scope, chevron — so the words always fit:
         // the two-line card truncated the scope it was meant to announce.

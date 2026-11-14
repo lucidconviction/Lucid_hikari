@@ -94,6 +94,7 @@ import com.hikari.app.ui.rememberVisibleItems
 import com.hikari.app.tv.Cs3ShelfHeader
 import com.hikari.app.tv.TvMode
 import com.hikari.app.tv.TvUi
+import com.hikari.app.ui.theme.glassSheen
 import com.hikari.app.ui.theme.rememberGlassTokens
 import com.hikari.app.ui.shape
 import kotlinx.coroutines.delay
@@ -582,6 +583,7 @@ fun GlassSearchField(
             Modifier
                 .fillMaxWidth()
                 .height(height)
+                .then(if (tv) Modifier else Modifier.glassSheen(glass))
                 .padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -1784,6 +1786,10 @@ fun GlassCard(
                 if (tv) com.hikari.app.tv.TvDesktop.GlassEdge else glass.border,
                 cardShape,
             )
+            // The specular top light: the one extra layer that turns the
+            // translucent fill into a pane of glass (see [glassSheen]). TV
+            // cards are deliberately flat, so they skip it.
+            .then(if (tv) Modifier else Modifier.glassSheen(glass))
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
         content = content,
     )

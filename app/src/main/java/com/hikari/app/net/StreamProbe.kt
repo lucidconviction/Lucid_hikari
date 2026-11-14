@@ -334,19 +334,22 @@ object StreamProbe {
     }
 
     /** Warms the cache for every source that needs resolution, a few at a time,
-     *  so a server pick (or an auto-failover) is usually already cached. */
-    suspend fun warm(sources: List<StreamSource>) {
+     *  so a server pick (or an auto-failover) is usually already cached.
+     *  [concurrency] is capped by callers that run while playback is using the
+     *  same link: probes are a convenience there, not more important than the
+     *  segment the viewer is waiting on. */
+    suspend fun warm(sources: List<StreamSource>, concurrency: Int = 6) {
         val targets = sources
             .filter { it.url.isNotBlank() && needsResolve(it.url, it.isTorrent, it.isM3u8, it.isMpd) }
         if (targets.isEmpty()) return
         ensureLoaded()
         val pending = targets.filter { cache[it.url] == null }
         if (pending.isEmpty()) return
-        // Six at a time (not three): most of a source list's probes finish in
-        // one round-trip, and warming them all before the user picks a server
-        // is what makes the pick instant. The probes share the playback
-        // connection pool, so the extra concurrency costs almost nothing.
-        val sem = Semaphore(6)
+        // Six at a time by default (not three): most of a source list's probes
+        // finish in one round-trip, and warming them all before the user picks
+        // a server is what makes the pick instant. The player passes a lower
+        // number while a picture is starting/finishing.
+        val sem = Semaphore(concurrency.coerceIn(1, 8))
         coroutineScope {
             pending.map { s ->
                 async(Dispatchers.IO) {

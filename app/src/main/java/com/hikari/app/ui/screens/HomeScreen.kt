@@ -4191,50 +4191,76 @@ private fun HomeGenreStrip(onPick: (name: String, genresText: String, keywordsTe
 @Composable
 private fun DonationBanner(onDonate: () -> Unit) {
     val accent = MaterialTheme.colorScheme.primary
+    // One row, not two: the old layout stacked the call-to-action under the
+    // text in its own full-width row, which left a band of empty space the
+    // height of a button below a two-line message. The pill now sits inline
+    // with the icon and text, so the banner is exactly as tall as its content.
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp),
+            .padding(horizontal = 16.dp, vertical = 4.dp),
         shape = RoundedCornerShape(18.dp),
-        color = accent.copy(alpha = 0.10f),
-        border = BorderStroke(1.dp, accent.copy(alpha = 0.30f)),
+        color = accent.copy(alpha = 0.09f),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.26f)),
     ) {
-        Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(Brush.linearGradient(listOf(Color(0xFFFFB74D), Color(0xFFE91E63)))),
-                    contentAlignment = Alignment.Center,
+        Row(
+            Modifier.padding(start = 12.dp, end = 8.dp, top = 9.dp, bottom = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(Brush.linearGradient(listOf(Color(0xFFFFB74D), Color(0xFFE91E63)))),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Filled.Favorite,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(17.dp),
+                )
+            }
+            Column(Modifier.weight(1f).padding(start = 10.dp, end = 8.dp)) {
+                Text(
+                    tr("If you like the app, buy me a tea"),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    tr("Lucid Hikari is free, ad-free and built in the open."),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Surface(
+                onClick = onDonate,
+                shape = RoundedCornerShape(50),
+                color = accent.copy(alpha = 0.16f),
+                border = BorderStroke(1.dp, accent.copy(alpha = 0.34f)),
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(
                         Icons.Filled.Favorite,
                         contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(20.dp),
+                        tint = accent,
+                        modifier = Modifier.size(13.dp),
                     )
-                }
-                Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                    Spacer(Modifier.width(5.dp))
                     Text(
-                        tr("If you like the app, buy me a tea"),
-                        style = MaterialTheme.typography.bodyMedium,
+                        tr("Buy me a tea"),
+                        style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        tr("Lucid Hikari is free, ad-free and built in the open."),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = accent,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
                     )
-                }
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(onClick = onDonate) {
-                    Text(tr("Buy me a tea"), fontWeight = FontWeight.SemiBold)
                 }
             }
         }

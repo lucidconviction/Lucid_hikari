@@ -85,6 +85,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.input.pointer.pointerInput
@@ -158,6 +159,7 @@ import com.hikari.app.ui.screens.TelegramScreen
 import com.hikari.app.ui.screens.WebsitesScreen
 import com.hikari.app.ui.screens.TmdbGridScreen
 import com.hikari.app.ui.theme.HikariThemeMode
+import com.hikari.app.ui.theme.glassSheen
 import com.hikari.app.ui.theme.rememberGlassTokens
 import com.hikari.app.tv.TvMode
 import com.hikari.app.tv.TvMouseCursorOverlay
@@ -921,6 +923,10 @@ private fun AppBottomBar(
                                 Modifier
                             }
                         )
+                        // Same specular edge as every other glass panel, so
+                        // the bar reads as part of the material rather than a
+                        // slab laid over the page.
+                        .then(if (floating) Modifier.glassSheen(glass) else Modifier)
                 ) {
                     // The bar is now a horizontally scrolling strip of FIXED
                     // cells rather than equal-weight slots. Equal slots only
@@ -1423,42 +1429,86 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
         Box(Modifier.fillMaxSize().background(scheme.background))
         when (HikariThemeMode.fromKey(themeKey)) {
             HikariThemeMode.GLASS -> {
+                // The glass theme's page is a lit stage, not a flat wash: the
+                // base gradient gives it direction, and two broad radial glows
+                // (the accent above-left, the tertiary below-right) give the
+                // frosted panels something to catch. Static, so this costs one
+                // draw pass and no animation.
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .background(
-                            Brush.linearGradient(
-                                colors = listOf(
-                                    androidx.compose.ui.graphics.lerp(
-                                        Color(0xFF120E1F), accent, 0.38f
+                        .drawBehind {
+                            drawRect(
+                                Brush.linearGradient(
+                                    colors = listOf(
+                                        androidx.compose.ui.graphics.lerp(
+                                            Color(0xFF120E1F), accent, 0.38f
+                                        ),
+                                        androidx.compose.ui.graphics.lerp(
+                                            Color(0xFF151A33), accent, 0.16f
+                                        ),
+                                        Color(0xFF0B0E1A),
                                     ),
-                                    androidx.compose.ui.graphics.lerp(
-                                        Color(0xFF151A33), accent, 0.16f
-                                    ),
-                                    Color(0xFF0B0E1A),
-                                ),
-                                start = Offset.Zero,
-                                end = Offset.Infinite,
+                                    start = Offset.Zero,
+                                    end = Offset(size.width, size.height),
+                                )
                             )
-                        )
+                            drawRect(
+                                Brush.radialGradient(
+                                    colors = listOf(accent.copy(alpha = 0.34f), Color.Transparent),
+                                    center = Offset(size.width * 0.12f, -size.height * 0.04f),
+                                    radius = size.width * 0.95f,
+                                )
+                            )
+                            drawRect(
+                                Brush.radialGradient(
+                                    colors = listOf(
+                                        scheme.tertiary.copy(alpha = 0.20f),
+                                        Color.Transparent,
+                                    ),
+                                    center = Offset(size.width * 0.98f, size.height * 0.62f),
+                                    radius = size.width * 0.85f,
+                                )
+                            )
+                            // A soft floor keeps the floating taskbar legible
+                            // over bright artwork without a hard black band.
+                            drawRect(
+                                Brush.verticalGradient(
+                                    0.72f to Color.Transparent,
+                                    1f to Color.Black.copy(alpha = 0.32f),
+                                )
+                            )
+                        }
                 )
             }
             HikariThemeMode.DARK -> {
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                0f to androidx.compose.ui.graphics.lerp(
-                                    scheme.background, accent, 0.20f
-                                ),
-                                0.34f to androidx.compose.ui.graphics.lerp(
-                                    scheme.background, accent, 0.06f
-                                ),
-                                0.75f to scheme.background,
-                                1f to scheme.background,
+                        .drawBehind {
+                            drawRect(
+                                Brush.verticalGradient(
+                                    0f to androidx.compose.ui.graphics.lerp(
+                                        scheme.background, accent, 0.24f
+                                    ),
+                                    0.34f to androidx.compose.ui.graphics.lerp(
+                                        scheme.background, accent, 0.07f
+                                    ),
+                                    0.75f to scheme.background,
+                                    1f to scheme.background,
+                                )
                             )
-                        )
+                            // One quiet pool of accent light behind the very
+                            // top of the page — the "lit from above" cue that
+                            // makes the glass cards read as material.
+                            drawRect(
+                                Brush.radialGradient(
+                                    colors = listOf(accent.copy(alpha = 0.16f), Color.Transparent),
+                                    center = Offset(size.width * 0.5f, -size.height * 0.08f),
+                                    radius = size.width * 0.92f,
+                                )
+                            )
+                        }
                 )
             }
             else -> Unit

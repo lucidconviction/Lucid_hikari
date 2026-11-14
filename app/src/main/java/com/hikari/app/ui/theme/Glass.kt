@@ -3,6 +3,10 @@ package com.hikari.app.ui.theme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 
@@ -42,6 +46,10 @@ data class GlassTokens(
     val border: Color,
     /** True for the dark, glass and AMOLED themes. */
     val dark: Boolean,
+    /** The specular top edge: a touch brighter than [border], it is the line
+     *  that makes a translucent panel read as a piece of glass catching the
+     *  room light rather than a flat fill with an outline. */
+    val highlight: Color = border,
 )
 
 @Composable
@@ -53,10 +61,11 @@ fun rememberGlassTokens(): GlassTokens {
     return remember(dark) {
         if (dark) {
             GlassTokens(
-                fillTop = Color.White.copy(alpha = 0.095f),
-                fillBottom = Color.White.copy(alpha = 0.045f),
-                border = Color.White.copy(alpha = 0.115f),
+                fillTop = Color.White.copy(alpha = 0.11f),
+                fillBottom = Color.White.copy(alpha = 0.038f),
+                border = Color.White.copy(alpha = 0.14f),
                 dark = true,
+                highlight = Color.White.copy(alpha = 0.22f),
             )
         } else {
             GlassTokens(
@@ -64,7 +73,40 @@ fun rememberGlassTokens(): GlassTokens {
                 fillBottom = Color.White,
                 border = Color.Black.copy(alpha = 0.08f),
                 dark = false,
+                highlight = Color.Black.copy(alpha = 0.05f),
             )
         }
     }
 }
+
+/**
+ * The specular sheen every glass panel carries: a soft diagonal light across
+ * the top-left corner plus the 1px bright edge. Drawn BELOW the panel's
+ * content, so text and artwork stay crisp; it is only the material that catches
+ * the light.
+ *
+ * On the light theme the panel is already opaque white, so the sheen is left
+ * off (a white wash on white would only dull the border).
+ */
+fun Modifier.glassSheen(tokens: GlassTokens): Modifier =
+    if (!tokens.dark) this
+    else this.drawWithContent {
+        drawRect(
+            brush = Brush.linearGradient(
+                colors = listOf(
+                    Color.White.copy(alpha = 0.085f),
+                    Color.White.copy(alpha = 0.018f),
+                    Color.Transparent,
+                ),
+                start = Offset(0f, 0f),
+                end = Offset(size.width * 0.85f, size.height * 0.55f),
+            ),
+        )
+        drawLine(
+            color = tokens.highlight.copy(alpha = 0.55f),
+            start = Offset(0f, 0.5f),
+            end = Offset(size.width, 0.5f),
+            strokeWidth = 1f,
+        )
+        drawContent()
+    }

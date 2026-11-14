@@ -37,7 +37,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 object SportsRepository {
 
     // ---- Constants ----
-    const val DAYS_BACK = 3
+    const val DAYS_BACK = 7
     const val DAYS_AHEAD = 7
     private const val REFRESH_INTERVAL_MS = 15 * 60 * 1000L // 15 minutes
     private const val SETTINGS_KEY = "sports_settings"
@@ -60,6 +60,16 @@ object SportsRepository {
 
     /** eventId -> the scoring plays, fetched on demand by the game page. */
     private val summaryCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<ScoringPlay>>>()
+
+    /**
+     * TheSportsDB leagues that arrive with the nuvio-data index, and the games
+     * already read from their files. A file is a whole season; re-reading it on
+     * every 15-minute refresh would be a lot of traffic for the same fixtures,
+     * so idle leagues are kept for half an hour and live ones for four minutes.
+     */
+    @Volatile private var tsdbIndexAt = 0L
+    private val tsdbLeagueCache =
+        java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<SportsEvent>>>()
 
     private val viewing = MutableStateFlow(false)
     private val refreshJob = SupervisorJob()
@@ -304,6 +314,11 @@ object SportsRepository {
 
     /** Load all events from active leagues. */
     private suspend fun loadEvents(): List<SportsEvent> {
+        // The extra competitions (non-league football, rugby league, racing,
+        // netball…) come from the nuvio-data index. Load it before choosing the
+        // active leagues, otherwise they are not in the catalog yet and their
+        // games never appear.
+        ensureTsdbIndex()
         val activeLeagues = activeLeagues(settings.value, follows.value)
         android.util.Log.d("Hikari/Sports", "Loading events for ${activeLeagues.size} active leagues: ${activeLeagues.joinToString { it.id }}")
         val allEvents = mutableListOf<SportsEvent>()
@@ -346,9 +361,69 @@ object SportsRepository {
         return filtered
     }
 
+    /**
+     * Reads the nuvio-data index (twice a day) and adds its leagues to the
+     * catalog. That file is what brings in the competitions the built-in list
+     * does not carry: English non-league football, Scottish League One/Two,
+     * rugby league's Super League, MotoGP/Formula E/WEC and friends.
+     */
+    private suspend fun ensureTsdbIndex() {
+        val now = LiveTvClock.nowMs()
+        val twelveHours = 12 * 60 * 60_000L
+        if (tsdbIndexAt != 0L && now - tsdbIndexAt < twelveHours) return
+        val raw = runCatching { SportsFeeds.footballIndexRaw() }.getOrNull()
+        if (raw != null) {
+            val parsed = runCatching { SportsFeeds.parseFootballIndex(raw) }.getOrNull().orEmpty()
+            if (parsed.isNotEmpty()) {
+                // Aliases already have a richer schedule feed (WWE/AEW/boxing):
+                // adding a second tsdb copy would duplicate every card.
+                SportsCatalog.setExtra(parsed.filterNot { it.alias }.map { it.league })
+                tsdbIndexAt = now
+                android.util.Log.d(
+                    "Hikari/Sports",
+                    "TheSportsDB index: ${parsed.count { !it.alias }} extra leagues",
+                )
+                return
+            }
+        }
+        // Offline or the file is briefly unavailable: retry in half an hour
+        // instead of on every 15-minute refresh.
+        tsdbIndexAt = now - twelveHours + 30 * 60_000L
+    }
+
+    /**
+     * One TheSportsDB league's fixtures. The file is cached in memory with a
+     * short TTL while its games are live or about to start, and a long one
+     * otherwise.
+     */
+    private suspend fun loadTsdbLeagueEvents(league: League): List<SportsEvent> {
+        val now = LiveTvClock.nowMs()
+        val cached = tsdbLeagueCache[league.id]
+        val busy = cached?.second?.any { ev ->
+            ev.state == GameState.LIVE ||
+                (ev.state == GameState.PRE &&
+                    ev.startMs in (now - 20 * 60_000L)..(now + 15 * 60_000L))
+        } == true
+        val maxAge = if (busy) 4 * 60_000L else 30 * 60_000L
+        if (cached != null && now - cached.first < maxAge) return cached.second
+        val raw = runCatching {
+            SportsFeeds.footballLeagueRaw(league.id.removePrefix("tsdb/"))
+        }.getOrNull() ?: return cached?.second.orEmpty()
+        // Only build the games the page can show: a whole-season file is
+        // hundreds of events, and the other 90% were discarded two lines later
+        // by the repository's own window filter.
+        val from = SportsDates.dayStart(-DAYS_BACK - 1, now)
+        val to = SportsDates.dayStart(DAYS_AHEAD + 1, now)
+        val events = runCatching { SportsFeeds.parseFootballLeague(league, raw, now, from, to) }
+            .getOrDefault(emptyList())
+        tsdbLeagueCache[league.id] = now to events
+        return events
+    }
+
     /** Load events for a single league. */
     private suspend fun loadLeagueEvents(league: League): List<SportsEvent> {
         if (league.guideOnly) return loadGuideOnlyEvents(league)
+        if (league.id.startsWith("tsdb/")) return loadTsdbLeagueEvents(league)
         if (league.espnPath == null) return emptyList()
 
         // One range request covers the whole sports window. Some ESPN paths
@@ -381,9 +456,13 @@ object SportsRepository {
     private suspend fun loadGuideOnlyEvents(league: League): List<SportsEvent> {
         return when {
             league.id == "guide/bkfc" -> loadBkfcEvents(league)
+            // The nuvio-data wrestling file carries boxing's cards too (it is
+            // built from TheSportsDB's boxing league); the older sporting-
+            // events file is only a fallback for when that feed is unavailable.
+            league.id == "guide/boxing" -> loadWrestlingEvents(league).ifEmpty { loadFixtureEvents(league) }
+            league.id.startsWith("guide/wwe") || league.id.startsWith("guide/aew") ||
+                league.id == "guide/wrestling" -> loadWrestlingEvents(league)
             league.fixtureSlug != null -> loadFixtureEvents(league)
-            league.id.startsWith("guide/wwe") || league.id.startsWith("guide/aew") || league.id == "guide/wrestling" ->
-                loadWrestlingEvents(league)
             else -> emptyList()
         }
     }
@@ -469,44 +548,83 @@ object SportsRepository {
         return out
     }
 
-    /** Load wrestling events from TheSportsDB. */
+    /** Load wrestling events from TheSportsDB (through the nuvio-data copy). */
     private suspend fun loadWrestlingEvents(league: League): List<SportsEvent> {
         val raw = SportsFeeds.wrestlingRaw()
-        val o = JSONObject(raw)
+        val o = runCatching { JSONObject(raw) }.getOrNull() ?: return emptyList()
         val events = o.optJSONArray("events") ?: return emptyList()
         val out = mutableListOf<SportsEvent>()
         (0 until events.length()).forEach { i ->
             val e = events.optJSONObject(i) ?: return@forEach
-            val title = e.optString("strEvent")
-            val lower = title.lowercase()
-            val forThisLeague = when (league.id) {
-                "guide/wwe" -> listOf("wwe", "smackdown", "raw", "nxt", "wrestlemania", "royal rumble", "summerslam", "survivor series").any { it in lower }
-                "guide/aew" -> "aew" in lower || "all elite" in lower
-                else -> true
+            // Two shapes are supported: the raw TheSportsDB fields (strEvent…)
+            // and the compact nuvio-data file (league/name/start).
+            val compact = e.has("league") && e.has("start")
+            val title = if (compact) e.optString("name") else e.optString("strEvent")
+            if (title.isBlank()) return@forEach
+            val leagueId = if (compact) {
+                when (e.optString("league").lowercase()) {
+                    "wwe" -> "guide/wwe"
+                    "aew" -> "guide/aew"
+                    "tna" -> "guide/wrestling"
+                    "boxing" -> "guide/boxing"
+                    else -> "guide/wrestling"
+                }
+            } else {
+                val lower = title.lowercase()
+                when {
+                    listOf(
+                        "wwe", "smackdown", "raw", "nxt", "wrestlemania",
+                        "royal rumble", "summerslam", "survivor series",
+                    ).any { it in lower } -> "guide/wwe"
+                    "aew" in lower || "all elite" in lower -> "guide/aew"
+                    else -> "guide/wrestling"
+                }
             }
-            if (!forThisLeague) return@forEach
-            val dateStr = e.optString("dateEvent")
-            val timeStr = e.optString("strTime")
-            val startMs = SportsDates.parseIso("$dateStr${if (timeStr.isNotBlank()) "T$timeStr" else "T00:00"}Z") ?: return@forEach
+            if (leagueId != league.id) return@forEach
+            val startMs = if (compact) {
+                val hasTime = e.optBoolean("hasTime", true)
+                if (hasTime) SportsDates.parseIso(e.optString("start"))
+                else SportsDates.localDateOf(e.optString("start"))
+            } else {
+                val dateStr = e.optString("dateEvent")
+                val timeStr = e.optString("strTime")
+                SportsDates.parseIso("$dateStr${if (timeStr.isNotBlank()) "T$timeStr" else "T00:00"}Z")
+            } ?: return@forEach
+            val hasTime = if (compact) e.optBoolean("hasTime", true) else e.optString("strTime").isNotBlank()
+            val end = startMs + league.minutes * 60_000L
             val state = when {
-                startMs > LiveTvClock.nowMs() -> GameState.PRE
-                e.optString("strStatus") == "Live" -> GameState.LIVE
-                else -> GameState.POST
+                !hasTime -> GameState.PRE
+                LiveTvClock.nowMs() >= end -> GameState.POST
+                compact && e.optString("strStatus") == "Live" -> GameState.LIVE
+                !compact && e.optString("strStatus") == "Live" -> GameState.LIVE
+                LiveTvClock.nowMs() >= startMs -> GameState.LIVE
+                else -> GameState.PRE
             }
             out += SportsEvent(
-                id = "wrestling-${e.optString("idEvent")}",
+                id = if (compact) "tsdb-${e.optString("id")}" else "wrestling-${e.optString("idEvent")}",
                 leagueId = league.id,
                 startMs = startMs,
-                hasTime = timeStr.isNotBlank(),
+                hasTime = hasTime,
                 state = state,
                 title = wrestlingHeadline(title),
-                subtitle = null,
-                status = if (state == GameState.LIVE) "Live" else if (state == GameState.POST) "Final" else "Upcoming",
+                subtitle = if (compact) {
+                    listOf(
+                        e.optString("venue"),
+                        e.optString("city"),
+                        e.optString("country"),
+                    ).filter { it.isNotBlank() && it != "null" }.joinToString(", ").ifBlank { null }
+                } else {
+                    null
+                },
+                status = if (state == GameState.LIVE) "Live"
+                else if (state == GameState.POST) "Final" else "Upcoming",
                 away = null,
                 home = null,
                 source = EventSource.FIXTURES,
                 espnId = null,
-                about = e.optString("strDescriptionEN").takeIf { it.isNotBlank() }
+                about = (if (compact) e.optString("about") else e.optString("strDescriptionEN"))
+                    .takeIf { it.isNotBlank() && it != "null" },
+                endMs = end,
             )
         }
         return out
@@ -550,8 +668,15 @@ object SportsRepository {
 
         val status = competition.optJSONObject("status") ?: event.optJSONObject("status") ?: return null
         val statusType = status.optJSONObject("type")
+        val explicitState = statusType?.optString("state")?.lowercase().orEmpty()
         val stateName = statusType?.optString("name")?.lowercase().orEmpty()
         val state = when {
+            // ESPN's cricket (and some other) feeds only carry the short
+            // "pre"/"in"/"post" state, with no name at all. Without this every
+            // cricket match was classified OFF and vanished from the page.
+            explicitState == "pre" -> GameState.PRE
+            explicitState == "in" -> GameState.LIVE
+            explicitState == "post" -> GameState.POST
             stateName.contains("scheduled") || stateName.contains("pre") || stateName.contains("tbd") -> GameState.PRE
             stateName.contains("progress") || stateName.contains("live") || stateName.contains("halftime") ||
                 stateName.contains("overtime") || stateName.contains("shootout") || stateName.contains("delayed") -> GameState.LIVE
@@ -650,6 +775,7 @@ object SportsRepository {
         val altColor = info.optString("alternateColor").let { if (it.isNotBlank()) it.toLongOrNull(16) else null }
         val logo = info.optJSONArray("logos")?.optJSONObject(0)?.optString("href")
             ?.takeIf { it.isNotBlank() }
+            ?: info.optString("logo").takeIf { it.isNotBlank() && it != "null" }
         val record = recordOf(o)
         val score = o.optString("score").takeIf { it.isNotBlank() }
         val winner = o.optBoolean("winner") == true
