@@ -685,6 +685,8 @@ class StremioAddon(override val config: ProviderConfig) : ContentProvider {
         overview = m.optString("description").ifBlank { null },
         genres = stringArray(m, "genres"),
         rawType = rawType,
+        releaseInfo = m.optString("releaseInfo").ifBlank { null },
+        released = m.optString("released").ifBlank { null },
     )
 
     private fun yearFromRelease(releaseInfo: String): Int? =

@@ -1,3 +1,19 @@
+## 0.12.12
+
+**14 November 2026**
+
+### Live sports add-ons and a harder-working browser
+
+- **A Live tab for sports add-ons**: the Sports page now reads the live-event catalogs of installed Stremio sports live-TV add-ons, groups events by sport, keeps live events first and refreshes them while the page is open.
+- **Watch without leaving Hikari**: tapping an add-on event shows its own streams, with matching IPTV channels offered first. Sports search now includes add-on events too.
+- **Sports add-ons are wired through Hikari's provider contract** — no separate backend, keys or account. A slow or dead add-on is bounded by a total scan budget and can never stall the tab.
+- **Playback rows keep their real metadata**: torrent streams award `infoHash`, file index, trackers and subtitles to the player; archive and event rows open the actual source rather than an empty URL.
+- **Ad blocking accepts modern filter lists**: EasyList, EasyPrivacy, AdGuard Base and OISD Small join the hosts presets. Domain rules are extracted and cached compactly, and lists refresh weekly when the browser opens.
+- **Popup and redirect protection fixed**: "Allow once" now really loads the link, automatic `intent://` app launches are dropped, `about:blank` popunders no longer blank the page, and stale popup/redirect offers are cleared on navigation.
+- **Browser polish**: page titles follow the real page in the tab grid, **Desktop site** is in the menu, download links go to the system DownloadManager, non-web schemes hand off to their apps, and playback keeps the screen awake.
+- **Fewer broken pages**: hls.js was updated to 1.7.4, ad-cleanup selectors no longer catch legitimate UI such as "adventure" cards, and the hls.js CDN is exempt from host blocklists.
+- **Web Apps feels better**: grid/list choice survives navigation, the grid adapts to the screen, and the address bar has a clear open button.
+
 ## 0.12.11
 
 **13 November 2026**

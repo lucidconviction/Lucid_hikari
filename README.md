@@ -30,6 +30,7 @@ Lucid Hikari is a fork of **Hikari** by **Hikari Devs**. The original project an
 ### Sports
 - Follow leagues and teams, and get their fixtures on one page.
 - Live and upcoming games show broadcasters and a **Watch on** search across every playlist, extension and add-on.
+- The **Live** tab reads the live-sport catalogs of your installed sports add-ons (Stremio sports live-TV add-ons), groups their events by sport and plays the add-on's own streams. When one of your IPTV channels matches an event, it is offered first.
 - Finished games stop asking where to watch and offer **replays and highlights** instead.
 - Scores, standings, game details and scoring plays.
 
@@ -48,6 +49,8 @@ Lucid Hikari is a fork of **Hikari** by **Hikari Devs**. The original project an
 
 ### A browser that stays in the app
 - Every web page the app opens uses the built-in browser, with ad blocking, popup and redirect protection and shared cookies for extension playback.
+- Blocklists accept classic hosts files **and** Adblock filter lists (EasyList, EasyPrivacy, AdGuard Base), refreshed weekly in the background; popups and redirects have per-site Allow / Always / Block choices.
+- A real tab strip, page titles, **Desktop site**, **Open in player**, element blocker and system downloads — all from the browser menu.
 - A clear retry panel when a page cannot load, instead of a blank screen.
 - Native hand-off only where it is genuinely needed (YouTube, Telegram, Reddit, Discord, Google sign-in and PayPal).
 

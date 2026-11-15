@@ -8159,13 +8159,20 @@ private fun AdBlockingCard(app: HikariApp) {
             Spacer(Modifier.height(10.dp))
 
             Text(
-                tr("Blocklists (ad hosts)"),
+                tr("Blocklists (hosts & filters)"),
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurface
             )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                tr("Hosts files and Adblock lists (EasyList, AdGuard) are both supported. " +
+                    "OISD Small is the compact recommended choice."),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             Spacer(Modifier.height(6.dp))
-            // FlowRow so all three presets stay visible (the third wraps to a
-            // second line instead of overflowing off the right edge), with no
+            // FlowRow so every preset stays visible (the longer names wrap to
+            // a second line instead of overflowing off the right edge), with no
             // dead space between the chips and the row below.
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -8419,7 +8426,7 @@ private fun AdBlockingCard(app: HikariApp) {
                     OutlinedTextField(
                         value = url,
                         onValueChange = { url = it },
-                        label = { Text(tr("Hosts file URL")) },
+                        label = { Text(tr("Hosts or filter list URL")) },
                         shape = GlassShape,
                         singleLine = true
                     )

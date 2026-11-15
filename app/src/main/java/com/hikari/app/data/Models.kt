@@ -329,6 +329,20 @@ data class MediaItem(
     val quality: String? = null,
     val nextEpisodeDate: String? = null,
     val metadataSource: String? = null,
+    /**
+     * The addon's raw `releaseInfo` text ("LIVE", "14 Nov 2026 · 19:30 UTC",
+     * "2024–"). A Stremio metadata object carries this as free text, and sports
+     * add-ons use it as their event clock: the live/upcoming badge and the
+     * event date sit there, not in [year]. Kept on the item so the Sports
+     * add-on guide can read it without a second `/meta` round trip.
+     */
+    val releaseInfo: String? = null,
+    /**
+     * The addon's `released` value, verbatim. Usually an ISO-8601 instant for
+     * a live event; some add-ons print a bare date instead. Parsed defensively
+     * by the Sports add-on guide, never treated as guaranteed.
+     */
+    val released: String? = null,
 ) {
     val uniqueId: String get() = "$providerId|$type|$id"
 

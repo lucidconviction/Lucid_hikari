@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.Sports
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -58,9 +59,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -104,11 +105,13 @@ import com.hikari.app.sports.Sport
 import com.hikari.app.sports.SportsCatalog
 import com.hikari.app.sports.SportsDates
 import com.hikari.app.sports.SportsEvent
+import com.hikari.app.sports.SportsAddons
 import com.hikari.app.sports.SportsFollows
 import com.hikari.app.sports.SportsRepository
 import com.hikari.app.sports.SportsReplays
 import com.hikari.app.sports.SportsRows
 import com.hikari.app.sports.SportsSettings
+import com.hikari.app.sports.SportsWatch
 import com.hikari.app.sports.TeamInfo
 import com.hikari.app.ui.navigation.LocalTaskbarInset
 import kotlinx.coroutines.delay
@@ -117,10 +120,11 @@ import kotlinx.coroutines.withTimeoutOrNull
 import android.text.format.DateFormat
 import java.util.Locale
 
-/** The four pages of the Sports hub. */
+/** The pages of the Sports hub. */
 private enum class SportsTab(val title: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
     MINE("My Sports", Icons.Filled.Favorite),
     ALL("All Events", Icons.Filled.Sports),
+    LIVE("Live", Icons.Filled.Tv),
     SEARCH("Search", Icons.Filled.Search),
     FOLLOWING("Following", Icons.Filled.Star),
     REPLAYS("Replays", Icons.Filled.Replay),
@@ -148,6 +152,7 @@ fun SportsScreen(nav: androidx.navigation.NavHostController) {
     val matches by SportsRepository.matches.collectAsState()
     val channels by SportsRepository.channels.collectAsState()
     val providers by app.providers.providers.collectAsState()
+    val addonEvents by SportsAddons.events.collectAsState()
 
     var tab by rememberSaveable { mutableIntStateOf(if (follows.isEmpty) SportsTab.ALL.ordinal else SportsTab.MINE.ordinal) }
     var showSettings by remember { mutableStateOf(false) }
@@ -188,6 +193,15 @@ fun SportsScreen(nav: androidx.navigation.NavHostController) {
             showPickTeams = false
         }
     }
+    LaunchedEffect(tab, providers) {
+        // The add-on guide is the one part of Sports that lives on a network
+        // the score feeds do not own: read it only when its tab is opened, and
+        // let it reuse its three-minute cache on a quick return. Search also
+        // includes add-on events, so it asks for the same cached load.
+        if (SportsTab.entries[tab] == SportsTab.LIVE || SportsTab.entries[tab] == SportsTab.SEARCH) {
+            SportsAddons.load(providers)
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         // ---- header
@@ -205,6 +219,7 @@ fun SportsScreen(nav: androidx.navigation.NavHostController) {
             IconButton(onClick = {
                 SportsRepository.refreshNow()
                 SportsRepository.ensureChannels(context, force = true)
+                scope.launch { SportsAddons.load(providers, force = true) }
             }) {
                 Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
             }
@@ -212,7 +227,12 @@ fun SportsScreen(nav: androidx.navigation.NavHostController) {
                 Icon(Icons.Filled.Tune, contentDescription = "Sports settings")
             }
         }
-        TabRow(selectedTabIndex = tab, containerColor = Color.Transparent) {
+        ScrollableTabRow(
+            selectedTabIndex = tab,
+            containerColor = Color.Transparent,
+            edgePadding = 12.dp,
+            divider = {},
+        ) {
             SportsTab.entries.forEachIndexed { index, t ->
                 Tab(
                     selected = tab == index,
@@ -264,8 +284,18 @@ fun SportsScreen(nav: androidx.navigation.NavHostController) {
                     use24h = use24h,
                     onOpenGame = { nav.navigate("sports-game:${android.net.Uri.encode(it.id)}") },
                 )
+                SportsTab.LIVE -> LiveSportsTab(
+                    nav = nav,
+                    channels = channels,
+                    now = now,
+                    use24h = use24h,
+                    onRefresh = { scope.launch { SportsAddons.load(providers, force = true) } },
+                )
                 SportsTab.SEARCH -> SportsSearchTab(
                     events = events,
+                    addons = addonEvents,
+                    channels = channels,
+                    use24h = use24h,
                     onOpenGame = { nav.navigate("sports-game:${android.net.Uri.encode(it.id)}") },
                     onOpenLeague = { nav.navigate("sports-league:${android.net.Uri.encode(it.id)}") },
                 )
@@ -321,6 +351,7 @@ private fun MySportsTab(
         )
         return
     }
+    val standings by SportsRepository.standings.collectAsState()
     val page = remember(events, follows, now / 60_000) {
         SportsRows.build(events, follows, now) { ev, f ->
             f.leagues.isNotEmpty() || f.teams.isNotEmpty() || f.words.isNotEmpty()
@@ -353,7 +384,7 @@ private fun MySportsTab(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        val table = SportsRepository.standings.collectAsState().value
+                        val table = standings
                         row.team?.let { ft ->
                             val view = table[ft.leagueId]
                             val table0 = view?.tables?.firstOrNull()
@@ -657,15 +688,538 @@ private fun GameListRow(
     }
 }
 
+// ------------------------------------------------------------------ Live add-ons
+
+/**
+ * The live / upcoming events installed SPORTS ADD-ONS publish (the reference
+ * TV app's sports-guide half, wired to Hikari's provider contract). The score
+ * feeds above answer "what is the score"; this page answers "where can I watch
+ * it" with the add-on's own live catalog and its own `/stream` resource.
+ *
+ * It deliberately sits beside the ESPN hub rather than merging into it: the
+ * score feed has leagues and teams, an add-on row has a channel-like event title
+ * and no score, and pretending they are the same object is how duplicate cards
+ * and dead ends appear. A finished/add-on stream is still one tap from the
+ * player, and the existing per-game "Watch on" search continues to cover every
+ * other installed extension.
+ */
+@Composable
+private fun LiveSportsTab(
+    nav: androidx.navigation.NavHostController,
+    channels: List<IptvChannel>,
+    now: Long,
+    use24h: Boolean,
+    onRefresh: () -> Unit,
+) {
+    val events by SportsAddons.events.collectAsState()
+    val loading by SportsAddons.loading.collectAsState()
+    val problem by SportsAddons.problem.collectAsState()
+    val scanned by SportsAddons.scannedAddons.collectAsState()
+    var filter by rememberSaveable { mutableStateOf<String?>(null) }
+    var selected by remember { mutableStateOf<SportsAddons.Event?>(null) }
+
+    // Live catalogs go stale while the page stays open: refresh every couple of
+    // minutes so a finished match stops saying LIVE and a new one appears.
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(150_000L)
+            onRefresh()
+        }
+    }
+
+    val sports = remember(events) {
+        events.mapNotNull { it.sport }.distinct().sortedBy { it.ordinal }
+    }
+    val shown = remember(events, filter, now / 60_000) {
+        val list = if (filter == null) events else events.filter { it.sport?.name == filter }
+        list.sortedWith(compareBy<SportsAddons.Event> { it.sortKey(now) }.thenBy { it.title })
+    }
+    val live = remember(shown, now / 60_000) { shown.filter { it.isLiveNow(now) } }
+    val later = remember(shown, now / 60_000) { shown.filterNot { it.isLiveNow(now) } }
+
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Live sports",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    if (scanned.isEmpty()) "From your installed sports add-ons"
+                    else scanned.joinToString(" · ") + " · ${events.size} event${if (events.size == 1) "" else "s"}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (loading) {
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(6.dp))
+            }
+            IconButton(onClick = onRefresh) {
+                Icon(Icons.Filled.Refresh, contentDescription = "Refresh sports add-ons")
+            }
+        }
+
+        if (sports.size > 1) {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                item {
+                    FilterChip(
+                        selected = filter == null,
+                        onClick = { filter = null },
+                        label = { Text("All") },
+                    )
+                }
+                items(sports, key = { it.name }) { sport ->
+                    FilterChip(
+                        selected = filter == sport.name,
+                        onClick = { filter = sport.name },
+                        label = { Text("${sport.icon} ${sport.label}") },
+                    )
+                }
+            }
+        }
+
+        problem?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+        }
+
+        when {
+            loading && events.isEmpty() -> {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator()
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            "Reading your sports add-ons…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            events.isEmpty() -> {
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Icon(
+                        Icons.Filled.Tv,
+                        contentDescription = null,
+                        modifier = Modifier.size(56.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        if (scanned.isEmpty()) "No sports add-ons found" else "No live events right now",
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        if (scanned.isEmpty()) {
+                            "Install a sports live TV add-on from Extensions. Hikari reads its event " +
+                                "lists and plays its own streams — no second app."
+                        } else {
+                            "Your add-ons answered with no live or upcoming events this time. " +
+                                "Refresh in a minute, or use All Events for the score feeds."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                    if (scanned.isEmpty()) {
+                        Spacer(Modifier.height(14.dp))
+                        TextButton(onClick = { nav.navigate(com.hikari.app.ui.navigation.Routes.EXTENSIONS) }) {
+                            Text("Open Extensions")
+                        }
+                    }
+                }
+            }
+            else -> {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (live.isNotEmpty()) {
+                        item(key = "live-title") {
+                            LiveSectionTitle("Live now", live.size, true)
+                        }
+                        items(live, key = { "live:${it.key}" }) { event ->
+                            AddonEventCard(event, now, use24h) { selected = event }
+                        }
+                    }
+                    if (later.isNotEmpty()) {
+                        item(key = "later-title") {
+                            LiveSectionTitle("Upcoming & on demand", later.size, false)
+                        }
+                        items(later, key = { "event:${it.key}" }) { event ->
+                            AddonEventCard(event, now, use24h) { selected = event }
+                        }
+                    }
+                    item { Spacer(Modifier.height(12.dp)) }
+                }
+            }
+        }
+    }
+
+    selected?.let { event ->
+        AddonEventDialog(
+            event = event,
+            channels = channels,
+            use24h = use24h,
+            onDismiss = { selected = null },
+        )
+    }
+}
+
+@Composable
+private fun LiveSectionTitle(title: String, count: Int, live: Boolean) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+    ) {
+        if (live) {
+            Box(Modifier.size(7.dp).clip(CircleShape).background(MaterialTheme.colorScheme.error))
+            Spacer(Modifier.width(6.dp))
+        }
+        Text(
+            title,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = if (live) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            count.toString(),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun AddonEventCard(
+    event: SportsAddons.Event,
+    now: Long,
+    use24h: Boolean,
+    onClick: () -> Unit,
+) {
+    val live = event.isLiveNow(now)
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (live) {
+                MaterialTheme.colorScheme.error.copy(alpha = 0.10f)
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+            },
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Box(
+                Modifier
+                    .width(126.dp)
+                    .height(71.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFF17171C)),
+            ) {
+                if (!event.artwork.isNullOrBlank()) {
+                    AsyncImage(
+                        model = event.artwork,
+                        contentDescription = event.title,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(event.sport?.icon ?: "🏟️", fontSize = 26.sp)
+                    }
+                }
+                Box(
+                    Modifier
+                        .align(Alignment.TopStart)
+                        .padding(5.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (live) Color(0xDDD32F2F) else Color(0xCC000000))
+                        .padding(horizontal = 5.dp, vertical = 2.dp),
+                ) {
+                    Text(
+                        if (live) "LIVE" else addonEventTime(event, use24h),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White,
+                        fontWeight = if (live) FontWeight.Bold else FontWeight.Normal,
+                        maxLines = 1,
+                    )
+                }
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    event.title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    listOfNotNull(
+                        event.league,
+                        event.sport?.label,
+                        event.providerName,
+                    ).distinct().joinToString(" · "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    if (live) "On now · ${event.catalogName}" else addonEventTime(event, use24h),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (live) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Icon(
+                Icons.Filled.PlayArrow,
+                contentDescription = "Watch",
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
+/** "Sat 15 Nov · 19:30" in the phone's own clock convention. */
+private fun addonEventTime(event: SportsAddons.Event, use24h: Boolean): String {
+    val start = event.startMs ?: return "On now"
+    return "${SportsDates.shortDayLabel(start)} · ${startTime(start, use24h)}"
+}
+
+@Composable
+private fun AddonEventDialog(
+    event: SportsAddons.Event,
+    channels: List<IptvChannel>,
+    use24h: Boolean,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    var streams by remember(event.key) { mutableStateOf<List<com.hikari.app.data.StreamSource>>(emptyList()) }
+    var loading by remember(event.key) { mutableStateOf(true) }
+    var reload by remember(event.key) { mutableIntStateOf(0) }
+    var iptv by remember(event.key) { mutableStateOf<List<IptvChannel>>(emptyList()) }
+
+    LaunchedEffect(event.key, channels) {
+        // Normalizing a 50k-channel playlist is real work; keep it off the
+        // main thread so opening the sheet never freezes the list behind it.
+        iptv = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            SportsAddons.channelsFor(event, channels)
+        }
+    }
+    LaunchedEffect(event.key, reload) {
+        loading = true
+        streams = SportsAddons.streams(event)
+        loading = false
+    }
+    val reason = com.hikari.app.providers.StremioAddon.streamErrors[event.providerId]
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(event.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        },
+        text = {
+            Column(
+                modifier = Modifier.heightIn(max = 430.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                event.artwork?.takeIf { it.isNotBlank() }?.let { image ->
+                    AsyncImage(
+                        model = image,
+                        contentDescription = event.title,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(140.dp)
+                            .clip(RoundedCornerShape(10.dp)),
+                        contentScale = ContentScale.Crop,
+                    )
+                }
+                Text(
+                    listOfNotNull(
+                        event.sport?.label,
+                        event.league,
+                        event.catalogName,
+                        event.providerName,
+                    ).distinct().joinToString(" · "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    if (event.isLiveNow()) "LIVE NOW" else addonEventTime(event, use24h),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (event.isLiveNow()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                )
+                event.description?.takeIf { it.isNotBlank() }?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 5,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (iptv.isNotEmpty()) {
+                    HorizontalDivider()
+                    Text(
+                        "On your channels",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    iptv.forEach { channel ->
+                        TextButton(
+                            onClick = {
+                                playIptvChannel(context, channel)
+                                onDismiss()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                if (!channel.artwork.isNullOrBlank()) {
+                                    AsyncImage(
+                                        model = channel.artwork,
+                                        contentDescription = null,
+                                        modifier = Modifier.width(44.dp).height(26.dp),
+                                        contentScale = ContentScale.Fit,
+                                    )
+                                }
+                                Text(
+                                    channel.name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Icon(
+                                    Icons.Filled.PlayArrow,
+                                    contentDescription = "Play",
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    }
+                }
+                HorizontalDivider()
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (iptv.isEmpty()) "Streams" else "From ${event.providerName}",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (loading) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    } else {
+                        TextButton(onClick = { reload++ }) { Text("Retry") }
+                    }
+                }
+                if (loading) {
+                    Text(
+                        "Asking ${event.providerName} for this event's streams…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else if (streams.isEmpty()) {
+                    Text(
+                        "This add-on returned no playable stream for the event." +
+                            (reason?.takeIf { it.isNotBlank() }?.let { "\n$it" } ?: ""),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    streams.forEach { source ->
+                        TextButton(
+                            onClick = {
+                                SportsWatch.playSource(
+                                    context = context,
+                                    title = event.title,
+                                    poster = event.artwork,
+                                    providerLabel = event.providerName,
+                                    sources = streams,
+                                    selected = source,
+                                )
+                                onDismiss()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(Modifier.fillMaxWidth()) {
+                                Text(
+                                    source.name.ifBlank { "Stream" },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                val details = listOf(source.details, source.providerName)
+                                    .filter { it.isNotBlank() }
+                                    .distinct()
+                                    .joinToString(" · ")
+                                if (details.isNotBlank()) {
+                                    Text(
+                                        details,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        },
+    )
+}
+
 // ------------------------------------------------------------------ Search
 
 @Composable
 private fun SportsSearchTab(
     events: List<SportsEvent>,
+    addons: List<SportsAddons.Event>,
+    channels: List<IptvChannel>,
+    use24h: Boolean,
     onOpenGame: (SportsEvent) -> Unit,
     onOpenLeague: (League) -> Unit,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
+    var addonSelected by remember { mutableStateOf<SportsAddons.Event?>(null) }
     val q = SportsCatalog.norm(query)
     val leagues = remember(q) {
         if (q.isBlank()) emptyList()
@@ -681,6 +1235,15 @@ private fun SportsSearchTab(
                 SportsCatalog.norm(leagueName).contains(q) ||
                 listOfNotNull(ev.away, ev.home).any { SportsCatalog.norm(it.team.name).contains(q) || SportsCatalog.norm(it.team.fullName).contains(q) }
         }.take(40)
+    }
+    val addonMatched = remember(q, addons) {
+        if (q.isBlank()) emptyList()
+        else addons.filter { ev ->
+            SportsCatalog.norm(ev.title).contains(q) ||
+                SportsCatalog.norm(ev.league.orEmpty()).contains(q) ||
+                SportsCatalog.norm(ev.providerName).contains(q) ||
+                SportsCatalog.norm(ev.sport?.label.orEmpty()).contains(q)
+        }.take(20)
     }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         OutlinedTextField(
@@ -741,7 +1304,60 @@ private fun SportsSearchTab(
                     }
                 }
             }
+            if (addonMatched.isNotEmpty()) {
+                item {
+                    Text(
+                        "Sports add-ons",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+                items(addonMatched, key = { "a:${it.key}" }) { ev ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { addonSelected = ev }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        if (!ev.artwork.isNullOrBlank()) {
+                            AsyncImage(
+                                model = ev.artwork,
+                                contentDescription = null,
+                                modifier = Modifier.width(54.dp).height(31.dp).clip(RoundedCornerShape(5.dp)),
+                                contentScale = ContentScale.Crop,
+                            )
+                        }
+                        Column(Modifier.weight(1f)) {
+                            Text(ev.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                listOfNotNull(ev.league, ev.sport?.label, ev.providerName)
+                                    .distinct().joinToString(" · "),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Icon(
+                            Icons.Filled.PlayArrow,
+                            contentDescription = "Watch",
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+            }
         }
+    }
+    addonSelected?.let { event ->
+        AddonEventDialog(
+            event = event,
+            channels = channels,
+            use24h = use24h,
+            onDismiss = { addonSelected = null },
+        )
     }
 }
 

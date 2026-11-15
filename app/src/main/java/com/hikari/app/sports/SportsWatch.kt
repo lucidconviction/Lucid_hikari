@@ -234,8 +234,31 @@ object SportsWatch {
      * usual fallbacks.
      */
     fun play(context: Context, link: StreamLink) {
-        val ordered = listOf(link.selected) +
-            link.sources.filterNot { it.url == link.selected.url }
+        playSource(
+            context = context,
+            title = link.title,
+            poster = link.poster,
+            providerLabel = link.provider,
+            sources = link.sources,
+            selected = link.selected,
+        )
+    }
+
+    /**
+     * The one playback hand-off used by "Watch on" and the sports add-on
+     * guide. Every field the player reads is carried across: dropping
+     * [StreamSource.infoHash] / [StreamSource.fileIdx] / trackers here used to
+     * turn every torrent row into an unplayable empty URL.
+     */
+    fun playSource(
+        context: Context,
+        title: String,
+        poster: String?,
+        providerLabel: String,
+        sources: List<StreamSource>,
+        selected: StreamSource,
+    ) {
+        val ordered = listOf(selected) + sources.filterNot { it.identityKey() == selected.identityKey() }
         if (ordered.isEmpty()) return
         val payload = JSONArray().apply {
             ordered.forEach { source ->
@@ -247,22 +270,39 @@ object SportsWatch {
                         .put("isM3u8", source.isM3u8)
                         .put("isMpd", source.isMpd)
                         .put("isTorrent", source.isTorrent)
-                        .put("provider", source.provider)
+                        .put("infoHash", source.infoHash.orEmpty())
+                        .put("fileIdx", source.fileIdx ?: -1)
+                        .put("trackers", JSONArray(source.trackers))
+                        .put("subtitles", JSONArray().apply {
+                            source.subtitles.forEach { sub ->
+                                put(JSONObject().put("lang", sub.lang).put("url", sub.url))
+                            }
+                        })
+                        .put("torrentFileHint", source.torrentFileHint.orEmpty())
+                        .put("torrentFileSize", source.torrentFileSize)
+                        .put("provider", source.provider.ifBlank { providerLabel })
                         .put("providerId", source.providerId)
-                        .put("providerName", source.providerName)
+                        .put("providerName", source.providerName.ifBlank { providerLabel })
                         .put("details", source.details),
                 )
             }
         }.toString()
         val intent = Intent(context, PlayerActivity::class.java).apply {
-            putExtra("title", link.title)
+            putExtra("title", title)
             putExtra("sources", payload)
             putExtra("askServer", false)
-            putExtra("histProviderId", link.selected.providerId)
-            putExtra("histTitle", link.title)
-            link.poster?.takeIf { it.isNotBlank() }?.let { putExtra("histPoster", it) }
+            putExtra("histProviderId", selected.providerId.ifBlank { linkProviderId(providerLabel) })
+            putExtra("histTitle", title)
+            poster?.takeIf { it.isNotBlank() }?.let { putExtra("histPoster", it) }
             if (context !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         runCatching { context.startActivity(intent) }
     }
+
+    /** The player keys its history row on the provider id; for an add-on row
+     *  without one, a stable label is better than an empty key. */
+    private fun linkProviderId(label: String): String =
+        ("sports-" + label.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-'))
+            .trimEnd('-')
+            .ifBlank { "sports" }
 }

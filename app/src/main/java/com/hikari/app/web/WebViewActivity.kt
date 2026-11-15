@@ -2,21 +2,26 @@ package com.hikari.app.web
 
 import com.hikari.app.i18n.I18n
 import android.app.AlertDialog
+import android.app.DownloadManager
 import android.widget.Button
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.Message
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.Window
 import android.webkit.CookieManager
 import android.webkit.RenderProcessGoneDetail
+import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -266,6 +271,36 @@ class WebViewActivity : ComponentActivity() {
     // on every navigation), so the user never stares at an infinite spinner.
     private var autoLaunched = false
 
+    /**
+     * A URL the user just approved with "Allow once" (a popup or a redirect
+     * protection dialog). Both navigation gates honour it for a short window:
+     * without this, the dialog's own `loadUrl` was immediately re-cancelled by
+     * the other gate — the exact "I tapped Allow once and nothing opened"
+     * behaviour. It never overrides the donation guard.
+     */
+    @Volatile private var allowedOnceUrl: String? = null
+    @Volatile private var allowedOnceAt = 0L
+    private fun allowOnce(url: String) {
+        allowedOnceUrl = url
+        allowedOnceAt = SystemClock.elapsedRealtime()
+    }
+    private fun isOneShotAllowed(url: String?): Boolean {
+        val target = allowedOnceUrl ?: return false
+        if (url == null || url != target || SystemClock.elapsedRealtime() - allowedOnceAt > 20_000L) {
+            if (SystemClock.elapsedRealtime() - allowedOnceAt > 20_000L) allowedOnceUrl = null
+            return false
+        }
+        return true
+    }
+
+    /** Host of the page currently shown, cached so the per-request ad checks do
+     *  not parse a URI for every image, script and segment. */
+    @Volatile private var pageHostCache: String? = null
+
+    /** Per-session "Request desktop site" choice. The default UA comes from
+     *  Settings; this is the one-tap override browsers put in their menu. */
+    @Volatile private var desktopMode = false
+
     // True while any <video> on the page is actively playing (kept fresh by the
     // periodic scan). Popups opened while a video is playing are ads — players
     // pop them on click — so they're dropped instead of replacing the video.
@@ -377,22 +412,60 @@ class WebViewActivity : ComponentActivity() {
     }
 
     /** Called when this activity is first created — loads the active tab's URL. */
-    private fun restoreActiveTab() {
+    private fun restoreActiveTab(recreated: Boolean = false) {
+        // Temporary views (Cloudflare verification, an add-on's configuration
+        // page) are not browsing sessions: adding them to the tab list put a
+        // "just a moment" page in the user's Web Apps tab strip forever.
+        if (verifyHost != null || autoCloseWhenCloudflarePassed || addonConfig) {
+            loadTabs()
+            return
+        }
         loadTabs()
-        if (openTabs.isEmpty()) return
+        if (openTabs.isEmpty()) {
+            openTabs.add(Tab(startUrl, pageTitle))
+            activeTabIndex = 0
+            saveTabs()
+            pageUrl = startUrl
+            return
+        }
         // If the start URL from the intent is different from any saved tab, push
-        // the intent URL as a new tab so the saved session is not lost.
-        if (!openTabs.any { it.url == startUrl }) {
+        // the intent URL as a new tab so the saved session is not lost. On a
+        // recreation (rotation/process restore) the active tab has already moved
+        // beyond the original start URL, so adding it again would duplicate the
+        // tab the user was reading.
+        val exact = openTabs.indexOfFirst { it.url == startUrl }
+        if (exact >= 0) {
+            activeTabIndex = exact
+        } else if (!recreated) {
             openTabs.add(Tab(startUrl, pageTitle))
             activeTabIndex = openTabs.size - 1
             saveTabs()
         } else {
-            activeTabIndex = openTabs.indexOfFirst { it.url == startUrl }
-                .takeIf { it >= 0 } ?: 0
+            activeTabIndex = activeTabIndex.coerceIn(0, openTabs.lastIndex)
         }
         val t = openTabs[activeTabIndex]
         pageUrl = t.url
         pageTitle = t.title
+    }
+
+    /**
+     * Keeps the active tab in step with the page the user is actually on: its
+     * URL and title are what the tab grid shows and what the next launch
+     * restores. Temporary verification/config views are excluded.
+     */
+    private fun noteVisited(url: String?, title: String? = null) {
+        if (verifyHost != null || autoCloseWhenCloudflarePassed || addonConfig) return
+        val index = activeTabIndex
+        if (index !in openTabs.indices) return
+        val old = openTabs[index]
+        val newUrl = url?.takeIf {
+            it.startsWith("http://", true) || it.startsWith("https://", true)
+        } ?: old.url
+        val newTitle = title?.takeIf { it.isNotBlank() } ?: old.title
+        if (newUrl == old.url && newTitle == old.title) return
+        openTabs[index] = old.copy(url = newUrl, title = newTitle)
+        if (newTitle != pageTitle) pageTitle = newTitle
+        saveTabs()
     }
 
     // ---- Save current page as a Website -----------------------------------
@@ -624,6 +697,7 @@ class WebViewActivity : ComponentActivity() {
                 .create()
             dlg.setView(choiceBox(
                 I18n.t("Allow once") to {
+                    allowOnce(url)
                     runCatching { webView.loadUrl(url) }
                 },
                 (I18n.t("Always allow") + (if (!host.isNullOrBlank()) " $host" else "")) to {
@@ -707,6 +781,13 @@ class WebViewActivity : ComponentActivity() {
         window.requestFeature(Window.FEATURE_NO_TITLE)
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode =
+                    android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
+        window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         WindowInsetsControllerCompat(window, window.decorView).apply {
             // True fullscreen: no status bar, no nav bar (swipe to reveal).
             hide(WindowInsetsCompat.Type.systemBars())
@@ -787,6 +868,14 @@ class WebViewActivity : ComponentActivity() {
         // source to Hikari's ExoPlayer so playback actually starts.
         webView.addJavascriptInterface(HikariJsBridge(), "HikariBridge")
 
+        // Built-in host rules apply to the FIRST request, before the async store
+        // read below lands. They used to be empty for the first page, which is
+        // exactly the page a user notices ads on.
+        blockedDomains = AdBlocker.BUILTIN
+            .map { AdBlocker.normalizeDomain(it) }
+            .filter { it.isNotBlank() }
+            .toSet()
+
         // Top margin bar — gives the webview room at the top so the site's own
         // header / search bar is not covered. Houses the menu (⋯) and tabs pill
         // as fixed controls in the margin.
@@ -804,12 +893,13 @@ class WebViewActivity : ComponentActivity() {
             // Tab-count pill — left side of the bar. Tapping it opens the tab
             // grid dialog so the user can switch between or close open tabs.
             val tabPill = TextView(this@WebViewActivity).apply {
-                text = "\uD83D\uDD17" // paperclip = tabs
-                textSize = 16f
+                text = "Tabs"
+                textSize = 12f
                 setTextColor(Color.WHITE)
                 gravity = Gravity.CENTER
                 setBackgroundColor(0x661A1A1A.toInt())
-                setPadding(dp(10), dp(4), dp(10), dp(4))
+                setPadding(dp(12), dp(4), dp(12), dp(4))
+                contentDescription = I18n.t("Open tabs")
                 isClickable = true
                 setOnClickListener { showTabGrid() }
             }
@@ -818,12 +908,13 @@ class WebViewActivity : ComponentActivity() {
             // Small floating ⋯ pill — the only always-visible control. Tapping
             // it opens a small menu (Back/Forward/Reload/Player).
             val togglePill = TextView(this@WebViewActivity).apply {
-                text = I18n.t("\u22EF")
-                textSize = 18f
+                text = "\u22EE"
+                textSize = 20f
                 setTextColor(Color.WHITE)
                 gravity = Gravity.CENTER
                 setBackgroundColor(0x661A1A1A.toInt())
-                setPadding(dp(10), dp(4), dp(10), dp(4))
+                setPadding(dp(12), dp(2), dp(12), dp(6))
+                contentDescription = I18n.t("Browser menu")
                 isClickable = true
                 setOnClickListener { showMenu(it) }
             }
@@ -901,6 +992,8 @@ class WebViewActivity : ComponentActivity() {
         setContentView(rootView)
         contentFrame = rootView.getChildAt(2) as? FrameLayout
         mouseMode = com.hikari.app.tv.MouseMode.enabled
+        desktopMode = getSharedPreferences("webview_prefs", MODE_PRIVATE)
+            .getBoolean("desktop", false)
         if (mouseMode) showCursor(center = true)
 
         // Load the user's ad-blocking config (hosts lists are cached on disk;
@@ -939,10 +1032,16 @@ class WebViewActivity : ComponentActivity() {
             val enabled = app.store.adEnabled()
             if (enabled) {
                 val lists = app.store.adLists()
+                val week = 7 * 24 * 60 * 60 * 1000L
                 for (l in lists) {
-                    // Lazy first download of any list the user added but never
-                    // updated from Settings.
-                    if (AdBlocker.loadCached(l.url, app).isEmpty()) {
+                    // Lazy first download, and a weekly refresh after it. A
+                    // blocklist that is never opened in Settings otherwise
+                    // stays frozen at the day it was added — the "ad blocker
+                    // is on but the new ad networks still get through" report.
+                    val file = AdBlocker.cacheFile(app, l.url)
+                    val stale = !file.exists() || file.length() == 0L ||
+                        System.currentTimeMillis() - file.lastModified() > week
+                    if (stale) {
                         runCatching { AdBlocker.download(l.url, app) }
                     }
                 }
@@ -1005,7 +1104,7 @@ class WebViewActivity : ComponentActivity() {
             }
         })
 
-        restoreActiveTab()
+        restoreActiveTab(recreated = savedInstanceState != null)
         setupWebView(startUrl)
     }
 
@@ -1027,10 +1126,77 @@ class WebViewActivity : ComponentActivity() {
         ws.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         ws.cacheMode = WebSettings.LOAD_DEFAULT
         ws.offscreenPreRaster = true
+        // The WebView's own Safe Browsing check (default on modern Android;
+        // set explicitly so a vendor build cannot quietly disable it).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            runCatching { ws.safeBrowsingEnabled = true }
+        }
         // UA comes from Settings → Privacy & Browsing → WebView user agent: stock Android default
         // (passes Cloudflare's JS challenge) unless the user overrides with a
         // custom one. See HikariApp.effectiveWebViewUa.
         ws.userAgentString = (application as HikariApp).effectiveWebViewUa()
+        if (desktopMode) ws.userAgentString = DESKTOP_UA
+        // Download links (a file host's "Download" button, a player's "save
+        // video") used to do nothing at all: Android shows no browser chrome,
+        // so there was no download manager to catch them. Route them through
+        // the system DownloadManager with the page's cookies, referer and UA —
+        // the three things hotlink-protected file hosts require.
+        webView.setDownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
+            if (url.isBlank()) return@setDownloadListener
+            if (url.startsWith("blob:") || url.startsWith("data:")) {
+                Toast.makeText(
+                    this,
+                    I18n.t("This download is generated inside the page and can't be saved"),
+                    Toast.LENGTH_SHORT,
+                ).show()
+                return@setDownloadListener
+            }
+            if (!url.startsWith("http://") && !url.startsWith("https://")) {
+                handleExternalScheme(Uri.parse(url), gesture = true)
+                return@setDownloadListener
+            }
+            val name = runCatching {
+                URLUtil.guessFileName(url, contentDisposition, mimetype)
+            }.getOrDefault("download")
+            runCatching {
+                val request = DownloadManager.Request(Uri.parse(url)).apply {
+                    setTitle(name)
+                    setDescription(I18n.t("Downloaded by Lucid Hikari"))
+                    mimetype?.takeIf { it.isNotBlank() }?.let { setMimeType(it) }
+                    setNotificationVisibility(
+                        DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED,
+                    )
+                    addRequestHeader(
+                        "User-Agent",
+                        userAgent?.takeIf { it.isNotBlank() }
+                            ?: (application as HikariApp).effectiveWebViewUa(),
+                    )
+                    CookieManager.getInstance().getCookie(url)?.takeIf { it.isNotBlank() }?.let {
+                        addRequestHeader("Cookie", it)
+                    }
+                    pageUrl?.takeIf { it.isNotBlank() }?.let { addRequestHeader("Referer", it) }
+                    setAllowedOverMetered(true)
+                    setAllowedOverRoaming(true)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name)
+                    } else {
+                        // API 24-28 would need WRITE_EXTERNAL_STORAGE for the
+                        // public folder; the app's own external Download
+                        // directory needs no permission and is still reachable
+                        // from a file manager.
+                        setDestinationInExternalFilesDir(
+                            this@WebViewActivity,
+                            Environment.DIRECTORY_DOWNLOADS,
+                            name,
+                        )
+                    }
+                }
+                (getSystemService(android.content.Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
+                Toast.makeText(this, I18n.t("Download started") + " · $name", Toast.LENGTH_SHORT).show()
+            }.onFailure {
+                Toast.makeText(this, I18n.t("Couldn't start the download"), Toast.LENGTH_SHORT).show()
+            }
+        }
 
         // Cookies are the backbone of most streaming CDNs (session tokens) and
         // Cloudflare (cf_clearance). Accept them, accept THIRD-party ones (the
@@ -1072,6 +1238,18 @@ class WebViewActivity : ComponentActivity() {
                         finishWithManifest(install)
                         return true
                     }
+                }
+                // A non-web scheme (mailto:, tel:, market:, intent:, a TV
+                // provider's custom sign-in scheme) is not a page the WebView
+                // can render. Hand it to the system instead of showing
+                // "net::ERR_UNKNOWN_URL_SCHEME" over a dead end.
+                if (handleExternalScheme(request.url, request.hasGesture())) return true
+                // The user already chose "Allow once" for exactly this URL in
+                // the redirect/popup dialog. Let it through BOTH gates; the
+                // dialog's own loadUrl used to be cancelled by the sibling
+                // request check, which made "Allow once" a no-op.
+                if (request.isForMainFrame && isOneShotAllowed(request.url.toString())) {
+                    return false
                 }
                 // Video-verification mode (verifyAllowRedirects): the streaming
                 // site's redirect to the real video page is the whole point —
@@ -1142,6 +1320,13 @@ class WebViewActivity : ComponentActivity() {
                         "text/plain", "utf-8", ByteArrayInputStream(ByteArray(0))
                     )
                 }
+                // An explicit "Allow once" outranks the redirect/ad gates (the
+                // user just chose it), but never the donation guard above.
+                if (request.isForMainFrame && isOneShotAllowed(u)) return null
+                // The hls.js polyfill is loaded from these CDNs; a blocklist
+                // that happens to name a public CDN must not take the video
+                // engine's own dependency down with it.
+                if (isAppAssetHost(host)) return null
                 if (host.isNotBlank()) {
                     // Whitelist wins first — a site the user unblocked keeps
                     // all its subdomains usable.
@@ -1234,6 +1419,7 @@ class WebViewActivity : ComponentActivity() {
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 pageUrl = url
+                pageHostCache = runCatching { url?.let { java.net.URI(it).host?.lowercase() } }.getOrNull()
                 loadFailed = false
                 errorPanel?.visibility = View.GONE
                 // A new navigation invalidates the capture still queued for the
@@ -1249,6 +1435,11 @@ class WebViewActivity : ComponentActivity() {
                 // to the page it was made on (see [lastBlockedRedirectUrl]).
                 lastBlockedRedirectUrl = null
                 lastBlockedRedirectHost = null
+                // Same for "Block this ad site": it must never point at a popup
+                // from a page the user has already left.
+                lastPopupUrl = null
+                lastPopupHost = null
+                if (!autoCloseWhenCloudflarePassed && !addonConfig) noteVisited(url)
                 // Userscripts declaring @run-at document-start run before the
                 // page's own scripts.
                 if (UserscriptManager.isLoaded() && url != null) {
@@ -1256,14 +1447,27 @@ class WebViewActivity : ComponentActivity() {
                         runCatching { view?.evaluateJavascript(js, null) }
                     }
                 }
+                // Ad containers can be in the first paint; start hiding them
+                // now instead of waiting for onPageFinished. POPUP_GUARD_JS is
+                // idempotent and is also injected on finish in case the very
+                // first document was not ready here.
+                if (!autoCloseWhenCloudflarePassed && !addonConfig) {
+                    runCatching { view?.evaluateJavascript(POPUP_GUARD_JS, null) }
+                }
+                // A measured, sustained video is the only thing allowed to keep
+                // the screen awake; clear the stale flag from the last page.
+                setKeepScreenOn(false)
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 pageUrl = url
+                pageHostCache = runCatching { url?.let { java.net.URI(it).host?.lowercase() } }.getOrNull()
                 progressBar.visibility = View.GONE
                 // A failed load also finishes. Keep the retry panel up instead
                 // of letting the blank error document hide it.
                 if (loadFailed) return
+                noteVisited(url)
+                if (url != null && isOneShotAllowed(url)) allowedOnceUrl = null
                 // The popup relay child (if any) served its purpose — free it.
                 popupChild?.let { runCatching { it.destroy() } }
                 popupChild = null
@@ -1274,6 +1478,9 @@ class WebViewActivity : ComponentActivity() {
                 }
                 view?.evaluateJavascript(AD_CLEAN_JS, null)
                 view?.evaluateJavascript(PROMO_CLEAN_JS, null)
+                if (!autoCloseWhenCloudflarePassed && !addonConfig) {
+                    view?.evaluateJavascript(POPUP_GUARD_JS, null)
+                }
                 // The verification view exists only to pass a Cloudflare
                 // challenge — it must never offer to play or hand off video
                 // (the site page would just start its player + ads).
@@ -1302,7 +1509,9 @@ class WebViewActivity : ComponentActivity() {
                             for (u in extractUrls(res)) maybeAddVideo(u)
                         }
                         v.evaluateJavascript(VIDEO_PLAYING_JS) { res ->
-                            videoPlaying = res?.trim()?.trim('"') == "true"
+                            val playing = res?.trim()?.trim('"') == "true"
+                            videoPlaying = playing
+                            setKeepScreenOn(playing)
                         }
                         scanHandler.postDelayed(this, 2500)
                     }
@@ -1340,6 +1549,10 @@ class WebViewActivity : ComponentActivity() {
                     startActivity(Intent(intent).apply {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         putExtra("renderRestarts", renderRestarts)
+                        // Return to the page that crashed, not the one the
+                        // activity was first launched with.
+                        putExtra("url", pageUrl ?: startUrl)
+                        putExtra("title", pageTitle)
                     })
                 }
                 return true
@@ -1402,12 +1615,23 @@ class WebViewActivity : ComponentActivity() {
                     setBackgroundColor(0xFF000000.toInt())
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
-                    settings.userAgentString = (application as HikariApp).effectiveWebViewUa()
+                    settings.userAgentString =
+                        if (desktopMode) DESKTOP_UA
+                        else (application as HikariApp).effectiveWebViewUa()
                     webViewClient = object : WebViewClient() {
                         private var relayed = false
 
                         private fun relay(url: String?) {
                             if (relayed || url.isNullOrBlank()) return
+                            // An about:blank popup is the blank window an ad
+                            // script opens before writing its page into it.
+                            // Relaying the blank URL replaced the page the user
+                            // was watching with a white screen. Leave the popup
+                            // child alive: if the SAME window later navigates to
+                            // a real URL, that navigation is relayed normally.
+                            if (!addonConfig && (url == "about:blank" || url.startsWith("javascript:"))) {
+                                return
+                            }
                             relayed = true
                             runCatching {
                                 lastPopupUrl = url
@@ -1421,6 +1645,9 @@ class WebViewActivity : ComponentActivity() {
                                 addonInstallUrl(url)?.let { finishWithManifest(it) }
                                 return
                             }
+                            // A popup to a non-web scheme is a sign-in/app
+                            // hand-off, not a page to relay into this view.
+                            if (handleExternalScheme(Uri.parse(url), gesture = true)) return
                             // A popup to a donation page is an ad-style popup
                             // with a cause: never relayed into the main view.
                             if (PromoGuard.isDonationUrl(url)) {
@@ -1481,9 +1708,11 @@ class WebViewActivity : ComponentActivity() {
                                     (host != cur && !AdBlocker.matches(host, whitelistDomains) && !isSameSite(host, cur))
                                 ) {
                                     if (isPopupHostAllowed(host)) {
+                                        allowOnce(url)
                                         runOnUiThread { webView.loadUrl(url) }
                                     } else {
                                         askPopupPermission(url, host) { allowed ->
+                                            allowOnce(allowed)
                                             runOnUiThread { webView.loadUrl(allowed) }
                                         }
                                     }
@@ -1560,6 +1789,7 @@ class WebViewActivity : ComponentActivity() {
                         ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                     )
                 }
+                setKeepScreenOn(true)
                 hideSystemBars()
             }
 
@@ -1570,6 +1800,13 @@ class WebViewActivity : ComponentActivity() {
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
                 progressBar.progress = newProgress
                 progressBar.visibility = if (newProgress >= 100) View.GONE else View.VISIBLE
+            }
+
+            override fun onReceivedTitle(view: WebView?, title: String?) {
+                val clean = title?.trim().orEmpty()
+                if (clean.isBlank() || clean.startsWith("about:") || clean.startsWith("data:")) return
+                pageTitle = clean
+                noteVisited(view?.url ?: pageUrl, clean)
             }
         }
 
@@ -1599,6 +1836,7 @@ class WebViewActivity : ComponentActivity() {
         customView = null
         customViewCallback?.let { runCatching { it.onCustomViewHidden() } }
         customViewCallback = null
+        setKeepScreenOn(videoPlaying)
     }
 
     /**
@@ -1644,6 +1882,7 @@ class WebViewActivity : ComponentActivity() {
         menu.menu.add(0, 4, 0, "\u2302 Go to app home")
         menu.menu.add(0, 5, 0, "\u25B6 Open in player")
         menu.menu.add(0, 6, 0, "Open in browser")
+        menu.menu.add(0, 15, 4, if (desktopMode) "\uD83D\uDCF1 Mobile site" else "\uD83D\uDDA5 Desktop site")
         // The way out of a blocked redirect, without a trip to Settings. The
         // host of the main-frame navigation that was just refused (see
         // [rememberBlockedRedirect]) is added to Settings' own "Allowed redirect
@@ -1705,6 +1944,21 @@ class WebViewActivity : ComponentActivity() {
                 5 -> playVideo()
                 6 -> runCatching {
                     startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(pageUrl ?: webView.url)))
+                }
+                15 -> {
+                    desktopMode = !desktopMode
+                    getSharedPreferences("webview_prefs", MODE_PRIVATE).edit()
+                        .putBoolean("desktop", desktopMode).apply()
+                    webView.settings.userAgentString =
+                        if (desktopMode) DESKTOP_UA
+                        else (application as HikariApp).effectiveWebViewUa()
+                    webView.reload()
+                    Toast.makeText(
+                        this,
+                        if (desktopMode) I18n.t("Desktop site requested")
+                        else I18n.t("Mobile site requested"),
+                        Toast.LENGTH_SHORT,
+                    ).show()
                 }
                 7 -> enableElementBlocker()
                 8 -> undoLastBlock()
@@ -1784,11 +2038,13 @@ class WebViewActivity : ComponentActivity() {
                         notifyItemRemoved(position)
                         notifyItemRangeChanged(position, openTabs.size)
                     }
+                    gridHolder.close.contentDescription = I18n.t("Close tab")
                 }
                 override fun getItemCount() = openTabs.size
             }
             list.adapter = adapter
-            list.layoutManager = androidx.recyclerview.widget.GridLayoutManager(this, 2)
+            val columns = (resources.displayMetrics.widthPixels / dp(240)).coerceIn(2, 4)
+            list.layoutManager = androidx.recyclerview.widget.GridLayoutManager(this, columns)
         }
         dialog.show()
     }
@@ -2086,9 +2342,12 @@ class WebViewActivity : ComponentActivity() {
     }
 
     /** Host of the page currently shown (or being loaded). */
-    private fun currentPageHost(): String? = runCatching {
-        java.net.URI(pageUrl ?: webView.url).host
-    }.getOrNull()
+    private fun currentPageHost(): String? {
+        pageHostCache?.let { return it }
+        return runCatching {
+            java.net.URI(pageUrl ?: webView.url).host?.lowercase()
+        }.getOrNull()
+    }
 
     /** Same host or one being a subdomain of the other (registrable-domain-ish). */
     private fun isSameSite(host: String, current: String): Boolean =
@@ -2109,7 +2368,15 @@ class WebViewActivity : ComponentActivity() {
             host == "cloudflareinsights.com" || host.endsWith(".cloudflareinsights.com")
     }
 
-    /** In Cloudflare-verification mode ONLY the challenge may be shown: the
+    /** The public CDNs that serve the injected hls.js polyfill. Never ad-block
+     *  these: without hls.js an HLS-only site buffers forever even when every
+     *  ad was blocked correctly. */
+    private fun isAppAssetHost(host: String): Boolean {
+        val h = host.trim().trimEnd('.').lowercase()
+        return h == "cdn.jsdelivr.net" || h.endsWith(".jsdelivr.net") ||
+            h == "unpkg.com" || h.endsWith(".unpkg.com") ||
+            h == "cdnjs.cloudflare.com" || h.endsWith(".cdnjs.cloudflare.com")
+    }    /** In Cloudflare-verification mode ONLY the challenge may be shown: the
      *  site we started on plus Cloudflare's own challenge infra. Anything else
      *  (ad-hijack redirects, parked/redirect pages, trackers) is blocked —
      *  the auto-opened view must never land on a random site. */
@@ -2177,6 +2444,61 @@ class WebViewActivity : ComponentActivity() {
     private fun manifestUrlOf(url: String): String =
         if (url.substringBefore('?').endsWith("/manifest.json")) url
         else url.substringBefore('?').trimEnd('/') + "/manifest.json"
+
+    /**
+     * Sends a non-web URL to the system: mailto:, tel:, market:, intent: and
+     * the custom schemes OAuth/TV sign-in flows use. Returns true when the
+     * navigation was handled here (so the WebView must not attempt it).
+     */
+    private fun handleExternalScheme(uri: Uri, gesture: Boolean = true): Boolean {
+        val scheme = uri.scheme?.lowercase() ?: return false
+        if (scheme in setOf("http", "https", "about", "data", "blob", "javascript", "file", "content")) {
+            return false
+        }
+        if (verifyHost != null || autoCloseWhenCloudflarePassed) {
+            // A verification view exists only to show its challenge; opening an
+            // external app from it is never part of that job.
+            Toast.makeText(this, I18n.t("This link can't be opened here"), Toast.LENGTH_SHORT).show()
+            return true
+        }
+        // Only a real tap may launch another app from ordinary browsing. A
+        // script-triggered intent:// is a classic ad/install hijack; extension
+        // and add-on setup pages are exempt so their own login flows still
+        // work on a delayed redirect.
+        if (!gesture && providerId == null && !addonConfig) {
+            showBlockedToast(I18n.t("Blocked an automatic app launch"))
+            return true
+        }
+        val opened = runCatching {
+            val intent = if (scheme == "intent") {
+                Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME).apply {
+                    addCategory(Intent.CATEGORY_BROWSABLE)
+                }
+            } else {
+                Intent(Intent.ACTION_VIEW, uri)
+            }
+            val resolver = runCatching {
+                packageManager.resolveActivity(
+                    intent,
+                    android.content.pm.PackageManager.MATCH_DEFAULT_ONLY,
+                )
+            }.getOrNull()
+            if (resolver == null && scheme == "intent") {
+                // intent:// carries its own browser fallback; use it instead
+                // of dead-ending when the target app is not installed.
+                val fallback = intent.getStringExtra("browser_fallback_url")
+                if (!fallback.isNullOrBlank()) {
+                    webView.loadUrl(fallback)
+                    return true
+                }
+            }
+            startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }.isSuccess
+        if (!opened) {
+            Toast.makeText(this, I18n.t("No app can open this link"), Toast.LENGTH_SHORT).show()
+        }
+        return true
+    }
 
     /** The addon's config page handed back an install URL: give it to the caller
      *  (the Extensions screen installs/replaces the addon) and close. */
@@ -2266,6 +2588,16 @@ class WebViewActivity : ComponentActivity() {
         WindowInsetsControllerCompat(window, window.decorView).apply {
             hide(WindowInsetsCompat.Type.systemBars())
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+    }
+
+    /** Keep the display awake while the page is actually playing a video, and
+     *  release it the moment playback stops. */
+    private fun setKeepScreenOn(on: Boolean) {
+        if (on) {
+            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
 
@@ -2468,16 +2800,23 @@ class WebViewActivity : ComponentActivity() {
         @android.webkit.JavascriptInterface
         fun blockElement(selector: String) {
             safe("blockElement") {
-                if (selector.isBlank()) return@safe
+                // A page can call this bridge directly. Keep the persisted
+                // selector list bounded and reject control characters so a
+                // hostile page cannot fill storage or inject into the JS that
+                // re-applies the list.
+                val clean = selector.trim()
+                if (clean.isEmpty() || clean.length > 500) return@safe
+                if (clean.any { it == '\n' || it == '\r' || it == '\u0000' }) return@safe
+                if (blockedSelectors.size >= 300) return@safe
                 runOnUiThread {
                     safe("blockElement.ui") {
-                        blockedSelectors.add(selector)
+                        blockedSelectors.add(clean)
                         (applicationContext as HikariApp).elementBlocks = blockedSelectors.toList()
                         Toast.makeText(this@WebViewActivity, I18n.t("Element blocked"), Toast.LENGTH_SHORT)
                             .show()
                         lifecycleScope.launch(Dispatchers.IO) {
                             runCatching {
-                                (applicationContext as HikariApp).store.addElementBlock(selector)
+                                (applicationContext as HikariApp).store.addElementBlock(clean)
                             }
                         }
                     }
@@ -2519,7 +2858,9 @@ class WebViewActivity : ComponentActivity() {
         fun translate(id: String, textsJson: String) {
             safe("translate") {
                 val arr = runCatching { JSONArray(textsJson) }.getOrNull() ?: return@safe
-                val texts = (0 until arr.length()).map { arr.optString(it) }
+                val texts = (0 until minOf(arr.length(), 160)).map {
+                    arr.optString(it).take(2000)
+                }
                 if (texts.isEmpty()) return@safe
                 lifecycleScope.launch {
                     safe("translate.worker") {
@@ -2567,6 +2908,7 @@ class WebViewActivity : ComponentActivity() {
         // through its own element rather than the WebView's media APIs.
         runCatching { webView.onPause() }
         runCatching { popupChild?.onPause() }
+        setKeepScreenOn(false)
         runCatching {
             webView.evaluateJavascript(
                 "(function(){try{document.querySelectorAll('video,audio')" +
@@ -2579,6 +2921,7 @@ class WebViewActivity : ComponentActivity() {
     override fun onDestroy() {
         verifyHandler.removeCallbacksAndMessages(null)
         scanHandler.removeCallbacksAndMessages(null)
+        setKeepScreenOn(false)
         runCatching { popupChild?.destroy() }
         popupChild = null
         runCatching { CookieManager.getInstance().flush() }
@@ -2591,6 +2934,13 @@ class WebViewActivity : ComponentActivity() {
 
     companion object {
         private const val FILE_CHOOSER_REQUEST = 4001
+
+        /** A current desktop Chrome UA for the browser menu's "Desktop site".
+         *  Kept as a constant rather than built from the device because the
+         *  whole point is to stop looking like a phone. */
+        private const val DESKTOP_UA =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
 
         /** Verify polls (1.2s apart) with no challenge AND no hard block — the
          *  page loaded as normal content (e.g. the SVG-namespace page a URL
@@ -2609,15 +2959,42 @@ class WebViewActivity : ComponentActivity() {
         /** Hides ad containers. HIDING (not removing) keeps page scripts that
          *  query these elements working, and videos are never touched — the
          *  site's own player stays intact. */
+        private val POPUP_GUARD_JS = """
+            (function(){
+              if(window.__hikariPopupGuard)return;
+              var nativeOpen=window.open;
+              var lastTrust=0;
+              function mark(e){try{if(e&&e.isTrusted)lastTrust=Date.now();}catch(x){}}
+              ['pointerdown','mousedown','click','keydown','touchstart'].forEach(function(t){
+                try{document.addEventListener(t,mark,true);}catch(x){}
+              });
+              var AD=/(?:popads|popcash|propellerads|adsterra|onclickads|clickadu|exoclick|juicyads|trafficjunky|trafficstars|adcash|hilltop|bidvertiser|revcontent|mgid|taboola|outbrain|doubleclick|googlesyndication|adnxs|adform|rubicon|pubmatic|openx|tsyndicate|magsrv|realsrv|adspyglass|adf\.ly|linkvertise)/i;
+              window.open=function(url,name,features){
+                try{
+                  var u=String(url||'');
+                  if(Date.now()-lastTrust>5000)return null;
+                  if(AD.test(u))return null;
+                }catch(x){}
+                return nativeOpen.apply(window,arguments);
+              };
+              window.__hikariPopupGuard=true;
+            })();
+        """.trimIndent()
+
         private val AD_CLEAN_JS = """
             (function(){
+              if(window.__hikariAdClean)return;
+              window.__hikariAdClean=true;
               var SEL=[
-                '[id^="google_ads"]','.adsbygoogle','ins.adsbygoogle','[class*="adsense"]','[class*="advert"]','[id*="advert"]',
-                '[class*="ad-banner"]','[id*="ad-banner"]','div[data-ad]','[class*="sponsored"]','[class*="ad-placeholder"]',
+                '[id^="google_ads"]','.adsbygoogle','ins.adsbygoogle','[class*="adsense"]','[class*="advertisement"]','[class*="advertising"]','[class*="advert-"]','[class*="advert_"]','[class*="adverts"]','.advert','#advert','[id^="advert"]',
+                '[class*="ad-banner"]','[id*="ad-banner"]','div[data-ad]','ins[data-ad-client]','[data-ad-slot]','[data-ad-unit]',
+                '[class*="sponsored"]','[class*="ad-placeholder"]','[class*="advertorial"]',
                 'iframe[src*="doubleclick"]','iframe[src*="googlesyndication"]','iframe[src*="googleads"]',
                 'iframe[src*="advertising"]','iframe[src*="adserver"]','iframe[src*="2mdn"]',
-                '[class^="ad_"]','[id^="ad_"]','[class*="ad-pop"]','[class*="popup"]','[class*="popunder"]','[id*="popunder"]',
-                '[id*="popup"]','[class*="interstitial"]','[class*="overlay-ad"]','[id*="overlay-ad"]',
+                'iframe[id^="google_ads_iframe"]','[id^="div-gpt-ad"]',
+                '[class^="ad_"]','[id^="ad_"]','[class*="ad-pop"]','[class*="ad-popup"]','[id*="ad-popup"]',
+                '[class*="popunder"]','[id*="popunder"]','[class*="popup-ad"]','[id*="popup-ad"]',
+                '[class*="interstitial"]','[class*="overlay-ad"]','[id*="overlay-ad"]',
                 '[class*="ad-overlay"]','[id*="ad-overlay"]','[class*="ad_container"]','[id*="ad_container"]',
                 '[class*="ad-slot"]','[id*="ad-slot"]','[class*="ads-container"]','[id*="ads-container"]',
                 '[class*="close-ad"]','[id*="close-ad"]','[class*="closead"]','[id*="closead"]',
@@ -2932,9 +3309,9 @@ class WebViewActivity : ComponentActivity() {
                   s.onerror=function(){};
                   document.head.appendChild(s);
                 }
-                loadLib('https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js');
-                setTimeout(function(){loadLib('https://unpkg.com/hls.js@1.5.13/dist/hls.min.js');},3500);
-                setTimeout(function(){loadLib('https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.13/hls.min.js');},7000);
+                loadLib('https://cdn.jsdelivr.net/npm/hls.js@1.7.4/dist/hls.min.js');
+                setTimeout(function(){loadLib('https://unpkg.com/hls.js@1.7.4/dist/hls.min.js');},3500);
+                setTimeout(function(){loadLib('https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.7.4/hls.min.js');},7000);
               }
             })();
         """.trimIndent()

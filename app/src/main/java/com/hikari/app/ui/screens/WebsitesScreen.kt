@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.GridOn
@@ -46,6 +47,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -93,7 +95,7 @@ fun WebsitesScreen(nav: NavController) {
     var addUrl by remember { mutableStateOf("") }
     var addError by remember { mutableStateOf<String?>(null) }
     var removeTarget by remember { mutableStateOf<Site?>(null) }
-    var isGrid by remember { mutableStateOf(true) }
+    var isGrid by rememberSaveable { mutableStateOf(true) }
 
     /** A valid web address with a scheme, or null when it is not one. */
     fun normalizeSiteUrl(raw: String): String? {
@@ -258,7 +260,12 @@ fun WebsitesScreen(nav: NavController) {
                         },
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(Icons.Filled.Public, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = tr("Open in browser"),
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp),
+                    )
                 }
             }
             Spacer(Modifier.height(12.dp))
@@ -286,7 +293,7 @@ fun WebsitesScreen(nav: NavController) {
                         )
                         Spacer(Modifier.height(12.dp))
                         Text(
-                            tr("No web apps added yet — add one below to open any site ad-free."),
+                            tr("No web apps added yet — tap + to save any site and open it ad-free."),
                             color = Color.White.copy(alpha = 0.5f),
                             fontSize = 14.sp,
                         )
@@ -310,10 +317,10 @@ fun WebsitesScreen(nav: NavController) {
             } else {
                 if (isGrid) {
                     LazyVerticalGrid(
-                        columns = GridCells.Fixed(2),
+                        columns = GridCells.Adaptive(minSize = 160.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().weight(1f),
                     ) {
                         items(sites, key = { it.url }) { site ->
                             SiteGridCard(site = site, onOpen = {
@@ -327,7 +334,10 @@ fun WebsitesScreen(nav: NavController) {
                         }
                     }
                 } else {
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth().weight(1f),
+                    ) {
                         items(sites, key = { it.url }) { site ->
                             SiteCard(site = site, onOpen = {
                                 context.startActivity(

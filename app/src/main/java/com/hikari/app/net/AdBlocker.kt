@@ -13,33 +13,72 @@ import java.io.File
  *   0.0.0.0 ad.doubleclick.net
  *   127.0.0.1 example.com        # comment
  *   plain-domain.example.com
- * plus plain one-domain-per-line lists. Downloads are cached under
- * filesDir/adblock/ so the blocklist works offline; "Update lists" in
- * Settings refreshes them.
+ *   *.example.com                 # OISD's wildcard spelling
+ * plus plain one-domain-per-line lists. It ALSO accepts Adblock-syntax filter
+ * lists (EasyList, EasyPrivacy, AdGuard Base, uBlock filters) and extracts the
+ * domain-anchored rules (`||ads.example.com^`, including `$third-party` and
+ * other options) into the same domain set. That is the practical half of those
+ * lists: it catches rotating ad subdomains and whole ad networks without
+ * compiling tens of thousands of URL regexes on a phone.
+ *
+ * Downloads are cached under filesDir/adblock/ as a normalized one-domain-per-
+ * line list, so the blocklist works offline and the next page load parses a
+ * compact file instead of the multi-megabyte source. "Update lists" in
+ * Settings refreshes them; opening the browser also refreshes a list older
+ * than a week.
  */
 object AdBlocker {
 
+    /** A remote blocklist. The name is display-only; [url] may be a hosts file
+     *  or an Adblock filter list — [parseList] detects both. */
     data class HostList(val name: String, val url: String)
 
     val PRESETS = listOf(
+        // Modern, compact, actively maintained. OISD is the one to recommend:
+        // it is curated to "block. don't break." and is much smaller than the
+        // legacy mega-hosts files.
+        HostList("OISD Small", "https://small.oisd.nl/domainswild"),
+        HostList("EasyList", "https://easylist.to/easylist/easylist.txt"),
+        HostList("EasyPrivacy", "https://easylist.to/easylist/easyprivacy.txt"),
+        HostList("AdGuard Base", "https://raw.githubusercontent.com/AdguardTeam/FiltersRegistry/master/filters/filter_2_Base/filter.txt"),
         HostList("StevenBlack", "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"),
         HostList("AdAway", "https://adaway.org/hosts.txt"),
-        HostList("yoyo.org", "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=hosts&showintro=0&mimetype=plaintext"),
     )
 
     /** Built-in defaults — base protection even with no lists configured. */
     val BUILTIN = listOf(
+        // Google / DoubleClick / YouTube monetisation
         "doubleclick.net", "googleadservices.com", "googlesyndication.com", "googletagmanager.com",
-        "googletagservices.com", "google-analytics.com", "adservice.google.com", "2mdn.net", "adf.ly",
-        "taboola.com", "outbrain.com", "adnxs.com", "criteo.com", "criteo.net", "rubiconproject.com",
-        "moatads.com", "quantserve.com", "scorecardresearch.com", "amazon-adsystem.com", "adform.net",
-        "smartadserver.com", "openx.net", "pubmatic.com", "sovrn.com", "casalemedia.com", "lijit.com",
-        "adsafeprotected.com", "popads.net", "popunder.ru", "adsterra.com", "propellerads.com",
-        "adroll.com", "media.net", "yieldmo.com", "adcolony.com", "inmobi.com", "admarvel.com",
-        "flurry.com", "startappservice.com", "smartyads.com", "admob.com", "applovin.com",
-        "vungle.com", "chartboost.com", "mopub.com", "supersonicads.com", "revcontent.com",
-        "adpushup.com", "snigelweb.com", "adthrive.com", "ezoic.net", "mediavine.com",
-        "trafficjunky.net", "exoclick.com", "juicyads.com",
+        "googletagservices.com", "google-analytics.com", "adservice.google.com", "2mdn.net",
+        "imasdk.googleapis.com", "pagead2.googlesyndication.com", "partner.googleadservices.com",
+        // Programmatic exchanges / SSPs
+        "adnxs.com", "rubiconproject.com", "pubmatic.com", "openx.net", "casalemedia.com",
+        "smartadserver.com", "sovrn.com", "lijit.com", "yieldmo.com", "media.net", "adform.net",
+        "adsafeprotected.com", "moatads.com", "doubleverify.com", "adsrvr.org", "bluekai.com",
+        "demdex.net", "krxd.net", "rlcdn.com", "tapad.com", "crwdcntrl.net", "agkn.com",
+        "mathtag.com", "exelator.com", "contextweb.com", "sharethrough.com", "teads.tv",
+        "spotxchange.com", "tremorhub.com", "3lift.com", "indexww.com", "33across.com",
+        "gumgum.com", "districtm.io", "smaato.net", "yieldlab.net", "adsafety.net",
+        "adkernel.com", "adhigh.net", "adotmob.com", "smartclip.net", "vidazoo.com",
+        "aniview.com", "primis.tech", "unruly.io", "connatix.com", "adpushup.com",
+        // Popunders / redirect gates / adult ad networks common on streaming sites
+        "popads.net", "popcash.net", "popunder.net", "popunder.ru", "onclickads.net",
+        "adsterra.com", "propellerads.com", "propeller-tracking.com", "adcash.com",
+        "exoclick.com", "juicyads.com", "trafficjunky.net", "trafficstars.com",
+        "tsyndicate.com", "magsrv.com", "realsrv.com", "adspyglass.com", "hilltopads.net",
+        "clickadu.com", "bidvertiser.com", "adxpansion.com",
+        // Native / content recommendation widgets
+        "taboola.com", "outbrain.com", "revcontent.com", "mgid.com", "zergnet.com",
+        "plista.com", "content.ad", "dable.io", "genieejapan.com",
+        // Mobile ad SDKs (pages embedding app-install units)
+        "adcolony.com", "inmobi.com", "admarvel.com", "flurry.com", "startappservice.com",
+        "smartyads.com", "admob.com", "applovin.com", "vungle.com", "chartboost.com",
+        "mopub.com", "supersonicads.com", "fyber.com", "unityads.unity3d.com",
+        // Analytics that only exist to profile ad clicks
+        "quantserve.com", "scorecardresearch.com", "amazon-adsystem.com", "adroll.com",
+        "criteo.com", "criteo.net", "snigelweb.com", "ezoic.net", "mediavine.com",
+        "trafficjunky.net", "adnium.com", "adnami.io", "adtelligent.com", "loopme.me",
+        "smaato.com", "vervegroupinc.com", "yieldlove.com", "stroeer.com", "xandr.com",
     )
 
     fun cacheDir(context: Context): File =
@@ -48,39 +87,130 @@ object AdBlocker {
     fun cacheFile(context: Context, url: String): File =
         File(cacheDir(context), url.hashCode().toLong().toString(16) + ".txt")
 
-    /** Parses a hosts file into a set of lowercase domains, ignoring comments,
-     *  blank lines, IPs and localhost entries. */
+    /**
+     * Parses one list into a set of lowercase domains. [parseList] decides
+     * whether the text is a hosts file, an Adblock filter list or both; a normal
+     * caller should use that rather than [parseHosts] directly.
+     */
     fun parseHosts(text: String): Set<String> {
         val out = HashSet<String>()
         for (line in text.lineSequence()) {
             val clean = line.substringBefore('#').trim()
-            if (clean.isEmpty()) continue
-            val parts = clean.split(Regex("\\s+"))
-            val host = when {
-                isIp(parts[0]) -> if (parts.size > 1) parts[1] else null
-                else -> parts[0]
-            } ?: continue
-            val h = host.trim().trimEnd('.').lowercase()
-            if (h.isEmpty() || h.length > 253 || !h.contains('.')) continue
-            if (h.startsWith("localhost") || h.endsWith(".local") || h.endsWith(".localdomain")) continue
-            if (h == "broadcasthost" || h == "ip6-localhost" || h == "ip6-loopback") continue
-            if (h.all { it.isLetterOrDigit() || it == '.' || it == '-' }) out.add(h)
+            if (clean.isEmpty() || clean.startsWith("!") || clean.startsWith("[")) continue
+            val parts = clean.split(WHITESPACE)
+            val candidate = when {
+                parts.size >= 2 && isIp(parts[0]) -> parts[1]
+                parts.size == 1 -> parts[0]
+                else -> continue
+            }
+            if (!addDomain(out, candidate)) continue
         }
         return out
     }
 
-    private fun isIp(s: String): Boolean = when (s) {
-        "0.0.0.0", "127.0.0.1", "::1", "255.255.255.255", "::ffff:0:0", "::0", "0.0.0.0,", "::" -> true
-        else -> s.startsWith("0.0.0.0 ") || s.startsWith("127.0.0.1 ") || s.startsWith("::ffff:")
+    /**
+     * Parses either a classic hosts/domain list or an Adblock filter list.
+     *
+     * Filter lists are reduced to their DOMAIN-ANCHORED rules. That is
+     * deliberately conservative: `||ads.example.com^$script,third-party` and
+     * `||ads.example.com^` both mean "this host serves ads", while
+     * `/ads/banner.js`, cosmetic rules (`##.ad`) and path-only rules stay out
+     * — the built-in URL patterns already cover the same-host cases, and
+     * turning every EasyList regex into a Kotlin regex on a phone would cost
+     * more memory than the video player itself.
+     */
+    fun parseList(text: String): Set<String> {
+        val looksAdblock = text.lineSequence().take(80).any { line ->
+            val t = line.trim()
+            t.startsWith("[Adblock") || t.startsWith("||")
+        }
+        if (!looksAdblock) return parseHosts(text)
+        val out = HashSet<String>()
+        for (line in text.lineSequence()) {
+            val t = line.trim()
+            if (t.isEmpty() || t.startsWith("!") || t.startsWith("[") ||
+                t.startsWith("#") || t.startsWith("@@")
+            ) {
+                continue
+            }
+            if (!t.startsWith("||")) {
+                // Some lists mix hosts lines into an Adblock file; keep those.
+                if (!t.contains("##") && !t.contains("#@#")) {
+                    val parts = t.split(WHITESPACE)
+                    if (parts.size == 1) addDomain(out, parts[0])
+                }
+                continue
+            }
+            var body = t.removePrefix("||")
+            val stop = body.indexOfFirst {
+                it == '^' || it == '$' || it == '/' || it == '?' || it == '#' || it == '|'
+            }
+            if (stop >= 0) body = body.substring(0, stop)
+            body = body.trim().trimEnd('.').trimStart('.')
+            if (body.isEmpty() || '*' in body || ':' in body) continue
+            addDomain(out, body)
+        }
+        // A few hosts-format lines may sit under the Adblock header too.
+        out += parseHosts(text)
+        return out
     }
 
-    /** Downloads [url], caches the raw text and returns the parsed domains. */
+    /** Normalizes and adds one host; false when it is not a usable domain. */
+    private fun addDomain(out: MutableSet<String>, raw: String): Boolean {
+        var host = raw.trim()
+            .removePrefix("0.0.0.0").removePrefix("127.0.0.1")
+            .trim()
+            .removePrefix("*.")
+            .removePrefix("||")
+            .substringBefore('^').substringBefore('$').substringBefore('/')
+            .substringBefore(':')
+            .trim().trimEnd('.').lowercase()
+        if (host.startsWith(".")) host = host.trimStart('.')
+        if (host.isEmpty() || host.length > 253 || !host.contains('.')) return false
+        if ('*' in host || ' ' in host || '\t' in host) return false
+        if (host.startsWith("localhost") || host.endsWith(".local") ||
+            host.endsWith(".localdomain") || host.endsWith(".lan")
+        ) {
+            return false
+        }
+        if (host in LOCAL_NAMES) return false
+        val tld = host.substringAfterLast('.')
+        if (tld.length < 2 || tld.all { it.isDigit() }) return false
+        if (!host.all { it.isLetterOrDigit() || it == '.' || it == '-' || it == '_' }) return false
+        if (".." in host) return false
+        return out.add(host)
+    }
+
+    private val IPV4 = Regex("^(\\d{1,3}\\.){3}\\d{1,3}$")
+    private val WHITESPACE = Regex("\\s+")
+    private val LOCAL_NAMES = setOf(
+        "localhost", "broadcasthost", "ip6-localhost", "ip6-loopback",
+        "ip6-allnodes", "ip6-allrouters", "0.0.0.0", "::1", "::", "255.255.255.255",
+    )
+
+    private fun isIp(s: String): Boolean =
+        s in LOCAL_NAMES || IPV4.matches(s) || (':' in s && s.count { it == ':' } >= 2)
+
+    /**
+     * Downloads [url], caches the PARSED domain list and returns the domains.
+     *
+     * The cache is written as one domain per line rather than the multi-megabyte
+     * source: EasyList is ~5 MB and AdGuard Base ~8 MB, and re-parsing either on
+     * every first page load would stall the WebView thread that asks for them.
+     * A failed download leaves the previous cache untouched.
+     */
     suspend fun download(url: String, context: Context): Set<String> {
-        val text = Http.fetchStringRobust(url).getOrDefault("")
+        val text = Http.fetchStringCapped(
+            url = url,
+            maxBytes = 12 * 1024 * 1024,
+            readTimeoutSec = 60,
+        ).getOrDefault("")
         if (text.isBlank()) return emptySet()
-        val domains = parseHosts(text)
+        val domains = parseList(text)
         if (domains.isNotEmpty()) {
-            runCatching { cacheFile(context, url).writeText(text) }
+            runCatching {
+                cacheFile(context, url).writeText(domains.sorted().joinToString("\n"))
+            }
         }
         return domains
     }
@@ -89,7 +219,7 @@ object AdBlocker {
     fun loadCached(url: String, context: Context): Set<String> {
         val f = cacheFile(context, url)
         if (!f.exists()) return emptySet()
-        return runCatching { parseHosts(f.readText()) }.getOrDefault(emptySet())
+        return runCatching { parseList(f.readText()) }.getOrDefault(emptySet())
     }
 
     /** (re)downloads every configured list, returning the combined domain set.
@@ -151,7 +281,7 @@ object AdBlocker {
         val dir = cacheDir(context)
         dir.listFiles()?.forEach { f ->
             if (f.name.endsWith(".txt")) {
-                runCatching { blocked.addAll(parseHosts(f.readText())) }
+                runCatching { blocked.addAll(parseList(f.readText())) }
             }
         }
         blocked.addAll(BUILTIN)
@@ -174,7 +304,8 @@ object AdBlocker {
     fun normalizeDomain(raw: String): String =
         raw.trim()
             .removePrefix("http://").removePrefix("https://")
-            .substringBefore('/').substringBefore('?')
+            .removePrefix("*.").removePrefix("||")
+            .substringBefore('^').substringBefore('/').substringBefore('?')
             .substringBefore('#').trim().trimEnd('.').lowercase()
 
     // ------------------------------------------------ URL-pattern blocking
@@ -218,7 +349,7 @@ object AdBlocker {
      *  same-host servings and rotating subdomains are caught too. */
     val BUILTIN_PATTERNS = listOf(
         // Popunder / popup delivery.
-        "||popads.net^", "||popcash.net^", "||popunder.net^",
+        "||popads.net^", "||popcash.net^", "||popunder.net^", "||onclickads.net^",
         "||adsterra.com^", "||propellerads.com^", "||propeller-tracking.com^",
         "||adcash.com^", "||exoclick.com^", "||trafficjunky.net^",
         "||juicyads.com^", "||adxpansion.com^", "||hilltopads.net^",
@@ -227,20 +358,32 @@ object AdBlocker {
         "||adnxs.com^", "||rubiconproject.com^", "||pubmatic.com^",
         "||doubleclick.net^", "||googlesyndication.com^",
         "||googleadservices.com^", "||amazon-adsystem.com^",
-        "||imasdk.googleapis.com^",
+        "||imasdk.googleapis.com^", "||adform.net^", "||smartadserver.com^",
+        "||adspyglass.com^", "||tsyndicate.com^", "||magsrv.com^",
+        "||realsrv.com^", "||adnium.com^", "||adnami.io^",
+        "||doubleverify.com^", "||adsafeprotected.com^", "||moatads.com^",
+        "||quantserve.com^", "||scorecardresearch.com^", "||adsrvr.org^",
         "/popunder", "/pop-under", "/popup-ad", "/popad.", "/pop.js",
         "/popunder.js", "/popup.js", "/popcash.js", "/pst.js",
+        "/push-notification.js", "/pushcrew.js",
         // Same-host ad scripts and redirect gates (hosts files never see these).
-        "/ads/banner", "/ads/pop", "/advertising/", "/adserver/",
+        "/ads/banner", "/ads/pop", "/ads.js", "/ads.min.js", "/ad.js",
+        "/adframe.", "/adserver/", "/advertising/", "/advert/",
         "/promo-redirect", "/redirect-ads", "/out.php?",
         // Video-player ad injection.
         "||vast.com^", "/vast.xml", "/vmap", "imasdk",
-        "/jwplayer-ads", "/video-ads/", "/preroll",
+        "/jwplayer-ads", "/video-ads/", "/preroll", "/midroll", "/adbreak",
+        "/videojs-contrib-ads", "/google.ima", "/ima3.js",
+        // Prebid / header-bidding wrappers used to fill ad slots.
+        "/prebid", "/gpt.js", "/googletag", "/pagead/", "/adsbygoogle",
         // Trackers that exist only to profile ad clicks.
         "||moatads.com^", "||scorecardresearch.com^", "||quantserve.com^",
         // Never break logins / payments / the video itself.
         "@@||accounts.google.com^", "@@||paypal.com^", "@@||stripe.com^",
+        "@@||paypalobjects.com^", "@@||stripe.network^",
         "@@||cloudflare.com^", "@@||challenges.cloudflare.com^",
+        "@@||gstatic.com^", "@@||www.gstatic.com^",
+        "@@||jsdelivr.net^", "@@||unpkg.com^",
     )
 
     private val compiledPatterns: List<PatternRule> by lazy {
