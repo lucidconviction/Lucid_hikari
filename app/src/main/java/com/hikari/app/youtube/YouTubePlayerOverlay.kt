@@ -53,7 +53,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -65,6 +67,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -117,6 +120,9 @@ private const val YT_LIKE_CONTROL = 9
 private const val YT_DISLIKE_CONTROL = 10
 private const val YT_NEXT_VIDEO_CONTROL = 11
 private const val YT_SEEK_CONTROL = 12
+
+/** An open side panel owns the remote: the ring behind it must not take focus. */
+private val LocalYtPanelOpen = compositionLocalOf { false }
 
 @Composable
 fun YouTubePlayerOverlay(
@@ -508,160 +514,162 @@ fun YouTubePlayerOverlay(
         )
 
         if (showControls) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(
-                                Color.Black.copy(alpha = 0.55f),
-                                Color.Transparent,
-                                Color.Black.copy(alpha = 0.78f),
+            CompositionLocalProvider(LocalYtPanelOpen provides (panel != null)) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    Color.Black.copy(alpha = 0.55f),
+                                    Color.Transparent,
+                                    Color.Black.copy(alpha = 0.78f),
+                                )
                             )
                         )
-                    )
-            )
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 48.dp, vertical = 28.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    YtControl(
-                        label = "Back",
-                        icon = Icons.AutoMirrored.Filled.ArrowBack,
-                        focused = controlIndex == YT_BACK_CONTROL,
-                        onClick = { activateControl(YT_BACK_CONTROL) },
-                    )
-                    Text(
-                        title.ifBlank { info?.title.orEmpty() },
-                        style = MaterialTheme.typography.titleLarge,
-                        color = Color.White,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    YtControl(
-                        label = null,
-                        icon = if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                        focused = controlIndex == YT_PLAY_CONTROL,
-                        modifier = Modifier.size(50.dp),
-                        onClick = { activateControl(YT_PLAY_CONTROL) },
-                    )
-                }
-
-                Spacer(Modifier.weight(1f))
-
-                notice?.let {
-                    Text(
-                        it,
-                        color = MaterialTheme.colorScheme.primary,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                }
-
-                Row(
+                )
+                Column(
                     Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(bottom = 10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(7.dp, Alignment.CenterHorizontally),
-                    verticalAlignment = Alignment.CenterVertically,
+                        .fillMaxSize()
+                        .padding(horizontal = 48.dp, vertical = 28.dp)
                 ) {
-                    YtControl(
-                        label = "Last",
-                        icon = Icons.Filled.SkipPrevious,
-                        focused = controlIndex == YT_LAST_VIDEO_CONTROL,
-                        busy = lastBusy,
-                        onClick = { activateControl(YT_LAST_VIDEO_CONTROL) },
-                    )
-                    YtControl(
-                        label = if (subscribed) "Subscribed" else "Subscribe",
-                        icon = if (subscribed) Icons.Filled.NotificationsActive else Icons.Filled.NotificationsNone,
-                        focused = controlIndex == YT_SUBSCRIBE_CONTROL,
-                        active = subscribed,
-                        onClick = { activateControl(YT_SUBSCRIBE_CONTROL) },
-                    )
-                    YtControl(
-                        label = "Watch later",
-                        icon = Icons.Filled.WatchLater,
-                        focused = controlIndex == YT_WATCH_LATER_CONTROL,
-                        selected = panel == YtPlayerPanel.SAVE,
-                        onClick = { activateControl(YT_WATCH_LATER_CONTROL) },
-                    )
-                    YtControl(
-                        label = if (quality <= 0) "Auto" else "${quality}p",
-                        icon = Icons.Filled.Tune,
-                        focused = controlIndex == YT_QUALITY_CONTROL,
-                        selected = panel == YtPlayerPanel.QUALITY,
-                        active = quality > 0,
-                        onClick = { activateControl(YT_QUALITY_CONTROL) },
-                    )
-                    YtControl(
-                        label = "Info",
-                        icon = Icons.Filled.Info,
-                        focused = controlIndex == YT_INFO_CONTROL,
-                        selected = panel == YtPlayerPanel.INFO,
-                        onClick = { activateControl(YT_INFO_CONTROL) },
-                    )
-                    YtControl(
-                        label = "More",
-                        icon = Icons.Filled.VideoLibrary,
-                        focused = controlIndex == YT_MORE_CONTROL,
-                        selected = panel == YtPlayerPanel.MORE,
-                        onClick = { activateControl(YT_MORE_CONTROL) },
-                    )
-                    YtControl(
-                        label = "Comments",
-                        icon = Icons.Filled.Comment,
-                        focused = controlIndex == YT_COMMENTS_CONTROL,
-                        selected = panel == YtPlayerPanel.COMMENTS,
-                        onClick = { activateControl(YT_COMMENTS_CONTROL) },
-                    )
-                    YtControl(
-                        label = null,
-                        icon = if (likeStatus == 1) Icons.Filled.ThumbUp else Icons.Outlined.ThumbUp,
-                        focused = controlIndex == YT_LIKE_CONTROL,
-                        modifier = Modifier.size(36.dp),
-                        active = likeStatus == 1,
-                        onClick = { activateControl(YT_LIKE_CONTROL) },
-                    )
-                    YtControl(
-                        label = null,
-                        icon = if (likeStatus == 2) Icons.Filled.ThumbDown else Icons.Outlined.ThumbDown,
-                        focused = controlIndex == YT_DISLIKE_CONTROL,
-                        modifier = Modifier.size(36.dp),
-                        active = likeStatus == 2,
-                        onClick = { activateControl(YT_DISLIKE_CONTROL) },
-                    )
-                    YtControl(
-                        label = "Next",
-                        icon = Icons.Filled.SkipNext,
-                        focused = controlIndex == YT_NEXT_VIDEO_CONTROL,
-                        busy = nextBusy,
-                        onClick = { activateControl(YT_NEXT_VIDEO_CONTROL) },
-                    )
-                }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        YtControl(
+                            label = "Back",
+                            icon = Icons.AutoMirrored.Filled.ArrowBack,
+                            focused = controlIndex == YT_BACK_CONTROL,
+                            onClick = { activateControl(YT_BACK_CONTROL) },
+                        )
+                        Text(
+                            title.ifBlank { info?.title.orEmpty() },
+                            style = MaterialTheme.typography.titleLarge,
+                            color = Color.White,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        YtControl(
+                            label = null,
+                            icon = if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                            focused = controlIndex == YT_PLAY_CONTROL,
+                            modifier = Modifier.size(50.dp),
+                            onClick = { activateControl(YT_PLAY_CONTROL) },
+                        )
+                    }
 
-                if (duration > 0L) {
-                    YtSeekBar(
-                        position = position,
-                        duration = duration,
-                        focused = controlIndex == YT_SEEK_CONTROL,
-                        onSeek = { target ->
-                            playerProvider()?.seekTo(target)
-                            position = target
-                            poke()
-                            controlIndex = YT_SEEK_CONTROL
-                        },
-                    )
-                    // A focused seek bar grows by 8dp and shows the 10s hints;
-                    // a television's bottom overscan would clip the timestamp
-                    // without this extra room.
-                    Spacer(Modifier.height(if (com.hikari.app.tv.TvMode.isTv) 12.dp else 0.dp))
+                    Spacer(Modifier.weight(1f))
+
+                    notice?.let {
+                        Text(
+                            it,
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
+
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(bottom = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(7.dp, Alignment.CenterHorizontally),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        YtControl(
+                            label = "Last",
+                            icon = Icons.Filled.SkipPrevious,
+                            focused = controlIndex == YT_LAST_VIDEO_CONTROL,
+                            busy = lastBusy,
+                            onClick = { activateControl(YT_LAST_VIDEO_CONTROL) },
+                        )
+                        YtControl(
+                            label = if (subscribed) "Subscribed" else "Subscribe",
+                            icon = if (subscribed) Icons.Filled.NotificationsActive else Icons.Filled.NotificationsNone,
+                            focused = controlIndex == YT_SUBSCRIBE_CONTROL,
+                            active = subscribed,
+                            onClick = { activateControl(YT_SUBSCRIBE_CONTROL) },
+                        )
+                        YtControl(
+                            label = "Watch later",
+                            icon = Icons.Filled.WatchLater,
+                            focused = controlIndex == YT_WATCH_LATER_CONTROL,
+                            selected = panel == YtPlayerPanel.SAVE,
+                            onClick = { activateControl(YT_WATCH_LATER_CONTROL) },
+                        )
+                        YtControl(
+                            label = if (quality <= 0) "Auto" else "${quality}p",
+                            icon = Icons.Filled.Tune,
+                            focused = controlIndex == YT_QUALITY_CONTROL,
+                            selected = panel == YtPlayerPanel.QUALITY,
+                            active = quality > 0,
+                            onClick = { activateControl(YT_QUALITY_CONTROL) },
+                        )
+                        YtControl(
+                            label = "Info",
+                            icon = Icons.Filled.Info,
+                            focused = controlIndex == YT_INFO_CONTROL,
+                            selected = panel == YtPlayerPanel.INFO,
+                            onClick = { activateControl(YT_INFO_CONTROL) },
+                        )
+                        YtControl(
+                            label = "More",
+                            icon = Icons.Filled.VideoLibrary,
+                            focused = controlIndex == YT_MORE_CONTROL,
+                            selected = panel == YtPlayerPanel.MORE,
+                            onClick = { activateControl(YT_MORE_CONTROL) },
+                        )
+                        YtControl(
+                            label = "Comments",
+                            icon = Icons.Filled.Comment,
+                            focused = controlIndex == YT_COMMENTS_CONTROL,
+                            selected = panel == YtPlayerPanel.COMMENTS,
+                            onClick = { activateControl(YT_COMMENTS_CONTROL) },
+                        )
+                        YtControl(
+                            label = null,
+                            icon = if (likeStatus == 1) Icons.Filled.ThumbUp else Icons.Outlined.ThumbUp,
+                            focused = controlIndex == YT_LIKE_CONTROL,
+                            modifier = Modifier.size(36.dp),
+                            active = likeStatus == 1,
+                            onClick = { activateControl(YT_LIKE_CONTROL) },
+                        )
+                        YtControl(
+                            label = null,
+                            icon = if (likeStatus == 2) Icons.Filled.ThumbDown else Icons.Outlined.ThumbDown,
+                            focused = controlIndex == YT_DISLIKE_CONTROL,
+                            modifier = Modifier.size(36.dp),
+                            active = likeStatus == 2,
+                            onClick = { activateControl(YT_DISLIKE_CONTROL) },
+                        )
+                        YtControl(
+                            label = "Next",
+                            icon = Icons.Filled.SkipNext,
+                            focused = controlIndex == YT_NEXT_VIDEO_CONTROL,
+                            busy = nextBusy,
+                            onClick = { activateControl(YT_NEXT_VIDEO_CONTROL) },
+                        )
+                    }
+
+                    if (duration > 0L) {
+                        YtSeekBar(
+                            position = position,
+                            duration = duration,
+                            focused = controlIndex == YT_SEEK_CONTROL,
+                            onSeek = { target ->
+                                playerProvider()?.seekTo(target)
+                                position = target
+                                poke()
+                                controlIndex = YT_SEEK_CONTROL
+                            },
+                        )
+                        // A focused seek bar grows by 8dp and shows the 10s hints;
+                        // a television's bottom overscan would clip the timestamp
+                        // without this extra room.
+                        Spacer(Modifier.height(if (com.hikari.app.tv.TvMode.isTv) 12.dp else 0.dp))
+                    }
                 }
             }
         }
@@ -757,6 +765,7 @@ private fun YtControl(
     onClick: () -> Unit,
 ) {
     val highlight = focused || selected
+    val panelOpen = LocalYtPanelOpen.current
     val background = if (highlight) Color.White else Color.Black.copy(alpha = 0.82f)
     val content = when {
         highlight -> Color.Black
@@ -767,6 +776,7 @@ private fun YtControl(
         modifier = modifier
             .clip(RoundedCornerShape(12.dp))
             .background(background)
+            .focusProperties { canFocus = !panelOpen }
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {

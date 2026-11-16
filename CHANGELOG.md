@@ -1,3 +1,13 @@
+## 0.13.3
+
+**16 November 2026**
+
+### The YouTube side panels own the remote
+
+- **Opening Info, Comments or More Videos moves D-pad focus into the panel**: the first comment or video is highlighted, Up/Down walks the list, and the list scrolls to the focused row.
+- **Info’s description scrolls with the remote**, and the close button wears a focus ring when it is the target — which is also where focus lands when a panel is empty or still loading.
+- **Focus is trapped in the open panel**: the control ring behind it cannot steal a direction press, so navigation stays in the panel until Back closes it.
+
 ## 0.13.2
 
 **16 November 2026**
