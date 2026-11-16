@@ -239,23 +239,15 @@ fun TvHomeHeaderBar(
             .padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                tr("Lucid Hikari"),
-                style = MaterialTheme.typography.headlineLarge,
-                fontWeight = FontWeight.Bold,
-                color = accent,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                tr("Every stream, one place."),
-                style = MaterialTheme.typography.bodyMedium,
-                color = TvDesktop.TextMuted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+        Text(
+            tr("Lucid Hikari"),
+            style = MaterialTheme.typography.headlineLarge,
+            fontWeight = FontWeight.Bold,
+            color = accent,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
         IconButton(onClick = onMouse) {
             Icon(
                 Icons.Filled.Mouse,

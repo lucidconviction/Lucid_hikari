@@ -55,6 +55,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
@@ -1011,8 +1012,8 @@ fun HomeScreen(nav: NavHostController) {
     val feedKeys = remember(uniqueRows, continueEntries, collectionFolderRows, loading, hideContinue, rows.isEmpty()) {
         buildList {
             add("home-header")
-            add("donate-banner")
             if (!hideContinue && continueEntries.isNotEmpty()) add("continue-watching")
+            add("home-genres")
             collectionFolderRows.forEach { c -> add("collection-folders|${c.id}") }
             if (loading && collectionFolderRows.isEmpty()) repeat(4) { i -> add("home-shimmer|$i") }
             uniqueRows.forEach { row -> add(row.key.ifBlank { "${row.providerName}|${row.title}" }) }
@@ -1087,6 +1088,8 @@ fun HomeScreen(nav: NavHostController) {
                             onSettings = openSettings,
                             onMouse = { com.hikari.app.tv.MouseMode.toggle() },
                             mouseOn = com.hikari.app.tv.MouseMode.enabled,
+                            providerLabel = selectedName ?: tr("All providers"),
+                            onProviderClick = { showPicker = true },
                         )
                     }
                     if (featured.isNotEmpty()) {
@@ -1139,29 +1142,7 @@ fun HomeScreen(nav: NavHostController) {
                             )
                         }
                     }
-                    // Genre strip: sits UNDER the hero artwork, which is where a
-                    // viewer who has not decided what to watch looks next. A
-                    // genre pick opens everything tagged with it — films AND
-                    // series (see [HomeGenreStrip]) — so nothing has to be
-                    // searched for before something can be watched. With an
-                    // extension picked, the tap first asks WHERE: that
-                    // extension alone, or everything (see [genreScope]).
-                    HomeGenreStrip { name, genresText, keywordsText ->
-                        val ext = selection.filter { !it.startsWith(COLLECTION_PREFIX) }.toSet()
-                        if (ext.isEmpty()) {
-                            openTmdbGenre(name, genresText, keywordsText)
-                        } else {
-                            genreScope = GenreScopePick(name, genresText, keywordsText, ext)
-                        }
-                    }
                 }
-            }
-            item(key = "donate-banner") {
-                DonationBanner(
-                    onDonate = {
-                        com.hikari.app.ui.openCommunity(context, com.hikari.app.ui.PAYPAL_DONATE_URL)
-                    },
-                )
             }
             if (!hideContinue && continueEntries.isNotEmpty()) {
                 item(key = "continue-watching") {
@@ -1184,6 +1165,23 @@ fun HomeScreen(nav: NavHostController) {
                             { scope.launch { app.store.clearHistory() } }
                         } else null,
                     )
+                }
+            }
+            // Genres sit after Resume, not between the hero and the first
+            // shelf: a viewer with something in progress wants that first, and
+            // the strip is a browsing aid rather than a second hero. A pick
+            // opens everything tagged with it — films AND series — so nothing
+            // has to be searched for before something can be watched. With an
+            // extension picked, the tap first asks WHERE: that extension alone,
+            // or everything (see [genreScope]).
+            item(key = "home-genres") {
+                HomeGenreStrip { name, genresText, keywordsText ->
+                    val ext = selection.filter { !it.startsWith(COLLECTION_PREFIX) }.toSet()
+                    if (ext.isEmpty()) {
+                        openTmdbGenre(name, genresText, keywordsText)
+                    } else {
+                        genreScope = GenreScopePick(name, genresText, keywordsText, ext)
+                    }
                 }
             }
             // A personal catalog shows its OWN FOLDERS — the same tiles its page
@@ -1412,49 +1410,10 @@ fun HomeScreen(nav: NavHostController) {
             }
         }
 
-        // Floating source pill (Anikoto-style): shows the current provider and
-        // opens the picker sheet. It has to clear the taskbar, which is drawn
-        // OVER the page rather than in a strip of its own — pinned to the
-        // bottom-right corner as it was, it ended up underneath the bar's own
-        // buttons and could not be tapped at all. [LocalTaskbarInset] is exactly
-        // the room the bar covers, so the pill lifts itself by that and then
-        // keeps its own 14dp of air above the bar.
-        Surface(
-            onClick = { showPicker = true },
-            shape = RoundedCornerShape(50),
-            // The pill's own frosted panel, not the theme's `surfaceVariant`:
-            // that variant is a nearly-transparent overlay, and raising its
-            // alpha turned it into a bright slab the white label vanished into
-            // (the Dark Glass UI report). The surface is the same panel every
-            // other glass card in the app is cut from.
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(
-                    start = 16.dp,
-                    top = 14.dp,
-                    end = 16.dp,
-                    bottom = 14.dp + LocalTaskbarInset.current,
-                )
-        ) {
-            Row(
-                Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    Icons.Filled.List,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    "  " + (selectedName ?: tr("All providers")),
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-            }
-        }
+        // The provider switch now lives in the header (see HomeHeader): the
+        // floating pill that used to sit here hovered over the poster grid and
+        // covered a card's title, and on TV it duplicated the header's own
+        // provider pill. Nothing is drawn in this corner any more.
 
         // Crash warning: one glass panel, shown once per crash. It says only what
         // the user needs (it crashed, the log is saved, share it if it keeps
@@ -3090,33 +3049,36 @@ private fun HomeHeader(
      *  (Settings → Taskbar buttons): the bar then has no way into Settings, so
      *  this gear keeps the screen reachable instead of locking the user out. */
     onSettings: (() -> Unit)? = null,
+    /** The current provider ("NetMirror", "All providers"). Shown as a chip
+     *  under the title, which is the one place the feed can be re-scoped: the
+     *  old floating pill sat over the posters and covered them. */
+    providerLabel: String? = null,
+    onProviderClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val accent = MaterialTheme.colorScheme.primary
     val iconTint = if (overlay) Color.White else accent
-    val subtitleColor =
-        if (overlay) Color.White.copy(alpha = 0.85f) else MaterialTheme.colorScheme.onSurfaceVariant
-    Row(
-        modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(Modifier.weight(1f)) {
+    Column(modifier.fillMaxWidth()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // The tagline used to sit under this title on every launch. It is
+            // gone: after the first run it says nothing, and the row it took is
+            // the row the provider chip now uses.
             Text(
                 tr("Lucid Hikari"),
                 style = MaterialTheme.typography.headlineLarge,
                 fontWeight = FontWeight.Bold,
                 color = accent,
-                modifier = Modifier.padding(horizontal = 8.dp)
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 8.dp)
             )
-            Text(
-                tr("Every stream, one place."),
-                style = MaterialTheme.typography.bodyMedium,
-                color = subtitleColor,
-                modifier = Modifier.padding(horizontal = 8.dp)
-            )
-        }
         // Remote mouse: a D-pad-driven cursor over every screen, for the
         // Cloudflare "I'm not a robot" checkbox and any other target the
         // focus walk cannot land on. Television only.
@@ -3172,6 +3134,67 @@ private fun HomeHeader(
                     tint = iconTint
                 )
             }
+        }
+        }
+        // The provider chip: one place to re-scope the feed, in the header.
+        // It replaces the floating pill that used to hover over the posters.
+        if (onProviderClick != null) {
+            HomeProviderChip(
+                label = providerLabel ?: I18n.t("All providers"),
+                onClick = onProviderClick,
+                modifier = Modifier.padding(start = 16.dp, bottom = 2.dp),
+            )
+        }
+    }
+}
+
+/**
+ * The header's provider chip.
+ *
+ * A capsule with the provider's name and a dropdown arrow. It is deliberately
+ * the only control under the title: the feed has one scope, and this is where
+ * it is changed. Long names ellipsize at 220dp instead of pushing the icons off
+ * a narrow phone.
+ */
+@Composable
+private fun HomeProviderChip(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.20f)),
+        modifier = modifier.widthIn(max = 240.dp),
+    ) {
+        Row(
+            Modifier.padding(start = 10.dp, end = 6.dp, top = 5.dp, bottom = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Filled.List,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(14.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                label,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            Icon(
+                Icons.Filled.ArrowDropDown,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
         }
     }
 }
