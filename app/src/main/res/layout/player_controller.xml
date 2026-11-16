@@ -121,6 +121,14 @@
                 style="@style/HikariBadge.Accent"
                 android:visibility="gone" />
 
+            <!-- HDR / audio codec / channels / video codec, e.g.
+                 "HDR10 · E-AC-3 · 5.1 · H.265". Only facts the selected tracks
+                 actually carry; hidden when there are none. -->
+            <TextView
+                android:id="@+id/badge_meta"
+                style="@style/HikariBadge"
+                android:visibility="gone" />
+
             <TextView
                 android:id="@+id/badge_source"
                 style="@style/HikariBadge"

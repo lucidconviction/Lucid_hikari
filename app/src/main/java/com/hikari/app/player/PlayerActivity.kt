@@ -165,6 +165,7 @@ import com.hikari.app.download.DownloadStatus
 import com.hikari.app.download.DownloadTask
 import com.hikari.app.download.DownloadsRepository
 import com.hikari.app.i18n.I18n
+import com.hikari.app.data.IntroSegments
 import com.hikari.app.net.Http
 import com.hikari.app.net.NetTuning
 import com.hikari.app.net.PlayerHttp
@@ -200,6 +201,7 @@ import okhttp3.OkHttpClient
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.FileNotFoundException
+import java.util.Date
 import java.util.concurrent.ConcurrentHashMap
 
 /** The `Format.label` every user-added subtitle carries, so a track in the
@@ -1855,7 +1857,17 @@ class PlayerActivity : ComponentActivity() {
     // ---- Top-bar metadata badges -----------------------------------------
     private var badgeDuration: TextView? = null
     private var badgeQuality: TextView? = null
+    private var badgeMeta: TextView? = null
     private var badgeSource: TextView? = null
+
+    /** Intro/recap/preview/credits timings for this title, when TheIntroDB has them. */
+    private var introSegments: List<com.hikari.app.data.IntroSegments.Segment> = emptyList()
+    private var chapterMarks: ChapterMarkerView? = null
+    private var lastSkipLabel: String? = null
+    private val endsHandler = Handler(Looper.getMainLooper())
+    private var endsTask: Runnable? = null
+    private val uiTickHandler = Handler(Looper.getMainLooper())
+    private var uiTick: Runnable? = null
 
     /** In-app UI scale: when the user turns it on (Settings → App Layout → In-app UI scale)
      *  the whole app stops following the phone's font/display size settings —
@@ -2112,6 +2124,7 @@ class PlayerActivity : ComponentActivity() {
         }.getOrNull() ?: 1
         badgeDuration = findViewById(R.id.badge_duration)
         badgeQuality = findViewById(R.id.badge_quality)
+        badgeMeta = findViewById(R.id.badge_meta)
         badgeSource = findViewById(R.id.badge_source)
         findViewById<TextView>(R.id.title_text).text = intent.getStringExtra("title").orEmpty()
 
@@ -2395,10 +2408,16 @@ class PlayerActivity : ComponentActivity() {
         rotateBtn?.setOnClickListener { cycleRotation() }
         skipBtn?.setOnClickListener {
             val p = player ?: return@setOnClickListener
-            val target = (p.currentPosition + 85_000L).coerceIn(
-                0L, p.duration.takeIf { it > 0L } ?: Long.MAX_VALUE
-            )
+            val duration = p.duration.takeIf { it > 0L }
+            val segment = activeIntroSegment()
+            val target = if (segment != null) {
+                (segment.endMs ?: duration ?: (p.currentPosition + 85_000L))
+                    .coerceIn(0L, duration ?: Long.MAX_VALUE)
+            } else {
+                (p.currentPosition + 85_000L).coerceIn(0L, duration ?: Long.MAX_VALUE)
+            }
             seekBoth(target)
+            updateSkipLabel()
         }
         unlockBtn?.setOnClickListener { unlockControls() }
         multiWindowBtn?.setOnClickListener { openMultiWindow() }
@@ -2587,6 +2606,9 @@ class PlayerActivity : ComponentActivity() {
         // playback and hands them to the store every minute (see
         // [flushWatchSeconds]), so a session is never lost to a crash.
         startStatsTicker()
+        loadIntroSegments()
+        startUiTicker()
+        playerView?.post { installChapterMarks() }
 
         // Picture-in-picture: explicit pip button (top bar) plus YouTube-style
         // auto-enter when the user leaves the player with video playing (12+).
@@ -4768,6 +4790,186 @@ class PlayerActivity : ComponentActivity() {
     }
 
     /** "1:39:45" (or "12:34" for sub-hour videos) — the duration badge. */
+    /** The intro/recap/preview/credits segment covering the current position. */
+    private fun activeIntroSegment(): IntroSegments.Segment? {
+        val position = player?.currentPosition ?: return null
+        return introSegments.firstOrNull { segment ->
+            position >= segment.startMs && (segment.endMs == null || position < segment.endMs)
+        }
+    }
+
+    /**
+     * Renames the skip pill to what it will actually skip. Only writes when the
+     * label changes: this runs once a second, and a Text setter is a layout
+     * request.
+     */
+    private fun updateSkipLabel() {
+        val label = activeIntroSegment()?.kind?.label ?: "Skip"
+        if (label == lastSkipLabel) return
+        lastSkipLabel = label
+        skipBtn?.text = I18n.t(label)
+    }
+
+    /** The intro/recap/preview/credits request for this title, if it came from TMDB. */
+    private fun loadIntroSegments() {
+        val provider = intent.getStringExtra("histProviderId").orEmpty()
+        if (!provider.equals("tmdb", true)) return
+        val tmdbId = intent.getStringExtra("histMediaId")?.toIntOrNull() ?: return
+        val season = intent.getIntExtra("histEpisodeSeason", 0).takeIf { it > 0 }
+        val episode = intent.getIntExtra("histEpisodeNumber", 0).takeIf { it > 0 }
+        lifecycleScope.launch {
+            val segments = runCatching {
+                IntroSegments.fetch(
+                    tmdbId = tmdbId,
+                    season = if (season != null && episode != null) season else null,
+                    episode = if (season != null && episode != null) episode else null,
+                )
+            }.getOrDefault(emptyList())
+            if (segments.isEmpty()) return@launch
+            introSegments = segments
+            updateChapterMarks()
+            updateSkipLabel()
+        }
+    }
+
+    /**
+     * Puts the segment strip over the seek bar WITHOUT changing the media3
+     * controller layout: the bar is moved into a FrameLayout at runtime, with
+     * the marker view drawn on top. Guarded, because a layout surprise must
+     * never be able to break playback — if anything fails, the original bar
+     * stays exactly where it was and only the marks are missing.
+     */
+    private fun installChapterMarks() {
+        if (chapterMarks != null) return
+        runCatching {
+            val bar = exoView("exo_progress") ?: return
+            val parent = bar.parent as? android.view.ViewGroup ?: return
+            val frame = if (parent is android.widget.FrameLayout) {
+                parent
+            } else {
+                val index = parent.indexOfChild(bar)
+                val params = bar.layoutParams
+                parent.removeViewAt(index)
+                val created = android.widget.FrameLayout(this)
+                created.layoutParams = params
+                bar.layoutParams = android.widget.FrameLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                )
+                created.addView(bar)
+                parent.addView(created, index)
+                created
+            }
+            val marks = ChapterMarkerView(this)
+            frame.addView(
+                marks,
+                android.widget.FrameLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                ),
+            )
+            chapterMarks = marks
+            updateChapterMarks()
+        }
+    }
+
+    /** Draws the segment marks once the duration is known. */
+    private fun updateChapterMarks() {
+        val view = chapterMarks ?: return
+        val duration = player?.duration ?: 0L
+        if (duration <= 0L || introSegments.isEmpty()) {
+            view.setMarks(emptyList())
+            return
+        }
+        view.setMarks(
+            introSegments.mapNotNull { segment ->
+                val end = (segment.endMs ?: duration).coerceAtMost(duration)
+                if (end <= segment.startMs) return@mapNotNull null
+                ChapterMarkerView.Mark(
+                    start = (segment.startMs.toFloat() / duration).coerceIn(0f, 1f),
+                    end = (end.toFloat() / duration).coerceIn(0f, 1f),
+                    color = segment.kind.color,
+                )
+            }
+        )
+    }
+
+    /** Drives the skip label; the time bar and clock are media3's own. */
+    private fun startUiTicker() {
+        if (uiTick != null) return
+        val task = object : Runnable {
+            override fun run() {
+                updateSkipLabel()
+                uiTickHandler.postDelayed(this, 1_000L)
+            }
+        }
+        uiTick = task
+        uiTickHandler.postDelayed(task, 1_000L)
+    }
+
+    /** "2:52:35 · ends 12:02 AM". */
+    private fun updateEndsBadge() {
+        val p = player ?: return
+        val duration = p.duration
+        if (duration <= 0L) return
+        val remaining = (duration - p.currentPosition).coerceAtLeast(0L)
+        val clock = android.text.format.DateFormat.getTimeFormat(this)
+            .format(Date(System.currentTimeMillis() + remaining))
+        val runtime = formatDurationBadge(duration)
+        if (runtime.isNotBlank()) {
+            badgeDuration?.text = runtime + " · " + I18n.t("ends") + " " + clock
+            badgeDuration?.visibility = View.VISIBLE
+        }
+    }
+
+    /** Re-reads the end time every 30s while playing; a pause stops the clock. */
+    private fun scheduleEndsBadge() {
+        endsTask?.let(endsHandler::removeCallbacks)
+        val task = object : Runnable {
+            override fun run() {
+                if (player?.isPlaying == true) {
+                    updateEndsBadge()
+                    endsHandler.postDelayed(this, 30_000L)
+                }
+            }
+        }
+        endsTask = task
+        endsHandler.postDelayed(task, 30_000L)
+    }
+
+    /**
+     * HDR / audio codec / channels / video codec, from the tracks that are
+     * actually selected. Never invented: an unknown track contributes nothing.
+     */
+    private fun updateMetaBadge(tracks: Tracks) {
+        fun firstFormat(type: Int, selectedOnly: Boolean): Format? {
+            val group = tracks.groups.firstOrNull { it.type == type && (!selectedOnly || it.isSelected) }
+                ?: return null
+            for (index in 0 until group.length) {
+                if (group.isTrackSupported(index)) return group.getTrackFormat(index)
+            }
+            return null
+        }
+
+        val video = firstFormat(C.TRACK_TYPE_VIDEO, selectedOnly = false)
+        val audio = firstFormat(C.TRACK_TYPE_AUDIO, selectedOnly = true)
+            ?: firstFormat(C.TRACK_TYPE_AUDIO, selectedOnly = false)
+        val parts = ArrayList<String>(4)
+        video?.let { format ->
+            codecName(format.sampleMimeType, format.codecs).substringBefore(" (")
+                .takeIf { it.isNotBlank() }?.let(parts::add)
+            rangeLabel(format).takeIf { it != "SDR" }?.let(parts::add)
+        }
+        audio?.let { format ->
+            codecName(format.sampleMimeType, format.codecs).substringBefore(" (")
+                .takeIf { it.isNotBlank() }?.let(parts::add)
+            channelsBadge(format.channelCount)?.let(parts::add)
+        }
+        val text = parts.distinct().take(4).joinToString(" · ")
+        badgeMeta?.text = text
+        badgeMeta?.visibility = if (text.isBlank()) View.GONE else View.VISIBLE
+    }
+
     private fun formatDurationBadge(ms: Long): String {
         if (ms <= 0L) return ""
         val total = ms / 1000L
@@ -16994,6 +17196,7 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
             videoFormatSize(tracks)?.let { (w, h) -> onKnownVideoSize(w, h) }
             applyYouTubeQuality(tracks)
             applyVideoEnhance()
+            updateMetaBadge(tracks)
             // Re-assert the booster gain after a track change (cheap and
             // idempotent — the stage itself survives in the sink).
             applyVolumeBoost()
@@ -17053,6 +17256,8 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
             playHint?.visibility = if (isPlaying) View.GONE else View.VISIBLE
             runCatching { nextPreviewPlayer?.playWhenReady = isPlaying }
             syncDualAudio()
+            updateEndsBadge()
+            updateSkipLabel()
         }
 
         // Any seek (seek bar, controller, headset) lands here — keep the
@@ -17069,6 +17274,10 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
                     val target = player?.currentPosition ?: return@runCatching
                     dualPlayer?.seekTo(target)
                 }
+            }
+            if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+                updateEndsBadge()
+                updateSkipLabel()
             }
         }
 
@@ -17087,12 +17296,11 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
                 startSponsorBlockIfNeeded()
             }
             if (playbackState == Player.STATE_READY) {
-                // Duration badge (total runtime) — known once media is ready.
-                val durBadge = formatDurationBadge(this@PlayerActivity.player?.duration ?: 0L)
-                if (durBadge.isNotBlank()) {
-                    badgeDuration?.text = durBadge
-                    badgeDuration?.visibility = View.VISIBLE
-                }
+                // Runtime + the wall-clock time it ends, and the marks above the
+                // seek bar once the duration is known.
+                updateEndsBadge()
+                scheduleEndsBadge()
+                updateChapterMarks()
                 dismissSlowDialog()
                 // The failure prompt has either been answered or is moot now
                 // that something is actually playing.
@@ -19158,6 +19366,8 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
         flushWatchSeconds()
         stopStatsTicker()
         stopCodecTicker()
+        endsHandler.removeCallbacksAndMessages(null)
+        uiTickHandler.removeCallbacksAndMessages(null)
         unlockHideTask?.let { unlockHandler.removeCallbacks(it) }
         unlockHideTask = null
         liveStreamsJob?.cancel()
