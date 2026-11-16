@@ -4875,6 +4875,7 @@ class PlayerActivity : ComponentActivity() {
 
     /** Draws the segment marks once the duration is known. */
     private fun updateChapterMarks() {
+        if (chapterMarks == null) installChapterMarks()
         val view = chapterMarks ?: return
         val duration = player?.duration ?: 0L
         if (duration <= 0L || introSegments.isEmpty()) {
