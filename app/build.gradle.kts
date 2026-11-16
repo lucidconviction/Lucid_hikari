@@ -552,6 +552,9 @@ dependencies {
     implementation(libs.androidx.biometric)
     implementation(libs.androidx.lifecycle.process)
     debugImplementation(libs.androidx.compose.ui.tooling)
+    // Pure-Kotlin unit tests (StreamProbe's byte classification, FeedTags).
+    // Test-only: nothing here reaches the APK.
+    testImplementation("junit:junit:4.13.2")
 }
 
 // ---------------------------------------------------------------------------

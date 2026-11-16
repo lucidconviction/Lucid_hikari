@@ -52,6 +52,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.hikari.app.sports.ChannelMatch
+import com.hikari.app.sports.FeedFinder
 import com.hikari.app.sports.GameState
 import com.hikari.app.sports.ScoringPlay
 import com.hikari.app.sports.Side
@@ -85,6 +86,10 @@ fun SportsGameScreen(nav: androidx.navigation.NavHostController, eventId: String
     val league = event?.let { SportsCatalog.league(it.leagueId) }
     var plays by remember(eventId) { mutableStateOf<List<ScoringPlay>>(emptyList()) }
     var loadingPlays by remember(eventId) { mutableStateOf(false) }
+    // Which exact feed is showing this game (see FeedFinder). Only runs on this
+    // page, only for Xtream channels, and caches every answer for ten minutes.
+    var feedHits by remember(eventId) { mutableStateOf<Map<String, FeedFinder.Found>>(emptyMap()) }
+    var feedLoading by remember(eventId) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val bottom = LocalTaskbarInset.current
     val use24h = remember { DateFormat.is24HourFormat(context) }
@@ -131,10 +136,21 @@ fun SportsGameScreen(nav: androidx.navigation.NavHostController, eventId: String
             loadingPlays = false
         }
     }
+    LaunchedEffect(event?.id, event?.state, matches[event?.id]?.size) {
+        val ev = event ?: return@LaunchedEffect
+        val channels = matches[ev.id].orEmpty()
+        if (ev.state == GameState.POST || channels.isEmpty()) {
+            feedHits = emptyMap()
+            feedLoading = false
+            return@LaunchedEffect
+        }
+        feedLoading = true
+        feedHits = runCatching { FeedFinder.find(ev, channels) }.getOrDefault(emptyMap())
+        feedLoading = false
+    }
     LaunchedEffect(event?.leagueId) {
         event?.leagueId?.let { SportsRepository.ensureStandings(it) }
     }
-
     Column(modifier = Modifier.fillMaxSize().padding(bottom = bottom)) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 12.dp, top = 4.dp),
@@ -235,6 +251,10 @@ fun SportsGameScreen(nav: androidx.navigation.NavHostController, eventId: String
             // broadcast that had already ended.
             if (event.state != GameState.POST) {
             val found = matches[event.id].orEmpty()
+                .sortedWith(
+                    compareByDescending<ChannelMatch> { feedHits[it.channel?.url] != null }
+                        .thenByDescending { it.score }
+                )
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -247,6 +267,13 @@ fun SportsGameScreen(nav: androidx.navigation.NavHostController, eventId: String
                         androidx.compose.material3.CircularProgressIndicator(
                             Modifier.size(16.dp),
                             strokeWidth = 2.dp,
+                        )
+                    }
+                    if (feedLoading) {
+                        androidx.compose.material3.CircularProgressIndicator(
+                            Modifier.size(14.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                     IconButton(onClick = { watchReload++ }) {
@@ -279,8 +306,8 @@ fun SportsGameScreen(nav: androidx.navigation.NavHostController, eventId: String
                     )
                 }
             } else {
-                items(found, key = { "${event.id}:${it.channelName}" }) { match ->
-                    ChannelRow(match)
+                items(found, key = { "${event.id}:${it.channel?.url ?: it.channelName}" }) { match ->
+                    ChannelRow(match, feedHits[match.channel?.url])
                 }
             }
 
@@ -546,7 +573,7 @@ private fun AsyncImageOrMark(team: TeamInfo, size: androidx.compose.ui.unit.Dp) 
 }
 
 @Composable
-private fun ChannelRow(match: ChannelMatch) {
+private fun ChannelRow(match: ChannelMatch, feed: FeedFinder.Found? = null) {
     val context = LocalContext.current
     Card(
         modifier = Modifier
@@ -573,9 +600,19 @@ private fun ChannelRow(match: ChannelMatch) {
             Column(Modifier.weight(1f)) {
                 Text(match.channelName, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
-                    if (match.sure) "Likely showing this game" else "Possible match",
+                    when {
+                        feed != null -> "Showing: ${feed.programTitle}"
+                        match.sure -> "Likely showing this game"
+                        else -> "Possible match"
+                    },
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (match.sure) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (feed != null || match.sure) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             if (match.channel != null) {

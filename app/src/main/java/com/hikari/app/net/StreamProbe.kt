@@ -49,6 +49,16 @@ import java.util.concurrent.TimeUnit
  * of being cached as a dead URL) so the whole app stops waiting on that host —
  * see [resolve], [warm] and [follow].
  */
+/**
+ * What a probe's first bytes look like.
+ *
+ * [UNKNOWN] exists for cached results written before this enum did: they carry
+ * a status code but no verdict, and [StreamProbe.ProbeResult.isPlayable] falls
+ * back to the code for them.
+ */
+@Serializable
+enum class Verdict { LIVE, NOT_VIDEO, DEAD, UNKNOWN }
+
 object StreamProbe {
 
     /** The resolved form of a stream URL: what to actually play, and the mime
@@ -61,9 +71,31 @@ object StreamProbe {
      * tile uses this to draw a 🔴 / 🟡 / 🟢 dot. Null means "not probed yet".
      */
     @Serializable
-    data class ProbeResult(val code: Int, val latencyMs: Long) {
+    data class ProbeResult(
+        val code: Int,
+        val latencyMs: Long,
+        /**
+         * What the first bytes actually were. [Verdict.UNKNOWN] is what an
+         * older cached result decodes to; [isPlayable] then falls back to the
+         * status code, so nothing that worked before turns red on upgrade.
+         */
+        val verdict: Verdict = Verdict.UNKNOWN,
+    ) {
         /** True when the URL answered with a success-ish status (2xx / 3xx). */
         val isAlive: Boolean get() = code in 200..399
+
+        /**
+         * True when the response looks like VIDEO, not merely like a server that
+         * answered. This is what the Live TV health dot uses: a portal that
+         * returns `200 text/html` with "account expired" is alive by status and
+         * dead by every useful definition.
+         */
+        val isPlayable: Boolean
+            get() = when (verdict) {
+                Verdict.LIVE -> true
+                Verdict.NOT_VIDEO, Verdict.DEAD -> false
+                Verdict.UNKNOWN -> isAlive
+            }
     }
 
     /** Probes [url] once and returns the result (or null on any failure).
@@ -87,6 +119,144 @@ object StreamProbe {
                 ProbeResult(code, latency)
             }
         }.getOrNull()
+    }
+
+    /**
+     * Probes [url] and says whether the response is VIDEO, not merely whether a
+     * server answered. Reads at most 64 KB and classifies the opening bytes:
+     *
+     *  - `#EXTM3U` for HLS;
+     *  - MPEG-TS sync byte 0x47 every 188 bytes;
+     *  - MP4 `ftyp`;
+     *  - ADTS AAC, Matroska/WebM, Ogg and MPEG-PS start codes;
+     *  - 32 KB of undifferentiated bytes is accepted as a last resort.
+     *
+     * Rejected outright: HTML, JSON, XML and plain text (the "account expired"
+     * page a dead portal returns with a 200), and the 1 B…5 MB Content-Length
+     * band that placeholder files sit in.
+     *
+     * Never throws; null means the request itself failed.
+     */
+    suspend fun probeVerdict(
+        url: String,
+        headers: Map<String, String> = emptyMap(),
+    ): ProbeResult? = withContext(Dispatchers.IO) {
+        if (url.isBlank() || !url.startsWith("http")) return@withContext null
+        runCatching {
+            val t0 = System.currentTimeMillis()
+            val response = get(url, headers) ?: return@runCatching null
+            response.use { r ->
+                val verdict = classify(r, url)
+                ProbeResult(r.code, System.currentTimeMillis() - t0, verdict)
+            }
+        }.getOrNull()
+    }
+
+    private const val VERDICT_BYTES = 64 * 1024
+
+    private fun classify(r: Response, url: String): Verdict {
+        if (r.code !in 200..299) return Verdict.DEAD
+        val contentType = r.header("Content-Type")?.lowercase().orEmpty()
+        val body = r.body ?: return Verdict.DEAD
+
+        val buffer = ByteArray(VERDICT_BYTES)
+        var length = 0
+        var ended = false
+        try {
+            body.byteStream().use { input ->
+                while (length < buffer.size) {
+                    val read = input.read(buffer, length, buffer.size - length)
+                    if (read < 0) {
+                        ended = true
+                        break
+                    }
+                    length += read
+                }
+            }
+        } catch (_: Throwable) {
+            // Keep whatever arrived. A live TS that stalls after 20 KB is still
+            // a live TS; the signatures below decide on the bytes we have.
+        }
+        return classifyHead(
+            code = r.code,
+            contentType = contentType,
+            url = url,
+            contentLength = r.header("Content-Length")?.toLongOrNull() ?: -1L,
+            bytes = buffer,
+            length = length,
+            ended = ended,
+        )
+    }
+
+    /**
+     * The classification itself, with the network taken out so it can be
+     * tested with synthetic bytes (see StreamProbeClassifyTest).
+     */
+    internal fun classifyHead(
+        code: Int,
+        contentType: String,
+        url: String,
+        contentLength: Long,
+        bytes: ByteArray,
+        length: Int,
+        ended: Boolean,
+    ): Verdict {
+        if (code !in 200..299) return Verdict.DEAD
+        val path = url.substringBefore('?').substringBefore('#').lowercase()
+        val hls = contentType.contains("mpegurl") || path.endsWith(".m3u8")
+        // A playlist served as text/plain is still a playlist: check HLS first.
+        if (!hls && isDeadContentType(contentType)) return Verdict.NOT_VIDEO
+        if (length <= 0) return Verdict.DEAD
+
+        if (hls) {
+            val head = String(bytes, 0, minOf(length, 1024), Charsets.ISO_8859_1)
+            return if (head.contains("#EXTM3U")) Verdict.LIVE else Verdict.NOT_VIDEO
+        }
+        if (looksLikeTs(bytes, length)) return Verdict.LIVE
+        if (length >= 8 && String(bytes, 4, 4, Charsets.ISO_8859_1) == "ftyp") return Verdict.LIVE
+        if (looksLikeCodec(bytes, length)) return Verdict.LIVE
+        if (ended && length < 16 * 1024) return Verdict.DEAD
+        if (contentLength in 1..5_000_000L) return Verdict.NOT_VIDEO
+        return if (length >= 32 * 1024) Verdict.LIVE else Verdict.DEAD
+    }
+
+    private fun isDeadContentType(contentType: String): Boolean =
+        contentType.contains("text/html") ||
+            contentType.contains("application/json") ||
+            contentType.contains("text/xml") ||
+            contentType.contains("text/plain")
+
+    /** MPEG-TS: 0x47 at the start and every 188 bytes, at least three packets. */
+    private fun looksLikeTs(buffer: ByteArray, length: Int): Boolean {
+        val sync = 0x47.toByte()
+        if (buffer[0] != sync) return false
+        var packets = 0
+        var index = 0
+        while (index < length - 188 && packets < 10) {
+            if (buffer[index] != sync) return false
+            packets++
+            index += 188
+        }
+        return packets >= 3
+    }
+
+    /** ADTS AAC, Matroska/WebM, Ogg and MPEG-PS start codes. */
+    private fun looksLikeCodec(buffer: ByteArray, length: Int): Boolean {
+        if (length >= 2) {
+            val a = buffer[0].toInt() and 0xFF
+            val b = buffer[1].toInt() and 0xFF
+            if (a == 0xFF && (b and 0xE0) == 0xE0) return true
+        }
+        if (length >= 4) {
+            val a = buffer[0].toInt() and 0xFF
+            val b = buffer[1].toInt() and 0xFF
+            val c = buffer[2].toInt() and 0xFF
+            val d = buffer[3].toInt() and 0xFF
+            if (a == 0x1A && b == 0x45 && c == 0xDF && d == 0xA3) return true
+            if (a == 0x4F && b == 0x67 && c == 0x67 && d == 0x53) return true
+            if (a == 0 && b == 0 && c == 1 && (d == 0xBA || d >= 0xB0)) return true
+        }
+        return false
     }
 
     /**

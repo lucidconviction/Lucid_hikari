@@ -48,6 +48,8 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Check
@@ -102,6 +104,9 @@ import com.hikari.app.HikariApp
 import com.hikari.app.data.IptvChannel
 import com.hikari.app.data.XtreamCredentials
 import com.hikari.app.iptv.ChannelWallChannels
+import com.hikari.app.iptv.FeedFilter
+import com.hikari.app.iptv.FeedFilterRows
+import com.hikari.app.iptv.FeedTagsParser
 import com.hikari.app.iptv.WallChannel
 import com.hikari.app.net.StreamProbe
 import com.hikari.app.providers.IptvProvider
@@ -125,6 +130,7 @@ private const val WALL_CUSTOM = "custom_channels"
 private const val WALL_COUNTRIES = "countries"
 private const val WALL_LISTS = "lists"
 private const val WALL_FAVORITES = "favorites"
+private const val WALL_PINNED = "pinned_sources"
 
 private data class WallCountryOption(val label: String, val category: String)
 
@@ -297,7 +303,7 @@ private fun startWallProbes(
             pending.forEach { ch ->
                 launch(Dispatchers.IO) {
                     gate.withPermit {
-                        val result = StreamProbe.probe(ch.url, probeHeaders(ch))
+                        val result = StreamProbe.probeVerdict(ch.url, probeHeaders(ch))
                         IptvProbeCache.put(ch.url, result)
                         withContext(Dispatchers.Main) {
                             state.results = state.results + (ch.url to result)
@@ -366,6 +372,17 @@ fun ChannelWallScreen(nav: NavHostController) {
     var selectedWall by remember { mutableStateOf<WallChannel?>(null) }
     var wallMatches by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
     var wallLoading by remember { mutableStateOf(false) }
+    // Pinned sources are per wall tile and per URL, so the same channel on two
+    // portals is two pins. Stored as "wallId|url" lines.
+    var pinnedSources by remember {
+        mutableStateOf(
+            prefs.getString(WALL_PINNED, null)
+                ?.split('\n')
+                ?.filter { it.isNotBlank() }
+                ?.toSet()
+                .orEmpty()
+        )
+    }
     var customTarget by remember { mutableStateOf<WallCustomChannel?>(null) }
     var customMatches by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
     var customLoading by remember { mutableStateOf(false) }
@@ -405,6 +422,13 @@ fun ChannelWallScreen(nav: NavHostController) {
                 "\"${channel.name}\" removed from favorites"
             }
         )
+    }
+
+    fun togglePinnedSource(wallId: String, url: String) {
+        val key = "$wallId|$url"
+        val next = if (key in pinnedSources) pinnedSources - key else pinnedSources + key
+        pinnedSources = next
+        prefs.edit().putString(WALL_PINNED, next.joinToString("\n")).apply()
     }
 
     LaunchedEffect(Unit) {
@@ -724,6 +748,12 @@ fun ChannelWallScreen(nav: NavHostController) {
             },
             onPlay = { playChannel(it) },
             onRecheck = { startWallProbes(scope, wallProbes, wallMatches, force = true) },
+            pinned = pinnedSources
+                .asSequence()
+                .filter { it.startsWith(channel.id + "|") }
+                .map { it.substringAfter('|') }
+                .toSet(),
+            onTogglePin = { ch -> togglePinnedSource(channel.id, ch.url) },
         )
     }
 
@@ -1410,12 +1440,18 @@ private fun WallMatchSheet(
     matches: List<IptvChannel>,
     loading: Boolean,
     probes: WallProbeState,
+    pinned: Set<String>,
+    onTogglePin: (IptvChannel) -> Unit,
     onDismiss: () -> Unit,
     onPlay: (IptvChannel) -> Unit,
     onRecheck: () -> Unit,
 ) {
+    var filter by remember(channel.id) { mutableStateOf(FeedFilter()) }
+    val visibleMatches = remember(matches, filter) {
+        matches.filter { filter.matches(FeedTagsParser.parse(it.name)) }
+    }
     val best = matches
-        .filter { probes.probed.contains(it.url) && probes.results[it.url]?.isAlive == true }
+        .filter { probes.probed.contains(it.url) && probes.results[it.url]?.isPlayable == true }
         .minByOrNull { probes.results[it.url]?.latencyMs ?: Long.MAX_VALUE }
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
@@ -1451,12 +1487,30 @@ private fun WallMatchSheet(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                else -> WallSourceRows(
-                    matches = matches,
-                    probes = probes,
-                    onPlay = onPlay,
-                    onRecheck = onRecheck,
-                )
+                else -> {
+                    FeedFilterRows(
+                        channels = matches,
+                        filter = filter,
+                        onChange = { filter = it },
+                    )
+                    if (visibleMatches.isEmpty()) {
+                        Text(
+                            "No sources match these filters.",
+                            color = Color.White.copy(alpha = 0.6f),
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(vertical = 12.dp),
+                        )
+                    } else {
+                        WallSourceRows(
+                            matches = visibleMatches,
+                            probes = probes,
+                            pinned = pinned,
+                            onTogglePin = onTogglePin,
+                            onPlay = onPlay,
+                            onRecheck = onRecheck,
+                        )
+                    }
+                }
             }
             Spacer(Modifier.height(6.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -1477,13 +1531,20 @@ private fun WallMatchSheet(
 private fun ColumnScope.WallSourceRows(
     matches: List<IptvChannel>,
     probes: WallProbeState,
+    pinned: Set<String> = emptySet(),
+    onTogglePin: (IptvChannel) -> Unit = {},
     onPlay: (IptvChannel) -> Unit,
     onRecheck: () -> Unit,
 ) {
     val alive = matches
-        .filter { probes.probed.contains(it.url) && probes.results[it.url]?.isAlive == true }
-        .sortedBy { probes.results[it.url]?.latencyMs ?: Long.MAX_VALUE }
-    val pending = matches.filter { it.url !in probes.probed }
+        .filter { probes.probed.contains(it.url) && probes.results[it.url]?.isPlayable == true }
+        .sortedWith(
+            compareByDescending<IptvChannel> { it.url in pinned }
+                .thenBy { probes.results[it.url]?.latencyMs ?: Long.MAX_VALUE }
+        )
+    val pending = matches
+        .filter { it.url !in probes.probed }
+        .sortedByDescending { it.url in pinned }
     val dead = (matches.size - alive.size - pending.size).coerceAtLeast(0)
     val rows = alive + pending
 
@@ -1533,7 +1594,7 @@ private fun ColumnScope.WallSourceRows(
         items(rows, key = { it.url }) { match ->
             val checking = match.url !in probes.probed
             val result = probes.results[match.url]
-            val playable = !checking && result?.isAlive == true
+            val playable = !checking && result?.isPlayable == true
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -1582,6 +1643,18 @@ private fun ColumnScope.WallSourceRows(
                     Text("${result?.latencyMs ?: 0} ms", color = Color.White.copy(alpha = 0.55f), fontSize = 10.sp)
                     Spacer(Modifier.width(6.dp))
                     Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color(0xFF00D2EF))
+                }
+                val isPinned = match.url in pinned
+                IconButton(
+                    onClick = { onTogglePin(match) },
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        imageVector = if (isPinned) Icons.Filled.Star else Icons.Filled.StarBorder,
+                        contentDescription = if (isPinned) "Unpin source" else "Pin source",
+                        tint = if (isPinned) Color(0xFFFFC857) else Color.White.copy(alpha = 0.45f),
+                        modifier = Modifier.size(18.dp),
+                    )
                 }
             }
         }

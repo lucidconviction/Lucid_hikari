@@ -120,6 +120,9 @@ import com.hikari.app.data.ProviderType
 import com.hikari.app.data.TileShapes
 import com.hikari.app.i18n.I18n
 import com.hikari.app.i18n.tr
+import com.hikari.app.iptv.FeedFilter
+import com.hikari.app.iptv.FeedFilterRows
+import com.hikari.app.iptv.FeedTagsParser
 import com.hikari.app.iptv.IptvSearch
 import com.hikari.app.iptv.PortalStore
 import com.hikari.app.providers.IptvProvider
@@ -619,7 +622,7 @@ addStream = false
                     chunk.forEach { p ->
                         val chs = runCatching { p.channels() }.getOrNull().orEmpty()
                         chs.filter { it.url.startsWith("http") }.forEach { c ->
-                            IptvProbeCache.put(c.url, com.hikari.app.net.StreamProbe.probe(c.url))
+                            IptvProbeCache.put(c.url, com.hikari.app.net.StreamProbe.probeVerdict(c.url))
                         }
                     }
                 }
@@ -1353,7 +1356,7 @@ fun IptvPlaylistScreen(nav: NavHostController, providerId: String) {
                         async(Dispatchers.IO) {
                             sem.withPermit {
                                 if (c.url.startsWith("http")) {
-                                    IptvProbeCache.put(c.url, com.hikari.app.net.StreamProbe.probe(c.url))
+                                    IptvProbeCache.put(c.url, com.hikari.app.net.StreamProbe.probeVerdict(c.url))
                                 }
                             }
                         }
@@ -1892,7 +1895,7 @@ private fun healthOf(channels: List<com.hikari.app.data.IptvChannel>): HealthDot
     if (channels.isEmpty()) return HealthDot.NONE
     val results = channels.mapNotNull { IptvProbeCache.get(it.url) }
     if (results.isEmpty()) return HealthDot.NONE
-    val alive = results.count { it.isAlive }
+    val alive = results.count { it.isPlayable }
     val dead = results.size - alive
     return when {
         dead == 0 -> HealthDot.ALL_ALIVE
@@ -3364,6 +3367,9 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
     // Modal bottom sheet state
     var showSheet by remember { mutableStateOf(false) }
     var selectedQc by remember { mutableStateOf<QuickChannel?>(null) }
+    // Per-sheet feed filters (channel number / language / quality). Keyed on the
+    // selected quick channel so opening another one starts at "All".
+    var feedFilter by remember(selectedQc?.displayName) { mutableStateOf(FeedFilter()) }
     var qcMatches by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
     var aliveByUrl by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
     var qcLoading by remember { mutableStateOf(false) }
@@ -3726,11 +3732,19 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                             }
                         }
                     }
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(4.dp))
+
+                    FeedFilterRows(
+                        channels = qcMatches,
+                        filter = feedFilter,
+                        onChange = { feedFilter = it },
+                    )
+                    Spacer(Modifier.height(6.dp))
 
                     // Channel list — working/live channels float to the top, most relevant first.
-                    val sortedMatches = remember(qcMatches, aliveByUrl, hideDead, selectedQc) {
+                    val sortedMatches = remember(qcMatches, aliveByUrl, hideDead, selectedQc, feedFilter) {
                         qcMatches
+                            .filter { feedFilter.matches(FeedTagsParser.parse(it.name)) }
                             .filter { ch ->
                                 if (!hideDead) true
                                 else aliveByUrl[ch.url] != false
@@ -4134,8 +4148,8 @@ internal suspend fun validateChannelStatuses(
         channels.map { ch ->
             async(Dispatchers.IO) {
                 semaphore.withPermit {
-                    val result = com.hikari.app.net.StreamProbe.probe(ch.url)
-                    val isAlive = result?.isAlive ?: false
+                    val result = com.hikari.app.net.StreamProbe.probeVerdict(ch.url)
+                    val isAlive = result?.isPlayable ?: false
                     out[ch.url] = isAlive
                     com.hikari.app.ui.screens.IptvProbeCache.put(ch.url, result)
                     onProgress(ch.url, isAlive)
@@ -4743,8 +4757,8 @@ private suspend fun validateChannelStatusesEmbedded(
         channels.map { ch ->
             async(Dispatchers.IO) {
                 semaphore.withPermit {
-                    val result = com.hikari.app.net.StreamProbe.probe(ch.url)
-                    val isAlive = result?.isAlive ?: false
+                    val result = com.hikari.app.net.StreamProbe.probeVerdict(ch.url)
+                    val isAlive = result?.isPlayable ?: false
                     out[ch.url] = isAlive
                     onProgress(ch.url, isAlive)
                 }

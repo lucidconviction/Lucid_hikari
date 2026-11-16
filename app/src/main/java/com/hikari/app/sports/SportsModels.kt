@@ -164,7 +164,11 @@ data class ChannelMatch(
     val catchup: Boolean,
     val logo: String? = null,
     /** The actual playlist channel, so the game page can play it. */
-    val channel: com.hikari.app.data.IptvChannel? = null
+    val channel: com.hikari.app.data.IptvChannel? = null,
+    /** The programme the channel's guide says is this fixture, when known. */
+    val feedLabel: String? = null,
+    /** How many sides the guide's text mentioned (2 = both teams). */
+    val feedScore: Int = 0,
 ) {
     val sure: Boolean get() = score >= 80
 }

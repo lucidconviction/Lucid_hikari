@@ -805,7 +805,7 @@ fun CatalogScreen(
                                         async {
                                             semaphore.withPermit {
                                                 val result = withTimeoutOrNull(6_000) {
-                                                    com.hikari.app.net.StreamProbe.probe(url)
+                                                    com.hikari.app.net.StreamProbe.probeVerdict(url)
                                                 }
                                                 com.hikari.app.ui.screens.IptvProbeCache.put(url, result)
                                                 channelsValidateVersion++
@@ -1014,7 +1014,7 @@ fun CatalogScreen(
                 else uniqueItems.filter { item ->
                     if (item.rawType != "channel") return@filter true
                     val result = com.hikari.app.ui.screens.IptvProbeCache.get(item.id)
-                    result?.isAlive == true || result == null // keep unprobed
+                    result?.isPlayable == true || result == null // keep unprobed
                 }
             }
             // F1 — per-channel health dot from the probe cache.
@@ -1024,7 +1024,7 @@ fun CatalogScreen(
                     val result = IptvProbeCache.get(item.id)
                     when {
                         result == null -> HealthDot.NONE
-                        result.isAlive -> HealthDot.ALL_ALIVE
+                        result.isPlayable -> HealthDot.ALL_ALIVE
                         else -> HealthDot.ALL_DEAD
                     }
                 }
