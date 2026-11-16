@@ -142,7 +142,9 @@ object XtreamShortEpg {
 
     /**
      * Panels base64-encode the title/description. A panel that sends plain text
-     * instead is kept as-is rather than being turned into mojibake.
+     * instead is kept as-is: "News" is itself valid base64, and decoding it
+     * would produce binary noise. The check is on the RESULT — anything with
+     * control characters or replacement marks is treated as a failed decode.
      */
     private fun decode(raw: String): String {
         val text = raw.trim()
@@ -150,7 +152,11 @@ object XtreamShortEpg {
         val decoded = runCatching {
             String(Base64.decode(text, Base64.DEFAULT), Charsets.UTF_8).trim()
         }.getOrNull()
-        return if (decoded.isNullOrBlank() || decoded.contains('\uFFFD')) text else decoded
+        if (decoded.isNullOrBlank()) return text
+        val bad = decoded.count {
+            it == '\uFFFD' || (it.code < 32 && it != '\n' && it != '\r' && it != '\t')
+        }
+        return if (bad > 0) text else decoded
     }
 
     private fun enc(value: String): String =
