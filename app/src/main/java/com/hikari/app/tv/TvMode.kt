@@ -226,6 +226,18 @@ object TvUi {
     @Composable
     fun railWidth(): androidx.compose.ui.unit.Dp = RAIL_WIDTH
 
+    /**
+     * The width of one landscape card in a TV shelf. Five cards across on a
+     * 1080p panel is the readable density (three 280dp cards left a third of
+     * the row empty); the clamp keeps a very short/small panel from shrinking
+     * the art below a legible size, and a 4K panel from growing it to a wall.
+     */
+    @Composable
+    fun cinemaCardWidth(): androidx.compose.ui.unit.Dp {
+        val width = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
+        return (width / 5.2f).dp.coerceIn(220.dp, 320.dp)
+    }
+
     /** One tab's touch/D-pad target on the rail. */
     val RAIL_ITEM_WIDTH = 96.dp
 

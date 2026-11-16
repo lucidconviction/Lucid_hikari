@@ -89,12 +89,20 @@ object YouTubeSettings {
         return tabOrder(context).filter { it.name !in hidden }.ifEmpty { listOf(YtTab.HOME) }
     }
 
-    /** The tab you were last on, if it's still switched on; otherwise the first one. */
+    /** The tab you were last on, if it's still switched on; otherwise the first one.
+     *  On a television the first one is Live: signed out, YouTube's Home feed is empty
+     *  ("Home is picked for you…"), so opening the tab on Home made it look broken.
+     *  Live has content without an account. */
     fun lastTab(context: Context): YtTab {
         val visible = visibleTabs(context)
-        if (!rememberLastTab(context)) return visible.first()
+        val fallback = if (com.hikari.app.tv.TvMode.isTv) {
+            visible.firstOrNull { it == YtTab.LIVE } ?: visible.first()
+        } else {
+            visible.first()
+        }
+        if (!rememberLastTab(context)) return fallback
         val saved = prefs(context).getString(KEY_LAST_TAB, null)
-        return visible.firstOrNull { it.name == saved } ?: visible.first()
+        return visible.firstOrNull { it.name == saved } ?: fallback
     }
 
     /** Open on the tab you were last on; off means the first tab each time. */
@@ -193,7 +201,11 @@ object YouTubeSettings {
         else -> "Auto"
     }
 
-    /** Video MIME types in the order to try them. Auto leaves AV1 for last: few boxes decode it well. */
+    /** Video MIME types in the order to try them. Auto leaves AV1 for last: few boxes decode it well.
+     *  On a television Auto asks for H.264 FIRST: VP9 is the better codec on paper, but a large
+     *  share of TV boxes (especially older Fire TV / no-name Android boxes) either cannot decode
+     *  it or cannot do it in hardware, and a YouTube video that opens to a black screen is worse
+     *  than one at the same size in H.264. */
     fun codecMimeOrder(context: Context): List<String> {
         val vp9 = "video/x-vnd.on2.vp9"
         val avc = "video/avc"
@@ -202,12 +214,18 @@ object YouTubeSettings {
             "avc" -> listOf(avc, vp9, av1)
             "vp9" -> listOf(vp9, avc, av1)
             "av1" -> listOf(av1, vp9, avc)
-            else -> listOf(vp9, avc, av1)
+            else -> if (com.hikari.app.tv.TvMode.isTv) listOf(avc, vp9, av1) else listOf(vp9, avc, av1)
         }
     }
 
-    /** The video height to start at; 0 lets the player choose. */
-    fun preferredHeight(context: Context) = prefs(context).getInt(KEY_QUALITY, 0)
+    /** The video height to start at; 0 lets the player choose. A television
+     *  starts at 1080p: 4K YouTube is usually VP9/AV1, and many boxes cannot
+     *  decode it at all. An explicit choice always wins. */
+    fun preferredHeight(context: Context): Int {
+        val saved = prefs(context).getInt(KEY_QUALITY, 0)
+        if (saved != 0) return saved
+        return if (com.hikari.app.tv.TvMode.isTv) 1080 else 0
+    }
 
     fun setPreferredHeight(context: Context, height: Int) {
         prefs(context).edit().putInt(KEY_QUALITY, height).apply()

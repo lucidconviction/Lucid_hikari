@@ -99,6 +99,7 @@ import com.hikari.app.ui.rememberVisibleItems
 import com.hikari.app.tv.Cs3ShelfHeader
 import com.hikari.app.tv.TvMode
 import com.hikari.app.tv.TvUi
+import com.hikari.app.tv.tvFocusGlow
 import com.hikari.app.ui.theme.glassSheen
 import com.hikari.app.ui.theme.rememberGlassTokens
 import com.hikari.app.ui.theme.HikariMotion
@@ -1569,7 +1570,11 @@ fun ContinueWatchingRow(
                         ContinueWatchingCard(
                             h = h,
                             backdrop = backdropOf(h),
-                            removable = onRemove != null,
+                            // No per-card X on a television: a second focusable inside the
+                            // card is what trapped the remote on this row (Down stayed on
+                            // the card instead of leaving for the shelf below). The shelf
+                            // header's Clear History is the TV way to remove entries.
+                            removable = false,
                             onClick = { onClick(h) },
                             onRemove = { onRemove?.invoke(h) },
                         )
@@ -1632,11 +1637,16 @@ private fun ContinueWatchingCard(
         (h.positionMs.toFloat() / h.durationMs.toFloat()).coerceIn(0f, 1f)
     } else 0f
     val remaining = (h.durationMs - h.positionMs).coerceAtLeast(0L)
+    // A television needs a ring that survives the artwork; the shared focus
+    // indication is inset, and this adds the scale + accent border the TV
+    // shelves use. Phones keep the plain clickable card.
+    val focusRing = if (TvMode.current()) Modifier.tvFocusGlow() else Modifier
     Column(
         Modifier
             .width(230.dp)
             // Not clipped: the rounding lives on the thumbnail itself, so the
             // title under it cannot be eaten by the corner curve.
+            .then(focusRing)
             .clickable(onClick = onClick)
     ) {
         Box(

@@ -35,6 +35,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -219,6 +220,7 @@ fun TvCinemaRow(
   val rowState = if (keeperKey.isBlank()) com.hikari.app.ui.components.keptListState("tvRow:$title:$providerName")
   else com.hikari.app.ui.components.keptListState(keeperKey, itemKeys = rowKeys)
   val rowScope = androidx.compose.runtime.rememberCoroutineScope()
+  val cardWidth = TvUi.cinemaCardWidth()
   Column(Modifier.padding(top = 22.dp)) {
     // The reference shelf header, one-to-one: bold title, the purple View
     // All pill, the two scroll chevrons — over the same kept scroll state.
@@ -234,7 +236,7 @@ fun TvCinemaRow(
     LazyRow(state = rowState, contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
       items(unique, key = { it.uniqueId }) { item ->
         if (vertical) TvVerticalCard(item = item, onClick = { onOpen(item) })
-        else TvCinemaCard(item = item, onClick = { onOpen(item) })
+        else TvCinemaCard(item = item, onClick = { onOpen(item) }, cardWidth = cardWidth)
       }
     }
   }

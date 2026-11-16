@@ -195,6 +195,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
@@ -8579,6 +8581,47 @@ class PlayerActivity : ComponentActivity() {
             }
         }
 
+        // Validate the list while it is open: the byte probe (not just an HTTP
+        // status) hides every stream that answers with a web page or a
+        // placeholder, and marks it dead for CH+/CH- too. The current channel
+        // is kept even if it fails, so the list still shows what is playing.
+        var validating = false
+        fun startValidation() {
+            if (validating) return
+            val snapshot = all
+            if (snapshot.size < 2) return
+            validating = true
+            status.text = I18n.t("Checking streams…")
+            lifecycleScope.launch {
+                val dead = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+                val gate = Semaphore(8)
+                withContext(Dispatchers.IO) {
+                    coroutineScope {
+                        snapshot.map { ch ->
+                            async {
+                                gate.withPermit {
+                                    if (!ch.url.startsWith("http")) return@withPermit
+                                    val result = withTimeoutOrNull(6_000) {
+                                        com.hikari.app.net.StreamProbe.probeVerdict(ch.url, ch.headers)
+                                    }
+                                    if (result != null && !result.isPlayable) dead.add(ch.url)
+                                }
+                            }
+                        }.awaitAll()
+                    }
+                }
+                if (isFinishing || isDestroyed || !dialog.isShowing) return@launch
+                dead.forEach { channelSurfController?.markDead(it) }
+                val currentUrl = sources.getOrNull(currentIndex)?.url
+                all = all.filter { it.url !in dead || it.url == currentUrl }
+                applyFilter(search.text?.toString().orEmpty())
+                if (dead.isNotEmpty()) {
+                    status.text = status.text.toString() + " · " + dead.size + " " + I18n.t("offline hidden")
+                }
+                validating = false
+            }
+        }
+
         dialog.show()
         dialog.window?.setLayout(
             (resources.displayMetrics.widthPixels * 0.92f).toInt(),
@@ -8592,9 +8635,11 @@ class PlayerActivity : ComponentActivity() {
                 all = gathered
                 filtered = gathered
                 applyFilter(search.text?.toString().orEmpty())
+                startValidation()
             }
         } else {
             applyFilter("")
+            startValidation()
         }
     }
 
@@ -14566,8 +14611,8 @@ class PlayerActivity : ComponentActivity() {
                 },
                 when {
                     isTd -> 1_000                          // bufferForPlaybackMs — MTProto
-                    isLive -> 2_500                        // bufferForPlaybackMs — IPTV: a small start cushion
-                    else -> 1_000                          // bufferForPlaybackMs — VOD
+                    isLive -> 1_500                        // bufferForPlaybackMs — IPTV: start after ~1.5 s, not 2.5
+                    else -> 500                            // bufferForPlaybackMs — VOD: first frame sooner
                 },
                 when {
                     isTd -> 4_000                          // bufferForPlaybackAfterRebufferMs — MTProto

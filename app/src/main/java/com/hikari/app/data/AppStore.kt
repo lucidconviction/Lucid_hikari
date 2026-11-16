@@ -4125,7 +4125,8 @@ fun searchExceptionOnFlow(): Flow<Boolean> =
      *  and scales its interface with [uiScaleFlow] instead — so it looks the
      *  same on every phone. OFF (default) follows the system settings. */
     fun uiScaleEnabledFlow(): Flow<Boolean> =
-        store.data.map { it[K.UI_SCALE_ENABLED] ?: false }.distinctUntilChanged().flowOn(Dispatchers.Default)
+        store.data.map { it[K.UI_SCALE_ENABLED] ?: com.hikari.app.tv.TvMode.isTv }
+            .distinctUntilChanged().flowOn(Dispatchers.Default)
 
     suspend fun uiScaleEnabled(): Boolean = uiScaleEnabledFlow().first()
 
@@ -4136,9 +4137,12 @@ fun searchExceptionOnFlow(): Flow<Boolean> =
         runCatching { UiScale.sync(ctx, enabled, uiScale()) }
     }
 
-    /** The in-app scale (0.7f–1.3f) used while [uiScaleEnabledFlow] is on. */
+    /** The in-app scale (0.7f–1.3f) used while [uiScaleEnabledFlow] is on.
+     *  A television starts at 70%: its interface is read from the sofa, but a
+     *  1080p panel reports only 540dp of height, so the phone-sized chrome is
+     *  too large for the screen. An explicit choice always wins. */
     fun uiScaleFlow(): Flow<Float> =
-        store.data.map { (it[K.UI_SCALE_PERCENT] ?: 100).coerceIn(70, 130) / 100f }.distinctUntilChanged().flowOn(Dispatchers.Default)
+        store.data.map { (it[K.UI_SCALE_PERCENT] ?: if (com.hikari.app.tv.TvMode.isTv) 70 else 100).coerceIn(70, 130) / 100f }.distinctUntilChanged().flowOn(Dispatchers.Default)
 
     suspend fun uiScale(): Float = uiScaleFlow().first()
 
