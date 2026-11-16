@@ -8,6 +8,8 @@ import com.liskovsoft.mediaserviceinterfaces.ContentService
 import com.liskovsoft.mediaserviceinterfaces.data.MediaGroup
 import com.liskovsoft.mediaserviceinterfaces.data.MediaItem
 import com.liskovsoft.mediaserviceinterfaces.data.MediaItemFormatInfo
+import com.liskovsoft.mediaserviceinterfaces.data.MediaItemMetadata
+import com.liskovsoft.youtubeapi.service.data.YouTubeMediaItem
 import com.liskovsoft.sharedutils.prefs.GlobalPreferences
 import com.liskovsoft.youtubeapi.service.YouTubeServiceManager
 import kotlinx.coroutines.CompletableDeferred
@@ -49,6 +51,16 @@ data class YtRow(
     internal val group: MediaGroup? = null,
     val canLoadMore: Boolean = false,
 )
+
+/** A playlist the player can save a video to. Watch Later is the built-in first entry. */
+data class YtPlaylist(
+    val id: String,
+    val title: String,
+    val selected: Boolean,
+) {
+    val isWatchLater: Boolean
+        get() = id == "WL" || title.equals("Watch later", ignoreCase = true)
+}
 
 /** The feeds along the top. Grid feeds are one long list; the others are rows of videos. */
 enum class YtTab(val title: String, val needsSignIn: Boolean = false, val grid: Boolean = false) {
@@ -92,6 +104,8 @@ data class YtPlayable(
     val headers: Map<String, String> = emptyMap(),
     /** Where to start, in milliseconds. */
     val startPositionMs: Long = 0L,
+    /** YouTube reported this as a live broadcast: the URL is its HLS feed. */
+    val isLive: Boolean = false,
     /** When this was looked up. YouTube's stream links stop working after a few hours. */
     val lookedUpAt: Long = android.os.SystemClock.elapsedRealtime()
 ) {
@@ -693,7 +707,14 @@ class YouTubeViewModel (private val context: Context) : ViewModel() {
         // the same user-agent.
         val headers = info.clientInfo?.userAgent?.takeIf { it.isNotBlank() }
             ?.let { mapOf("User-Agent" to it) }.orEmpty()
-        return YtPlayable(url, video.title, video.thumbnail, videoId, headers)
+        return YtPlayable(
+            url = url,
+            title = video.title,
+            poster = video.thumbnail,
+            videoId = videoId,
+            headers = headers,
+            isLive = info.isLive,
+        )
     }
 
     /** One lookup per video at a time: hovering a card and then pressing OK share the same request. */
@@ -839,6 +860,71 @@ class YouTubeViewModel (private val context: Context) : ViewModel() {
             )
         }
     }
+
+    /** True when a YouTube account is connected; likes, subscribe and playlists need one. */
+    fun isSignedIn(): Boolean = runCatching { service.signInService.isSigned }.getOrDefault(false)
+
+    /** Subscribes to, or unsubscribes from, a channel. */
+    suspend fun setSubscribed(channelId: String, subscribed: Boolean): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                if (subscribed) service.mediaItemService.subscribe(channelId)
+                else service.mediaItemService.unsubscribe(channelId)
+            }
+        }
+
+    /** Sets the video's reaction to [target] (0 none, 1 like, 2 dislike). */
+    suspend fun setReaction(videoId: String, current: Int, target: Int): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val item = YouTubeMediaItem.fromIds(videoId, null)
+                val media = service.mediaItemService
+                when {
+                    target == MediaItemMetadata.LIKE_STATUS_LIKE -> media.setLike(item)
+                    target == MediaItemMetadata.LIKE_STATUS_DISLIKE -> media.setDislike(item)
+                    current == MediaItemMetadata.LIKE_STATUS_LIKE -> media.removeLike(item)
+                    current == MediaItemMetadata.LIKE_STATUS_DISLIKE -> media.removeDislike(item)
+                }
+            }
+        }
+
+    /** The playlists this video can be saved to. Watch Later comes first. */
+    suspend fun playlists(videoId: String): Result<List<YtPlaylist>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val found = service.mediaItemService.getPlaylistsInfo(videoId).orEmpty()
+                .mapNotNull { info ->
+                    info.playlistId?.takeIf { it.isNotBlank() }?.let { id ->
+                        YtPlaylist(
+                            id = id,
+                            title = info.title.orEmpty().ifBlank { "Playlist" },
+                            selected = info.isSelected,
+                        )
+                    }
+                }
+                .distinctBy { it.id }
+            if (found.any { it.isWatchLater }) found
+            else listOf(YtPlaylist("WL", "Watch later", false)) + found
+        }
+    }
+
+    suspend fun addToPlaylist(playlistId: String, videoId: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                service.mediaItemService.addToPlaylistObserve(playlistId, videoId).blockingSubscribe()
+            }
+        }
+
+    suspend fun removeFromPlaylist(playlistId: String, videoId: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching { service.mediaItemService.removeFromPlaylist(playlistId, videoId) }
+        }
+
+    suspend fun createPlaylist(name: String, videoId: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                service.mediaItemService.createPlaylistObserve(name, videoId).blockingSubscribe()
+            }
+        }
 
     /** Turns YouTube's reason for refusing a video into something that says what to do. */
     private fun friendlyReason(reason: String?): String {

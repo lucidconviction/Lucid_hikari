@@ -7725,6 +7725,7 @@ private fun playerPayload(streams: List<StreamSource>): String? = runCatching {
                     .put("headers", JSONObject(s.headers))
                     .put("isM3u8", s.isM3u8)
                     .put("isMpd", s.isMpd)
+                    .put("isLive", s.isLive)
                     .put("isTorrent", s.isTorrent)
                     .put("provider", s.provider)
                     // Which PROVIDER (repo plugin) produced this server, as

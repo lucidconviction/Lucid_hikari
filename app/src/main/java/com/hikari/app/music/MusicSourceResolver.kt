@@ -173,6 +173,7 @@ object MusicSourceResolver {
             videoId = videoId,
             startPositionMs = 0L,
             headers = source.headers,
+            isLive = source.isLive,
         )
     }
 

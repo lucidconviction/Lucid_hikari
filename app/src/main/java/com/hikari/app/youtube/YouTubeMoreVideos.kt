@@ -102,7 +102,11 @@ fun YouTubeMoreVideos(
         // The requested size: each thumbnail fills a quarter of the player's width. Item and list
         // padding is added around it so the thumbnail itself lands on that quarter.
         val thumbnailWidth = (maxWidth / 4).coerceIn(150.dp, 360.dp)
-        val panelWidth = (thumbnailWidth + 28.dp).coerceAtMost(maxWidth * 0.6f)
+        val panelWidth = if (com.hikari.app.tv.TvMode.isTv) {
+            maxWidth * 0.30f
+        } else {
+            (thumbnailWidth + 28.dp).coerceAtMost(maxWidth * 0.6f)
+        }
 
         AnimatedVisibility(
             visible = showButton && !open,
@@ -221,6 +225,7 @@ fun YouTubeMoreVideos(
                                                     videoId = playable.videoId,
                                                     startPositionMs = playable.startPositionMs,
                                                     headers = playable.headers,
+                                                    isLive = playable.isLive,
                                                 ),
                                             )
                                         },

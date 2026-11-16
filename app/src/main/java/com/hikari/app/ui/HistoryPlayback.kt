@@ -50,6 +50,7 @@ suspend fun openHistoryEntry(context: Context, nav: NavHostController, entry: Hi
                 videoId = videoId,
                 startPositionMs = entry.positionMs,
                 headers = source.headers,
+                isLive = source.isLive,
             ),
         )
         if (context !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

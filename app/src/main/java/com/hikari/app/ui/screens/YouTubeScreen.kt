@@ -65,6 +65,7 @@ fun YouTubeScreen(nav: NavHostController) {
                 { p ->
                     followUp = YouTubePlayRequest(
                         p.url, p.title, p.poster, p.videoId, 0L, p.headers,
+                        isLive = p.isLive,
                     )
                 },
                 {},

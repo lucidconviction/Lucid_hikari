@@ -150,6 +150,7 @@ object SportsYouTube {
                             .put("headers", JSONObject(source.headers))
                             .put("isM3u8", source.isM3u8)
                             .put("isMpd", source.isMpd)
+                            .put("isLive", source.isLive)
                             .put("isTorrent", false)
                             .put("provider", source.provider)
                             .put("providerId", source.providerId)

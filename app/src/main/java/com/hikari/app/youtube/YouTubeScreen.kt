@@ -110,7 +110,17 @@ fun YouTubeScreen(modifier: Modifier = Modifier, onPlay: (YouTubePlayRequest) ->
 
     fun play(item: YtItem, from: List<YtItem>) {
         vm.activate(item, from) { p ->
-            onPlay(YouTubePlayRequest(p.url, p.title, p.poster, p.videoId, p.startPositionMs, p.headers))
+            onPlay(
+                YouTubePlayRequest(
+                    url = p.url,
+                    title = p.title,
+                    poster = p.poster,
+                    videoId = p.videoId,
+                    startPositionMs = p.startPositionMs,
+                    headers = p.headers,
+                    isLive = p.isLive,
+                )
+            )
         }
     }
 

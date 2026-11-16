@@ -158,6 +158,7 @@ object YouTubePlayables {
                         headers = headers,
                         isM3u8 = true,
                         provider = "YouTube",
+                        isLive = true,
                     ),
                 )
             }

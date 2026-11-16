@@ -622,6 +622,9 @@ data class StreamSource(
     val text: String = "",
     /** Optional thumbnail/logo URL for this stream source. */
     val thumbnail: String? = null,
+    /** The provider declared this a live feed (YouTube Live): one HLS link,
+     *  played directly and re-opened on a drop, never replaced by a search. */
+    val isLive: Boolean = false,
 ) {
     /** Identity across every merge/dedup in the app: a torrent is its
      *  infoHash PLUS its file index — two files of one pack share the hash

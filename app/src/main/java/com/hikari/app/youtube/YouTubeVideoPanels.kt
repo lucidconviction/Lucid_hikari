@@ -66,6 +66,10 @@ data class YtVideoInfo(
     val likes: String,
     val description: String,
     val thumbnail: String?,
+    /** 0 none, 1 like, 2 dislike — YouTube's own state for this account. */
+    val likeStatus: Int = 0,
+    val channelId: String? = null,
+    val isSubscribed: Boolean = false,
 )
 
 data class YtComment(
@@ -104,6 +108,9 @@ object YouTubeVideoDetails {
                 description = meta.description.orEmpty(),
                 thumbnail = videoId.takeIf { it.isNotBlank() }
                     ?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" },
+                likeStatus = meta.likeStatus,
+                channelId = meta.channelId,
+                isSubscribed = meta.isSubscribed,
             )
         }
 
@@ -182,12 +189,17 @@ fun YouTubeVideoPanel(
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         // Info and Comments are reading panels, not the narrow More Videos
-        // rail: they need enough width for a comment to wrap at word
-        // boundaries instead of one or two words per line. Keep them wide but
-        // leave a strip of the video visible so the player still feels live.
-        val panelWidth = (maxWidth * 0.46f)
-            .coerceIn(320.dp, 560.dp)
-            .coerceAtMost(maxWidth * 0.88f)
+        // rail: on a phone they need enough width for a comment to wrap at
+        // word boundaries instead of one or two words per line. A television
+        // matches the reference player instead, where both panels occupy 30%
+        // of the width, flush with the right edge.
+        val panelWidth = if (com.hikari.app.tv.TvMode.isTv) {
+            maxWidth * 0.30f
+        } else {
+            (maxWidth * 0.46f)
+                .coerceIn(320.dp, 560.dp)
+                .coerceAtMost(maxWidth * 0.88f)
+        }
         Box(
             Modifier
                 .fillMaxSize()

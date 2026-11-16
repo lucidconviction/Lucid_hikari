@@ -19,6 +19,8 @@ data class YouTubePlayRequest(
     val startPositionMs: Long = 0L,
     /** Stream headers (the User-Agent the URL was resolved with). */
     val headers: Map<String, String> = emptyMap(),
+    /** A live broadcast: play the HLS feed as live and never walk a source list. */
+    val isLive: Boolean = false,
 )
 
 /**
@@ -41,6 +43,7 @@ fun youTubePlayerIntent(context: Context, request: YouTubePlayRequest): Intent {
             put("headers", headers)
             put("isMpd", isMpd)
             put("isM3u8", isM3u8)
+            put("isLive", request.isLive)
             put("provider", "YouTube")
         },
     )

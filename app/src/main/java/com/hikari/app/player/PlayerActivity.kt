@@ -250,6 +250,9 @@ class PlayerActivity : ComponentActivity() {
          *  .m3u8 built by the downloader). Local playback skips the network
          *  probe and reads straight off disk. */
         val local: Boolean = false,
+        /** The provider declared this a live feed (YouTube Live). It is played
+         *  as one link: re-open it, never search for a replacement source. */
+        val isLive: Boolean = false,
         /** Which engine found this server ("CloudStream", "Hikari", "Nuvio",
          *  "Stremio") — the section it is listed under in the server chooser. */
         val provider: String = "",
@@ -2044,7 +2047,6 @@ class PlayerActivity : ComponentActivity() {
                 // controls starts the row at its left edge again.
                 if (controllerVisible) {
                     resetPillScroll()
-                    ytMoreButton?.invoke()
                 } else {
                     findViewById<View>(R.id.yt_actions)?.visibility = View.GONE
                 }
@@ -3439,12 +3441,12 @@ class PlayerActivity : ComponentActivity() {
 
     // ---- YouTube "More Videos" (the list the current video came from) ----
 
-    /** Compose state for the overlay: the ComposeView is built once and only
-     *  its list is toggled, because setContent must not be called twice. */
-    private val ytMoreOpen = androidx.compose.runtime.mutableStateOf(false)
-    private val ytPanelMode = androidx.compose.runtime.mutableStateOf<com.hikari.app.youtube.YtPanelMode?>(null)
     private val ytVideoId = androidx.compose.runtime.mutableStateOf("")
-    private var ytMoreHideTask: Runnable? = null
+    private val ytVideoTitle = androidx.compose.runtime.mutableStateOf("")
+
+    /** The reference player chrome is up: TV keys belong to Compose, not to
+     *  the generic player controller hidden behind it. */
+    @Volatile private var youTubeOverlayActive = false
 
     private fun setupYouTubeMoreVideos() {
         if (!intent.getBooleanExtra("ytPlayback", false)) return
@@ -3452,108 +3454,39 @@ class PlayerActivity : ComponentActivity() {
             ?.removePrefix(com.hikari.app.youtube.YouTubeProgress.ID_PREFIX)
             ?.takeIf { it.isNotBlank() } ?: return
         val overlay = findViewById<ComposeView>(R.id.youtube_more_overlay) ?: return
-        val actions = findViewById<View>(R.id.yt_actions) ?: return
-        val moreButton = findViewById<View>(R.id.yt_more_btn) ?: return
-        val infoButton = findViewById<View>(R.id.yt_info_btn) ?: return
-        val commentsButton = findViewById<View>(R.id.yt_comments_btn) ?: return
-
+        // The reference layout owns the whole chrome in YouTube mode: the
+        // generic player bars are hidden so there is exactly one back button,
+        // one play button and one seek bar.
+        findViewById<View>(R.id.yt_actions)?.visibility = View.GONE
+        playerView?.useController = false
+        playerView?.isFocusable = false
+        playerView?.isFocusableInTouchMode = false
+        youTubeOverlayActive = true
         ytVideoId.value = videoId
-        ytPanelMode.value = null
+        ytVideoTitle.value = intent.getStringExtra("title").orEmpty()
+        overlay.visibility = View.VISIBLE
+        overlay.isFocusable = true
+        overlay.isFocusableInTouchMode = true
         overlay.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
         overlay.setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
-                when (ytPanelMode.value) {
-                    com.hikari.app.youtube.YtPanelMode.INFO -> {
-                        com.hikari.app.youtube.YouTubeVideoPanel(
-                            videoId = ytVideoId.value,
-                            mode = com.hikari.app.youtube.YtPanelMode.INFO,
-                            onClose = {
-                                ytMoreOpen.value = false
-                                ytPanelMode.value = null
-                                overlay.visibility = View.GONE
-                            },
-                        )
-                    }
-                    com.hikari.app.youtube.YtPanelMode.COMMENTS -> {
-                        com.hikari.app.youtube.YouTubeVideoPanel(
-                            videoId = ytVideoId.value,
-                            mode = com.hikari.app.youtube.YtPanelMode.COMMENTS,
-                            onClose = {
-                                ytMoreOpen.value = false
-                                ytPanelMode.value = null
-                                overlay.visibility = View.GONE
-                            },
-                        )
-                    }
-                    else -> {
-                        if (ytMoreOpen.value) {
-                            com.hikari.app.youtube.YouTubeMoreVideos(
-                                videoId = ytVideoId.value,
-                                buttonVisible = false,
-                                initialOpen = true,
-                                onOpenChange = { open ->
-                                    if (!open) {
-                                        ytMoreOpen.value = false
-                                        ytPanelMode.value = null
-                                        overlay.visibility = View.GONE
-                                    }
-                                },
-                                onPlay = { request -> switchYouTubeVideo(request) },
-                            )
-                        }
-                    }
-                }
+                com.hikari.app.youtube.YouTubePlayerOverlay(
+                    videoId = ytVideoId.value,
+                    title = ytVideoTitle.value,
+                    playerProvider = { player },
+                    onBack = { finish() },
+                    onSwitchVideo = { switchYouTubeVideo(it) },
+                    onQuality = { height -> applyYouTubeQualityChoice(height) },
+                )
             }
         }
-        overlay.visibility = View.GONE
-        // The video view sits under the action pills visually, but raising the
-        // pill stack in the window order guarantees taps land on it even after
-        // PlayerView rearranges its own controller children.
-        actions.elevation = 16f * resources.displayMetrics.density
-        actions.bringToFront()
-
-        fun showButtons() {
-            if (ytMoreOpen.value || overlay.visibility == View.VISIBLE) return
-            actions.visibility = View.VISIBLE
-            ytMoreHideTask?.let { actions.removeCallbacks(it) }
-            val hide = Runnable {
-                if (!ytMoreOpen.value) actions.visibility = View.GONE
-            }
-            ytMoreHideTask = hide
-            // Matches the extra overlay time: the pills are tap targets, not a
-            // flash, so they stay reachable for 9s after the controls return.
-            actions.postDelayed(hide, 9_000L)
-        }
-
-        fun openPanel(mode: com.hikari.app.youtube.YtPanelMode) {
-            actions.visibility = View.GONE
-            ytPanelMode.value = mode
-            ytMoreOpen.value = true
-            overlay.visibility = View.VISIBLE
-        }
-
-        infoButton.setOnClickListener {
-            openPanel(com.hikari.app.youtube.YtPanelMode.INFO)
-        }
-        moreButton.setOnClickListener {
-            actions.visibility = View.GONE
-            ytPanelMode.value = null
-            ytMoreOpen.value = true
-            overlay.visibility = View.VISIBLE
-        }
-        commentsButton.setOnClickListener {
-            openPanel(com.hikari.app.youtube.YtPanelMode.COMMENTS)
-        }
-        showButtons()
-        // The buttons are offered again whenever the player controls come back.
-        ytMoreButton = ::showButtons
+        overlay.requestFocus()
+        overlay.post { runCatching { overlay.requestFocus() } }
     }
 
-    private var ytMoreButton: (() -> Unit)? = null
-
     /**
-     * Plays [request] in this player: the old app's "More Videos" swaps the
-     * video in place rather than stacking players. This has to be in-place —
+     * Plays [request] in this player: the "More Videos" panel swaps the video
+     * in place rather than stacking players. This has to be in-place —
      * starting the same singleTop activity again would deliver onNewIntent to
      * this instance and then finish() would close the whole player.
      */
@@ -3580,9 +3513,11 @@ class PlayerActivity : ComponentActivity() {
         playbackCommitted = false
         pickedByUser = false
         ytVideoId.value = request.videoId
-        ytMoreOpen.value = false
-        ytPanelMode.value = null
-        findViewById<View>(R.id.youtube_more_overlay)?.visibility = View.GONE
+        ytVideoTitle.value = request.title
+        findViewById<View>(R.id.youtube_more_overlay)?.apply {
+            visibility = View.VISIBLE
+            requestFocus()
+        }
         findViewById<View>(R.id.yt_actions)?.visibility = View.GONE
         findViewById<TextView>(R.id.title_text)?.text = request.title
         findViewById<TextView>(R.id.subtitle_text)?.apply {
@@ -3596,7 +3531,6 @@ class PlayerActivity : ComponentActivity() {
             backdropOverride = request.poster,
         )
         playSource(0)
-        ytMoreButton?.invoke()
     }
 
     /**
@@ -3702,7 +3636,6 @@ class PlayerActivity : ComponentActivity() {
         }
         val pv = playerView ?: return
         if (isInPictureInPictureMode) {
-            ytMoreOpen.value = false
             findViewById<View>(R.id.youtube_more_overlay)?.visibility = View.GONE
             findViewById<View>(R.id.yt_actions)?.visibility = View.GONE
             hideLoadingBanner(immediate = true)
@@ -3717,7 +3650,17 @@ class PlayerActivity : ComponentActivity() {
             codecOverlay?.visibility = View.GONE
             stopCodecTicker()
         } else {
-            pv.useController = true
+            if (youTubeOverlayActive) {
+                // The reference chrome, not media3's controller, owns the
+                // full-screen player: returning from PiP must restore it.
+                pv.useController = false
+                findViewById<View>(R.id.youtube_more_overlay)?.apply {
+                    visibility = View.VISIBLE
+                    requestFocus()
+                }
+            } else {
+                pv.useController = true
+            }
             if (controlsLocked) {
                 pv.hideController()
                 flashUnlockIcon()
@@ -4481,6 +4424,7 @@ class PlayerActivity : ComponentActivity() {
         // itself as a phone but is driven by a remote gets the player's focus
         // treatment through [playerTvRemote] below (see [TvInput]).
         TvInput.noteKey(event)
+        if (youTubeOverlayActive) return super.dispatchKeyEvent(event)
         if (!TvMode.isTv) return super.dispatchKeyEvent(event)
         if (event.action == android.view.KeyEvent.ACTION_DOWN && handleTvKey(event.keyCode)) {
             return true
@@ -5556,6 +5500,26 @@ class PlayerActivity : ComponentActivity() {
     private var sponsorTicking = false
     private var lastSponsorSeekAt = 0L
     private var ytQualityApplied = false
+
+    /** The YouTube overlay's quality picker: choose an exact DASH track height. */
+    private fun applyYouTubeQualityChoice(height: Int) {
+        val p = player ?: return
+        val builder = p.trackSelectionParameters.buildUpon()
+            .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+        if (height <= 0) {
+            p.trackSelectionParameters = builder
+                .setMaxVideoSize(Int.MAX_VALUE, Int.MAX_VALUE)
+                .build()
+            return
+        }
+        val group = p.currentTracks.groups.firstOrNull { it.type == C.TRACK_TYPE_VIDEO } ?: return
+        val index = (0 until group.length).firstOrNull {
+            runCatching { group.getTrackFormat(it).height == height }.getOrDefault(false)
+        } ?: return
+        p.trackSelectionParameters = builder
+            .addOverride(TrackSelectionOverride(group.mediaTrackGroup, ImmutableList.of(index)))
+            .build()
+    }
 
     /**
      * The YouTube tab's "Start at" quality/codec preference. Applied once, when
@@ -9616,14 +9580,14 @@ class PlayerActivity : ComponentActivity() {
         p.volume = 0f
         // Muted is not the same as silent: the preview should not decode an
         // audio track or a 4K rendition while the fullscreen video is still
-        // using the device's decoders. Cap it at 480p / 1 Mbps: the preview is
-        // a thumbnail, and at 720p/2.5 Mbps it competed with the last seconds
-        // of the main episode on a weak link.
+        // using the device's decoders. Phones cap it at 480p / 1 Mbps; a TV's
+        // preview is three times the size, so it gets 720p / 2.5 Mbps.
+        val tvPreview = com.hikari.app.tv.TvMode.isTv
         runCatching {
             p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
                 .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
-                .setMaxVideoSize(854, 480)
-                .setMaxVideoBitrate(1_000_000)
+                .setMaxVideoSize(if (tvPreview) 1280 else 854, if (tvPreview) 720 else 480)
+                .setMaxVideoBitrate(if (tvPreview) 2_500_000 else 1_000_000)
                 .build()
         }
         p.addListener(object : Player.Listener {
@@ -9668,15 +9632,22 @@ class PlayerActivity : ComponentActivity() {
         val density = resources.displayMetrics.density
         fun dp(v: Int) = (v * density + 0.5f).toInt()
         val lp = container.layoutParams as? FrameLayout.LayoutParams ?: return
-        lp.width = dp(247)
-        lp.height = dp(139)
+        // A television is watched from four metres: the corner preview is three
+        // times the phone's size there (and a little further from the edge).
+        val tv = com.hikari.app.tv.TvMode.isTv
+        val width = if (tv) 741 else 247
+        val height = if (tv) 417 else 139
+        val margin = if (tv) 24 else 14
+        lp.width = dp(width)
+        lp.height = dp(height)
         lp.gravity = Gravity.BOTTOM or Gravity.END
-        lp.setMargins(dp(14), dp(14), dp(14), dp(14))
+        lp.setMargins(dp(margin), dp(margin), dp(margin), dp(margin))
         container.layoutParams = lp
         container.setBackgroundResource(R.drawable.next_preview_frame)
         container.clipToOutline = true
-        container.elevation = dp(10).toFloat()
+        container.elevation = dp(if (tv) 16 else 10).toFloat()
         nextPreviewLabel?.visibility = View.VISIBLE
+        nextPreviewLabel?.textSize = if (tv) 14f else 10f
     }
 
     /** Drops the corner player but keeps the resolved next sources. */
@@ -14287,6 +14258,7 @@ class PlayerActivity : ComponentActivity() {
                     trackers,
                     drm = parseDrmSpec(o.optJSONObject("drm")),
                     local = o.optBoolean("local"),
+                    isLive = o.optBoolean("isLive"),
                     torrentStream = o.optBoolean("torrentStream"),
                     provider = o.optString("provider"),
                     providerId = o.optString("providerId"),
@@ -15410,6 +15382,9 @@ class PlayerActivity : ComponentActivity() {
         // without this it plays as a live channel ("Reconnecting to the live
         // stream…") instead of going to the torrent engine.
         if (src.isTorrent) return false
+        // The provider already told us (YouTube Live): there is one HLS feed
+        // and no list to search, so treat it as live from the first frame.
+        if (src.isLive) return true
         if (src.providerId.startsWith(com.hikari.app.data.IptvMark.ID_PREFIX)) {
             // A saved NETWORK STREAM rides on an IPTV-type row but is a file, not a live
             // channel: forcing LIVE here gave it live-TV retries ("Reconnecting to the live
@@ -17291,7 +17266,8 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
             com.hikari.app.data.Logs.log(
                 "Player",
                 "playing ${sources.getOrNull(currentIndex)?.name ?: "?"} " +
-                    "(server ${currentIndex + 1}/${sources.size})",
+                    "(server ${currentIndex + 1}/${sources.size}, " +
+                    "live=${isLiveSource(sources.getOrNull(currentIndex))})",
             )
             maybeOfferResume()
         }

@@ -1,3 +1,16 @@
+## 0.13.2
+
+**16 November 2026**
+
+### The reference YouTube player, a 3× TV next-preview, and live links that play
+
+- **YouTube has the reference client's control ring**: Back / title / play on top; Last, Subscribe, Watch later, Quality, Info, More, Comments, Like, Dislike and Next below, with the seek bar underneath. The D-pad order, hidden-control scrubbing and panel Back behaviour match the reference one-for-one.
+- **The ring is live engine state**: likes, dislikes and subscriptions update the account, Watch later opens the real playlist picker (including a new playlist), Quality picks an exact DASH track height, and More / Info / Comments use the same panels as the YouTube tab.
+- **The old floating Info / More / Comments pills are gone** from YouTube playback; there is one chrome with one back button, one play button and one seek bar.
+- **The next-video PiP preview is 3× larger on a television** — 741×417dp instead of 247×139dp, with a 720p / 2.5 Mbps decode cap so the bigger picture still starts quickly.
+- **YouTube Live plays as live from the first frame**: the live flag travels from the resolver into the player, so the HLS feed opens directly and a drop re-opens the same link instead of searching for another server.
+- **PiP exit restores the YouTube chrome** rather than media3's controller.
+
 ## 0.13.1
 
 **16 November 2026**
