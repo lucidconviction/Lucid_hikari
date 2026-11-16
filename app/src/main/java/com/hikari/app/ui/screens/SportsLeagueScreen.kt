@@ -49,6 +49,7 @@ import com.hikari.app.sports.SportsDates
 import com.hikari.app.sports.SportsEvent
 import com.hikari.app.sports.SportsRepository
 import com.hikari.app.sports.SportsSettings
+import com.hikari.app.ui.components.HikariSectionHeader
 import com.hikari.app.ui.navigation.LocalTaskbarInset
 import kotlinx.coroutines.launch
 import android.text.format.DateFormat
@@ -152,12 +153,9 @@ fun SportsLeagueScreen(nav: androidx.navigation.NavHostController, leagueId: Str
 
 @Composable
 private fun SectionTitle(title: String, live: Boolean = false) {
-    Text(
-        title,
-        style = MaterialTheme.typography.titleSmall,
-        fontWeight = FontWeight.Bold,
-        color = if (live) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-        modifier = Modifier.padding(top = 8.dp),
+    HikariSectionHeader(
+        title = title,
+        accent = if (live) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
     )
 }
 

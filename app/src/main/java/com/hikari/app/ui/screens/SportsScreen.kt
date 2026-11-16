@@ -93,6 +93,7 @@ import coil.compose.AsyncImage
 import com.hikari.app.HikariApp
 import com.hikari.app.data.IptvChannel
 import com.hikari.app.player.PlayerActivity
+import com.hikari.app.ui.components.HikariSectionHeader
 import com.hikari.app.sports.ChannelMatch
 import com.hikari.app.sports.CivilTime
 import com.hikari.app.sports.FollowedTeam
@@ -889,27 +890,11 @@ private fun LiveSportsTab(
 
 @Composable
 private fun LiveSectionTitle(title: String, count: Int, live: Boolean) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
-    ) {
-        if (live) {
-            Box(Modifier.size(7.dp).clip(CircleShape).background(MaterialTheme.colorScheme.error))
-            Spacer(Modifier.width(6.dp))
-        }
-        Text(
-            title,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.Bold,
-            color = if (live) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            count.toString(),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
+    HikariSectionHeader(
+        title = title,
+        count = count,
+        accent = if (live) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+    )
 }
 
 @Composable

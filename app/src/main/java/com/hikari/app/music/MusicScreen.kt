@@ -84,6 +84,7 @@ import coil.compose.AsyncImage
 import androidx.navigation.NavHostController
 import com.hikari.app.ui.navigation.LocalTaskbarInset
 import com.hikari.app.ui.navigation.Routes
+import com.hikari.app.ui.components.HikariSectionHeader
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -1054,12 +1055,7 @@ private fun MusicHero(
 
 @Composable
 internal fun MusicSectionTitle(title: String, subtitle: String?) {
-    Column(Modifier.padding(horizontal = 16.dp)) {
-        Text(title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Black)
-        subtitle?.let {
-            Text(it, color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp)
-        }
-    }
+    HikariSectionHeader(title = title, subtitle = subtitle)
 }
 
 @Composable

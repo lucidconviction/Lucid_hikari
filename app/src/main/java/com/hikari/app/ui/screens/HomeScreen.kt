@@ -153,6 +153,7 @@ import com.hikari.app.ui.components.ContinueWatchingRow
 import com.hikari.app.ui.components.EmptyState
 import com.hikari.app.ui.components.GlassDialog
 import com.hikari.app.ui.components.GlassSearchField
+import com.hikari.app.ui.components.HikariChip
 import com.hikari.app.ui.components.HeroBanner
 import com.hikari.app.ui.components.HeroConfig
 import com.hikari.app.ui.components.HeroStyles
@@ -2507,30 +2508,14 @@ internal fun ProviderPickerSheet(
  */
 @Composable
 private fun FilterChipLine(label: String, selected: Boolean, onClick: () -> Unit) {
-    // Television chips read muted-on-black with a hairline edge (desktop
-    // language); phones keep the outline chip.
-    val tvChip = com.hikari.app.tv.TvMode.current()
-    Surface(
+    // One chip shape for the whole app now: the same min-height, hairline and
+    // accent fill as the filter rows on Live TV and the pickers.
+    HikariChip(
+        label = label,
+        selected = selected,
         onClick = onClick,
-        shape = RoundedCornerShape(50),
-        color = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
-        border = if (selected) null else BorderStroke(
-            1.dp,
-            if (tvChip) com.hikari.app.tv.TvDesktop.GlassEdge
-            else MaterialTheme.colorScheme.outline.copy(alpha = 0.55f),
-        ),
         modifier = Modifier.padding(vertical = 2.dp),
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (selected) MaterialTheme.colorScheme.onPrimary
-            else if (tvChip) com.hikari.app.tv.TvDesktop.TextMuted
-            else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-        )
-    }
+    )
 }
 
 /** An all-caps section heading inside the picker ("Collections", "Providers"). */
