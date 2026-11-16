@@ -1,3 +1,20 @@
+## 0.13.0
+
+**15 November 2026**
+
+### A calmer Home, a health dot that means video, and a player that states what it is playing
+
+- **Home has one job per zone**: the provider switch is a chip in the header (the floating pill that hovered over posters is gone), the app tagline and the donation banner leave the feed (donations remain in Settings → About), and the genre strip sits below Continue Watching instead of between the hero and the first shelf.
+- **Continue Watching is a compact rail**: 16:9 cards with the title under the artwork, a thin progress bar, six entries, and removal in a long-press menu instead of an always-visible ✕.
+- **One shelf header everywhere**: a 3dp accent bar, a 15sp title, provider names as quiet uppercase provenance, and a single Show All chevron. Home's first shelves also fade up once on load.
+- **Live TV health now means video**: the probe reads the first bytes and checks HLS, MPEG-TS, MP4, ADTS, Matroska, Ogg and MPEG-PS, and rejects HTML/JSON/XML/text pages. A portal answering `200 text/html` with "account expired" is no longer green.
+- **Feed variants are filterable**: channel number, language and quality rows appear only when a channel really has several feeds; the Channel Wall also pins a source per URL.
+- **The exact feed for a fixture**: on a game page, Hikari reads each Xtream channel's short guide around kick-off and labels the one showing the teams — "Showing: Arsenal v Chelsea" — and floats it to the top.
+- **The player explains the stream**: HDR, audio codec and channels, and video codec sit beside the quality and source badges; the runtime now ends with the wall-clock finish time.
+- **Intro, recap and credits are real segments**: TheIntroDB timings mark the seek bar and the Skip pill jumps to the end of the actual segment instead of a blind 85 seconds.
+- **Cohesion pass**: Sports, league pages and Music use the shared section header and chip shapes, so the same kind of heading looks the same everywhere.
+- **Tests**: the byte classification and feed-tag parser now have JVM unit tests (the first test source set in the project).
+
 ## 0.12.12
 
 **14 November 2026**
