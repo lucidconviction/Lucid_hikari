@@ -1004,6 +1004,16 @@ fun HomeScreen(nav: NavHostController) {
     val uniqueRows = remember(rows) {
         rows.distinctBy { it.key.ifBlank { "${it.providerName}|${it.title}" } }
     }
+    // The first shelves fade up once, 700ms after the feed arrives. Rows that
+    // scroll in after that draw immediately, so the effect belongs to the first
+    // load and never replays during scrolling.
+    var shelfRevealDone by remember { mutableStateOf(false) }
+    LaunchedEffect(uniqueRows.size) {
+        if (uniqueRows.isNotEmpty() && !shelfRevealDone) {
+            delay(700)
+            shelfRevealDone = true
+        }
+    }
     // ScrollKeeper mirror of the feed below (see ScrollKeeper): the exact key
     // of every item in Lazy order, so Back lands on the same ROW even when
     // shelves stream in differently ordered, shimmer placeholders come and go,
@@ -1164,6 +1174,10 @@ fun HomeScreen(nav: NavHostController) {
                         onClearAll = if (TvMode.current()) {
                             { scope.launch { app.store.clearHistory() } }
                         } else null,
+                        // Home's rail: 16:9, title under the art, six entries,
+                        // remove in a long-press menu.
+                        compact = !TvMode.current(),
+                        maxEntries = 6,
                     )
                 }
             }
@@ -1220,7 +1234,7 @@ fun HomeScreen(nav: NavHostController) {
             // HomeViewModel.rowsFlowFor), while a multi pick that contains both
             // shows the collections' folder rows AND the extensions' shelves —
             // which is what picking several sources means.
-            uniqueRows.forEach { row ->
+            uniqueRows.forEachIndexed { rowIndex, row ->
                 item(
                     key = row.key.ifBlank { "${row.providerName}|${row.title}" },
                     // One content type for every shelf, so the LazyColumn can
@@ -1234,6 +1248,7 @@ fun HomeScreen(nav: NavHostController) {
                         providerName = row.providerName,
                         items = row.items,
                         keeperKey = "homeRow:" + row.key.ifBlank { "${row.providerName}|${row.title}" },
+                        animateIn = !shelfRevealDone && rowIndex < 3,
                         onClick = { item ->
                             if (item.rawType != "manga") {
                                 com.hikari.app.player.PlaybackQueueStore.set(row.items, item)

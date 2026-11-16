@@ -1,6 +1,8 @@
 package com.hikari.app.ui.theme
 
+import android.animation.ValueAnimator
 import android.content.Context
+import android.os.Build
 import android.provider.Settings
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Easing
@@ -51,13 +53,20 @@ object HikariMotion {
      * same). Never throws: a resolver that refuses the read is treated as
      * "animations on", which is the platform default.
      */
-    fun animationsEnabled(context: Context): Boolean = runCatching {
-        Settings.Global.getFloat(
-            context.contentResolver,
-            Settings.Global.ANIMATOR_DURATION_SCALE,
-            1f,
-        ) > 0.01f
-    }.getOrDefault(true)
+    fun animationsEnabled(context: Context): Boolean {
+        // API 26+ exposes the same system animator scale without a settings
+        // provider read, which matters because this is asked from composition.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            return runCatching { ValueAnimator.areAnimatorsEnabled() }.getOrDefault(true)
+        }
+        return runCatching {
+            Settings.Global.getFloat(
+                context.contentResolver,
+                Settings.Global.ANIMATOR_DURATION_SCALE,
+                1f,
+            ) > 0.01f
+        }.getOrDefault(true)
+    }
 }
 
 /**

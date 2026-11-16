@@ -4,6 +4,8 @@ import com.hikari.app.i18n.I18n
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -11,6 +13,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -42,6 +45,8 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -96,6 +101,8 @@ import com.hikari.app.tv.TvMode
 import com.hikari.app.tv.TvUi
 import com.hikari.app.ui.theme.glassSheen
 import com.hikari.app.ui.theme.rememberGlassTokens
+import com.hikari.app.ui.theme.HikariMotion
+import com.hikari.app.ui.theme.rememberAnimationsEnabled
 import com.hikari.app.ui.shape
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -149,6 +156,10 @@ fun MediaRow(
     /** ScrollKeeper slot for this row's horizontal scroll (see ScrollKeeper):
      *  Back from a title lands where the row was. Blank keeps a plain state. */
     keeperKey: String = "",
+    /** Fade/rise the whole shelf the first time it is composed. Home passes
+     *  this only during its first load; other screens keep the default and are
+     *  untouched. Disabled when the system animator scale is off. */
+    animateIn: Boolean = false,
 ) {
     val style = rememberPosterStyle()
     if (TvMode.current()) {
@@ -159,44 +170,39 @@ fun MediaRow(
         com.hikari.app.tv.TvCinemaRow(title = title, providerName = providerName, items = items, onOpen = onClick, onShowAll = onShowAll, keeperKey = keeperKey)
         return
     }
-    Column(Modifier.padding(top = 20.dp)) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    // Catalog/row names come from the extensions, so they are
-                    // English strings from outside the app: tr() translates the
-                    // ones the i18n files know and leaves the rest untouched.
-                    tr(title),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                // Blank means "the row does not need to say where it came from":
-                // a folder's own page already says which folder this is (its
-                // header), so repeating the folder's name above every row was
-                // noise the user asked to lose — "we created netflix folder we
-                // know we are on it". Rows that DO mix several folders (the
-                // tab view's "All") still pass a name and still draw it.
-                if (providerName.isNotBlank()) {
-                    Text(
-                        providerName.uppercase(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
+    // One reveal per shelf, not per card: a whole row fading up together reads
+    // as content arriving; twelve cards each with their own delay reads as a
+    // loading animation. The state starts false only when the caller asked for
+    // the effect, so a re-composition (scrolling back) never replays it.
+    val motionOn = rememberAnimationsEnabled()
+    var revealed by remember { mutableStateOf(!animateIn || !motionOn) }
+    LaunchedEffect(animateIn, motionOn) {
+        if (animateIn && motionOn) revealed = true
+    }
+    val revealAlpha by animateFloatAsState(
+        targetValue = if (revealed) 1f else 0f,
+        animationSpec = tween(HikariMotion.standard, easing = HikariMotion.easeOut),
+        label = "shelfRevealAlpha",
+    )
+    val revealOffset by animateDpAsState(
+        targetValue = if (revealed) 0.dp else 8.dp,
+        animationSpec = tween(HikariMotion.standard, easing = HikariMotion.easeOut),
+        label = "shelfRevealOffset",
+    )
+    Column(
+        Modifier
+            .padding(top = 24.dp)
+            .graphicsLayer {
+                alpha = revealAlpha
+                translationY = revealOffset.toPx()
             }
-            if (onShowAll != null) {
-                TextButton(onClick = onShowAll) {
-                    Text(tr("Show All"), fontWeight = FontWeight.SemiBold)
-                }
-            }
-        }
+    ) {
+        HikariSectionHeader(
+            title = tr(title),
+            subtitle = providerName.ifBlank { null },
+            onAction = onShowAll,
+            actionLabel = if (onShowAll != null) tr("Show All") else null,
+        )
         // The style is read ONCE for the row and handed to every cell. Read per
         // cell it opened one DataStore collection per poster on screen, so a
         // Home feed with three rows of twelve visible cards had ~36 live
@@ -1503,6 +1509,12 @@ fun ContinueWatchingRow(
     /** When non-null the TV header shows the reference's "Clear History"
      *  action beside the shelf header (it clears the same shared store). */
     onClearAll: (() -> Unit)? = null,
+    /** Home's compact rail: 16:9 cards with the title BELOW the artwork, a thin
+     *  progress bar, and removal in a long-press menu instead of an always-on
+     *  ✕. The default keeps the original card for any other caller. */
+    compact: Boolean = false,
+    /** Cap on how many entries the rail draws (Home asks for 6). */
+    maxEntries: Int = Int.MAX_VALUE,
 ) {
     if (entries.isEmpty()) return
     // Defensive dedupe: a duplicate Compose key would crash the whole row.
@@ -1514,9 +1526,10 @@ fun ContinueWatchingRow(
     // what this can judge on — and [rememberNsfwEnabled] is what makes the row drop
     // those cards the moment the switch is flipped.
     val nsfwOn = com.hikari.app.ui.rememberNsfwEnabled()
-    val shown = remember(unique, nsfwOn) {
-        if (nsfwOn) unique
+    val shown = remember(unique, nsfwOn, maxEntries) {
+        val filtered = if (nsfwOn) unique
         else unique.filter { !com.hikari.app.data.NsfwGate.isAdultText(it.title, emptyList()) }
+        if (maxEntries in 1 until filtered.size) filtered.take(maxEntries) else filtered
     }
     if (TvMode.current()) {
         // The reference Continue Watching header: bold title, the "Clear
@@ -1564,6 +1577,15 @@ fun ContinueWatchingRow(
                 }
             }
         }
+        return
+    }
+    if (compact) {
+        ContinueWatchingCompactRow(
+            entries = shown,
+            backdropOf = backdropOf,
+            onClick = onClick,
+            onRemove = onRemove,
+        )
         return
     }
     Column(Modifier.padding(top = 16.dp)) {
@@ -1729,6 +1751,160 @@ private fun ContinueWatchingCard(
                         .background(MaterialTheme.colorScheme.primary)
                 )
             }
+        }
+    }
+}
+
+/**
+ * Home's compact Continue Watching rail.
+ *
+ * The legacy card put the title and an always-visible ✕ on the artwork and
+ * carried a "27m left" pill in the corner; three pieces of chrome on a card
+ * that exists to answer one question ("where was I?"). This rail keeps the
+ * answer — artwork, progress, how long is left — and moves the title under the
+ * card. Removing an entry is a long-press menu, so the artwork is never
+ * covered by a button.
+ */
+@Composable
+private fun ContinueWatchingCompactRow(
+    entries: List<HistoryEntry>,
+    backdropOf: (HistoryEntry) -> String?,
+    onClick: (HistoryEntry) -> Unit,
+    onRemove: ((HistoryEntry) -> Unit)?,
+) {
+    Column(Modifier.padding(top = 16.dp)) {
+        HikariSectionHeader(
+            title = tr("Continue Watching"),
+            count = entries.size,
+        )
+        Spacer(Modifier.height(6.dp))
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            items(entries, key = { it.uniqueKey }) { h ->
+                ContinueWatchingCompactCard(
+                    h = h,
+                    backdrop = backdropOf(h),
+                    onClick = { onClick(h) },
+                    onRemove = onRemove,
+                )
+            }
+        }
+    }
+}
+
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun ContinueWatchingCompactCard(
+    h: HistoryEntry,
+    backdrop: String?,
+    onClick: () -> Unit,
+    onRemove: ((HistoryEntry) -> Unit)?,
+) {
+    var menu by remember { mutableStateOf(false) }
+    val target = if (h.durationMs > 0L) {
+        (h.positionMs.toFloat() / h.durationMs.toFloat()).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    val progress by animateFloatAsState(
+        targetValue = target,
+        animationSpec = tween(durationMillis = 400),
+        label = "continueProgress",
+    )
+    val remaining = (h.durationMs - h.positionMs).coerceAtLeast(0L)
+
+    Column(Modifier.width(190.dp)) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .aspectRatio(16f / 9f)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = { if (onRemove != null) menu = true },
+                )
+        ) {
+            HeroArtwork(
+                model = PosterLoader.model(backdrop ?: h.posterUrl),
+                wide = !backdrop.isNullOrBlank(),
+                contentDescription = h.title,
+                modifier = Modifier.fillMaxSize(),
+            )
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            0.55f to Color.Transparent,
+                            1f to Color.Black.copy(alpha = 0.65f),
+                        )
+                    )
+            )
+            if (remaining > 0L) {
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = Color.Black.copy(alpha = 0.62f),
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp),
+                ) {
+                    Text(
+                        I18n.t("%s left").replace("%s", fmtRemaining(remaining)),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White,
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                    )
+                }
+            }
+            Box(
+                Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .background(Color.White.copy(alpha = 0.22f))
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(progress)
+                        .height(3.dp)
+                        .background(MaterialTheme.colorScheme.primary)
+                )
+            }
+            DropdownMenu(
+                expanded = menu,
+                onDismissRequest = { menu = false },
+            ) {
+                DropdownMenuItem(
+                    text = { Text(tr("Remove from Continue Watching")) },
+                    onClick = {
+                        menu = false
+                        onRemove?.invoke(h)
+                    },
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            h.title,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if ((h.episodeName.isNotBlank() || h.episodeId.isNotBlank()) &&
+            h.type != com.hikari.app.data.MediaType.MOVIE
+        ) {
+            Text(
+                h.episodeName.ifBlank { "Episode" },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
