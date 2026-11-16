@@ -1,3 +1,16 @@
+## 0.13.1
+
+**16 November 2026**
+
+### A television pass: 70% interface, YouTube that plays, and a D-pad that moves
+
+- **The TV interface starts at 70%** with “force one interface size” on. A 1080p panel reports only 540dp of height, so the phone-sized chrome was too large; an explicit choice in Settings still wins.
+- **YouTube on a TV prefers H.264 and 1080p** instead of VP9/AV1, and a signed-out TV opens the tab on **Live** rather than the empty Home feed. This is the black-screen/“YouTube doesn’t work” fix for boxes that cannot decode VP9 or 4K.
+- **Continue Watching no longer traps the remote**: the per-card ✕ is gone on TV (a second focus target inside every card), the card is the one target, and it wears the TV focus ring and scale.
+- **TV shelves are five cards across** on a 1080p panel, sized from the screen instead of a fixed 280dp.
+- **The player’s Channels list validates every stream** with the byte probe and hides the dead ones; CH+ / CH− skip them for the rest of the session.
+- **The player starts sooner**: VOD after 500ms of buffer (was 1s), live after 1.5s (was 2.5s).
+
 ## 0.13.0
 
 **15 November 2026**
