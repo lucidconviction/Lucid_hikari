@@ -70,7 +70,7 @@ fun rememberLayoutTokens(): LayoutTokens {
             pageGutter = 0.dp,
             sectionGap = TvDesktop.SpaceL,
             cardGap = TvDesktop.SpaceM,
-            gridMin = TvUi.posterWidth(),
+            gridMin = maxOf(96f, TvUi.posterWidth().value).dp,
             maxContentWidth = Dp.Infinity,
             navKind = NavKind.RAIL,
             navInset = TvUi.RAIL_WIDTH,

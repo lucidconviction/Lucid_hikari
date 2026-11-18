@@ -2058,6 +2058,12 @@ fun DetailScreen(
     val detailHeroFlow = remember { detailApp.store.detailHeroStyleFlow() }
     val detailHeroStyle by detailHeroFlow.collectAsState(initial = DetailHeroStyles.WIDE)
     val isTvLayout = com.hikari.app.tv.TvMode.current()
+    // A tablet reads a detail page as a centred column, not a
+    // 1000dp-wide stretch of text and buttons. The television keeps
+    // its own layout below (isTvLayout).
+    val isTabletLayout =
+        com.hikari.app.ui.layout.rememberDeviceClass() ==
+            com.hikari.app.ui.layout.DeviceClass.TABLET
     val tvDetailBigFlow = remember { detailApp.store.tvDetailBigFlow() }
     val tvDetailBig by tvDetailBigFlow.collectAsState(initial = isTvLayout)
     // Full-bleed detail art (Settings → TV & Remote, off by default): the
@@ -5266,7 +5272,20 @@ fun DetailScreen(
                 }
             }
             else -> {
-                LazyColumn(state = detailList, modifier = Modifier.fillMaxSize()) {
+                LazyColumn(
+                    state = detailList,
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .then(
+                            if (isTabletLayout) {
+                                Modifier
+                                    .widthIn(max = 760.dp)
+                                    .align(Alignment.CenterHorizontally)
+                            } else {
+                                Modifier.fillMaxWidth()
+                            }
+                        ),
+                ) {
                     // The header art is the page's FIRST item, so it scrolls up
                     // and away as the page is read — see the header note above
                     // for what the wordmark drawn over it does while it does.

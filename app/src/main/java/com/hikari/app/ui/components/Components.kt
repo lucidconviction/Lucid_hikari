@@ -106,6 +106,7 @@ import com.hikari.app.ui.effects.cardPress
 import com.hikari.app.ui.effects.cardSheen
 import com.hikari.app.ui.effects.rememberShelfSnap
 import com.hikari.app.ui.theme.HikariMotion
+import com.hikari.app.ui.theme.HikariType
 import com.hikari.app.ui.theme.rememberAnimationsEnabled
 import com.hikari.app.ui.shape
 import kotlinx.coroutines.delay
@@ -864,8 +865,8 @@ private fun HeroCarousel(
                             shape = RoundedCornerShape(50),
                             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = Color.White,
-                                contentColor = Color.Black,
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary,
                             ),
                         ) {
                             Icon(
@@ -1011,8 +1012,8 @@ private fun HeroStaticCard(
                         shape = RoundedCornerShape(50),
                         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Color.White,
-                            contentColor = Color.Black,
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
                         ),
                     ) {
                         Icon(
@@ -1203,8 +1204,7 @@ private fun HeroSpotlight(
                 ) {
                     Text(
                         item.title,
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Black,
+                        style = HikariType.display,
                         color = Color.White,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
@@ -1241,8 +1241,8 @@ private fun HeroSpotlight(
                             shape = RoundedCornerShape(50),
                             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 7.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = Color.White,
-                                contentColor = Color.Black,
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary,
                             ),
                         ) {
                             Icon(
