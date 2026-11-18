@@ -1,3 +1,20 @@
+## 0.15.2
+
+**18 November 2026**
+
+### A working browser for streaming sites
+
+- **Rumble loads past its first page.** Video taps route through an ad click-tracker on the main frame; the blocker cancelled it and left a white page. The tracker's destination (carried as a base64 parameter) is now decoded and followed.
+- **Dailymotion works.** Its CDN (`dmcdn.net`) is in several blocklists, so the site's own scripts and video were blocked as ads. A host list can no longer block a first-party request, a main-frame document, or a known player/CDN domain; URL patterns still apply. “Same site” is now the registrable domain, so `www.dailymotion.com` and `static.neon-ssr.dailymotion.com` match.
+- **A real address bar**: back / forward / URL field / reload / media badge / menu. Type an address or a search; the field follows the page.
+- **Finding video**: the badge shows how many sources were found and opens a sheet with the page's preview image, **Play best**, and one row per source labelled HLS adaptive / DASH / HLS / MP4. Fragments (init segments, `.m4s`, transport streams, demuxed audio) are filtered out.
+- **The page's own network is watched**: a sniffer wraps `fetch`/`XHR` and scans the DOM and performance timeline, so a stream an SPA holds in JavaScript is still found — with the headers the page used.
+- **Stream proxy**: hand-offs run through a loopback proxy that re-fetches with the page's Referer, Cookie, User-Agent and Origin and rewrites HLS manifests so child playlists, keys and segments all carry them. This fixes CDNs that reject the player on a later hop, and seeking on signed URLs.
+- **Userscripts can be imported from a URL** — a `.user.js`, or a Greasy Fork / OpenUserJS page (its install link is followed). The source lands in the editor for review before saving.
+- **Element blocking survives redesigns**: a blocked element keeps a fingerprint, and if its selector stops matching the closest candidate above a similarity threshold is hidden instead.
+- Page dialogs that appear without a tap (or during playback) are answered automatically, and notification prompts are refused unless the user is actually interacting.
+- A little air between the toolbar and the page, and the status-bar inset is respected.
+
 ## 0.15.1
 
 **18 November 2026**
