@@ -3,6 +3,9 @@ package com.hikari.app.data
 import com.hikari.app.HikariApp
 import com.hikari.app.net.Http
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -27,6 +30,8 @@ import java.util.TimeZone
  * must never be able to break the Trackers tab.
  */
 object TrackerCalendarRepository {
+
+    private const val DAY_MS = 24L * 60L * 60L * 1000L
 
     data class Entry(
         val atMillis: Long,
@@ -98,12 +103,21 @@ object TrackerCalendarRepository {
         val now = System.currentTimeMillis()
         val limit = now + days * 24L * 60L * 60L * 1000L
         val out = ArrayList<Entry>()
+        val animeIds = HashSet<Int>()
+
+        fun posterOf(path: String?): String? = path?.takeIf { it.isNotBlank() }?.let {
+            "https://wsrv.nl/?url=https://simkl.in/posters/" + it + "_m.webp&q=90"
+        }
+
+        // Anime and film releases are small CDN files (250 KB / 1.2 MB) and
+        // parse safely on a phone. The TV file is tens of megabytes — parsing
+        // it into a JSON object was enough to take the app down — so TV airings
+        // come from the per-day endpoint instead (about 22 KB a day).
         val files = listOf(
-            Triple("tv", "shows", false),
-            Triple("anime", "anime", false),
-            Triple("movie_release", "movies", true),
+            Triple("anime", false, true),
+            Triple("movie_release", true, false),
         )
-        for ((file, _, isMovie) in files) {
+        for ((file, isMovie, _) in files) {
             if (isMovie && movies.isEmpty()) continue
             if (!isMovie && shows.isEmpty()) continue
             val url = "https://data.simkl.in/calendar/v2/$file.json" +
@@ -117,8 +131,9 @@ object TrackerCalendarRepository {
                 val simklId = o.optInt("simkl_id", 0)
                 if (simklId <= 0) continue
                 if (if (isMovie) simklId !in movies else simklId !in shows) continue
+                if (!isMovie) animeIds += simklId
                 val at = parseDate(o.optString("date")) ?: continue
-                if (at < now - 24L * 60L * 60L * 1000L || at > limit) continue
+                if (at < now - DAY_MS || at > limit) continue
                 val meta = metadata?.optJSONObject(simklId.toString()) ?: continue
                 val title = meta.optString("title").trim()
                 if (title.isBlank()) continue
@@ -131,23 +146,61 @@ object TrackerCalendarRepository {
                     season > 0 -> "S${season}E$number" + if (epTitle.isNotBlank()) " · $epTitle" else ""
                     else -> "E$number" + if (epTitle.isNotBlank()) " · $epTitle" else ""
                 }
-                val posterPath = meta.optString("poster").takeIf { it.isNotBlank() }
-                val poster = posterPath?.let {
-                    "https://wsrv.nl/?url=https://simkl.in/posters/" + it + "_m.webp&q=90"
-                }
-                val tmdb = meta.optJSONObject("ids")?.optString("tmdb").orEmpty()
                 out += entry(
                     at = at,
                     title = title,
                     subtitle = subtitle,
-                    poster = poster,
-                    tmdbId = tmdb,
+                    poster = posterOf(meta.optString("poster")),
+                    tmdbId = meta.optJSONObject("ids")?.optString("tmdb").orEmpty(),
                     isSeries = !isMovie,
                     tracker = "Simkl",
                 )
             }
         }
-        return out
+
+        // TV shows: one small, cached-at-the-edge response per day.
+        if (shows.isNotEmpty()) {
+            coroutineScope {
+                val days = (0 until days.coerceIn(1, 21)).map { offset ->
+                    async {
+                        val date = dayString(offset)
+                        runCatching {
+                            Http.getStringQuiet(
+                                "https://api.simkl.com/tv/airing?date=$date" +
+                                    "&client_id=${client.id}&app-name=Hikari&app-version=1.0",
+                                auth,
+                            )
+                        }.getOrNull()
+                    }
+                }
+                for (body in days.awaitAll()) {
+                    val arr = body?.let { runCatching { JSONArray(it) }.getOrNull() } ?: continue
+                    for (i in 0 until arr.length()) {
+                        val o = arr.optJSONObject(i) ?: continue
+                        val simklId = o.optJSONObject("ids")?.optInt("simkl_id", 0) ?: 0
+                        if (simklId <= 0 || simklId !in shows || simklId in animeIds) continue
+                        val at = parseDate(o.optString("date")) ?: continue
+                        if (at < now - DAY_MS || at > limit) continue
+                        val title = o.optString("title").trim()
+                        if (title.isBlank()) continue
+                        val episode = o.optJSONObject("episode")
+                        val season = episode?.optInt("season", 0) ?: 0
+                        val number = episode?.optInt("episode", 0) ?: 0
+                        out += entry(
+                            at = at,
+                            title = title,
+                            subtitle = if (season > 0) "S${season}E$number" else "E$number",
+                            poster = posterOf(o.optString("poster")),
+                            tmdbId = "",
+                            isSeries = true,
+                            tracker = "Simkl",
+                        )
+                    }
+                }
+            }
+        }
+        // Two sources can describe the same airing; keep one row per airing.
+        return out.distinctBy { Triple(it.atMillis, it.title, it.subtitle) }
     }
 
     // ---- Trakt -----------------------------------------------------------
@@ -164,7 +217,11 @@ object TrackerCalendarRepository {
         val from = dayString(0)
         val out = ArrayList<Entry>()
         for (type in listOf("shows", "movies")) {
-            val url = "https://api.trakt.tv/calendars/my/$type/$from/$days"
+            // Without `extended=images` Trakt sends no artwork at all, and
+            // `show.poster` is not a field it defines — hence the nested read
+            // below. The calendar should look like the library, not a column
+            // of blank tiles.
+            val url = "https://api.trakt.tv/calendars/my/$type/$from/$days?extended=full,images"
             val body = runCatching {
                 Http.get(url, headers).use { r ->
                     if (!r.isSuccessful) null else r.body?.string()
@@ -191,7 +248,10 @@ object TrackerCalendarRepository {
                     at = at,
                     title = title,
                     subtitle = subtitle,
-                    poster = show?.optString("poster")?.takeIf { it.startsWith("http") },
+                    poster = show?.optJSONObject("images")
+                        ?.optJSONObject("poster")?.optString("full")
+                        ?.takeIf { it.startsWith("http") }
+                        ?: show?.optString("poster")?.takeIf { it.startsWith("http") },
                     tmdbId = show?.optJSONObject("ids")?.optString("tmdb").orEmpty(),
                     isSeries = episode != null,
                     tracker = "Trakt",

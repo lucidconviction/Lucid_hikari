@@ -127,6 +127,8 @@ object TrackerLibraryRepository {
         val collectionShows: List<MediaItem>
         val favoriteMovies: List<MediaItem>
         val favoriteShows: List<MediaItem>
+        val ratedMovies: List<MediaItem>
+        val ratedShows: List<MediaItem>
         kotlinx.coroutines.coroutineScope {
             val wm = async { get("/watchlist/movies?extended=full,images&page=1&limit=250", MediaType.MOVIE) }
             val ws = async { get("/watchlist/shows?extended=full,images&page=1&limit=250", MediaType.SERIES) }
@@ -138,6 +140,8 @@ object TrackerLibraryRepository {
             val cs = async { get("/collection/shows?extended=full,images&page=1&limit=250", MediaType.SERIES) }
             val fm = async { get("/favorites/movies?extended=full,images&page=1&limit=250", MediaType.MOVIE) }
             val fs = async { get("/favorites/shows?extended=full,images&page=1&limit=250", MediaType.SERIES) }
+            val rm = async { get("/ratings/movies?extended=full,images&page=1&limit=250", MediaType.MOVIE) }
+            val rs = async { get("/ratings/shows?extended=full,images&page=1&limit=250", MediaType.SERIES) }
             movies = wm.await()
             shows = ws.await()
             watchedMovies = wmed.await()
@@ -148,6 +152,8 @@ object TrackerLibraryRepository {
             collectionShows = cs.await()
             favoriteMovies = fm.await()
             favoriteShows = fs.await()
+            ratedMovies = rm.await()
+            ratedShows = rs.await()
         }
         if (movies.isNotEmpty()) out += Shelf("trakt.watchlist.movies", "Trakt Watchlist · Movies", movies)
         if (shows.isNotEmpty()) out += Shelf("trakt.watchlist.shows", "Trakt Watchlist · Shows", shows)
@@ -166,6 +172,10 @@ object TrackerLibraryRepository {
         if (fm.isNotEmpty()) out += Shelf("trakt.favorites.movies", "Trakt Favorites · Movies", fm)
         val fs = favoriteShows.distinctBy { it.uniqueId }
         if (fs.isNotEmpty()) out += Shelf("trakt.favorites.shows", "Trakt Favorites · Shows", fs)
+        val rm = ratedMovies.distinctBy { it.uniqueId }
+        if (rm.isNotEmpty()) out += Shelf("trakt.ratings.movies", "Trakt Ratings · Movies", rm)
+        val rs = ratedShows.distinctBy { it.uniqueId }
+        if (rs.isNotEmpty()) out += Shelf("trakt.ratings.shows", "Trakt Ratings · Shows", rs)
 
         val lists = runCatching {
             Http.get("https://api.trakt.tv/users/${enc(who.first())}/lists", headers).use { response ->

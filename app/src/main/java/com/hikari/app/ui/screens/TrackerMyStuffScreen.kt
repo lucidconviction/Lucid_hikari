@@ -204,8 +204,12 @@ fun TrackerMyStuffScreen(nav: NavHostController, embedded: Boolean = false) {
                         modifier = Modifier.padding(top = 4.dp),
                     )
                 }
-                entries.forEach { entry ->
-                    item(key = "calendar-" + entry.atMillis + "-" + entry.title) {
+                // The key is positional, not derived from the entry: a show
+                // can air twice in a day (or arrive from two sources with the
+                // same title), and a duplicated LazyColumn key is a hard crash,
+                // not a visual glitch. Day + index is unique by construction.
+                entries.forEachIndexed { index, entry ->
+                    item(key = "calendar-$day-$index") {
                         TrackerCalendarRow(entry) {
                             entry.item?.let(openItem)
                         }
