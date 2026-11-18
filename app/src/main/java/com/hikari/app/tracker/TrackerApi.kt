@@ -919,6 +919,55 @@ object TrackerApi {
         Result.failure(Exception("${client.kind.label}: ${e.message ?: e.javaClass.simpleName}"))
     }
 
+    /**
+     * Sets [media]'s list status to "watching" — the tracker half of the detail
+     * page's "Mark as watching".
+     *
+     * This is deliberately separate from [push]: that call reports a WATCH
+     * (history), and using it for "watching" told every service the episode had
+     * been seen, which is the opposite of what the user said. Here nothing is
+     * added to history and no episode count is moved; only the list status is
+     * written. It is also what makes the title appear on the tracker's own
+     * calendar, and therefore in Hikari's Upcoming.
+     *
+     * Trakt has no persistent "watching" status; it gets the watchlist entry,
+     * which is what its personal calendar reads, and the returned sentence says
+     * so rather than pretending the status exists.
+     */
+    suspend fun setWatching(
+        client: TrackerClient,
+        account: TrackerAccount,
+        match: TrackerMatch,
+        media: TrackerMedia,
+    ): Result<String> = try {
+        when (client.kind) {
+            TrackerKind.ANILIST -> anilistSetWatching(account.token, match, media)
+            TrackerKind.MAL -> malSetWatching(account.token, match, media)
+            TrackerKind.KITSU -> if (media.manga) {
+                Result.failure(Exception("Kitsu: manga sync needs AniList or MyAnimeList."))
+            } else {
+                kitsuSetWatching(account, match)
+            }
+            TrackerKind.SHIKIMORI -> if (media.manga) {
+                Result.failure(Exception("Shikimori: manga sync needs AniList or MyAnimeList."))
+            } else {
+                shikimoriSetWatching(account.token, account.userId, match)
+            }
+            TrackerKind.SIMKL -> if (media.manga) {
+                Result.failure(Exception("Simkl: manga sync needs AniList or MyAnimeList."))
+            } else {
+                simklSetWatching(client.id, account.token, match, media)
+            }
+            TrackerKind.TRAKT -> if (media.manga) {
+                Result.failure(Exception("Trakt: manga sync needs AniList or MyAnimeList."))
+            } else {
+                traktWatchlist(client.id, account.token, match, media)
+            }
+        }
+    } catch (e: Exception) {
+        Result.failure(Exception("${client.kind.label}: ${e.message ?: e.javaClass.simpleName}"))
+    }
+
     /** "episode 12 of 220" / "watched" — the tail of a push sentence. */
     private fun unitNote(media: TrackerMedia): String = if (media.manga) "chapter" else "episode"
     private fun doneNote(media: TrackerMedia, total: Int): String = when {
@@ -932,6 +981,213 @@ object TrackerApi {
         media.episode <= 0 -> false
         total > 0 -> media.episode >= total
         else -> false
+    }
+
+    // ------------------------------------------------------- watching-status push
+
+    private suspend fun anilistSetWatching(
+        token: String,
+        match: TrackerMatch,
+        media: TrackerMedia,
+    ): Result<String> {
+        val query = """
+            mutation (${'$'}id: Int, ${'$'}status: MediaListStatus) {
+              SaveMediaListEntry(mediaId: ${'$'}id, status: ${'$'}status) {
+                id
+                status
+              }
+            }
+        """.trimIndent()
+        val variables = JSONObject().apply {
+            put("id", match.id.toIntOrNull() ?: 0)
+            put("status", "CURRENT")
+        }
+        val reply = graphql(token, query, variables)
+        reply.graphQlError()?.let { return Result.failure(Exception("AniList: $it")) }
+        if (!reply.ok) return Result.failure(Exception(problem(reply, "AniList update")))
+        val saved = reply.json()?.optJSONObject("data")?.optJSONObject("SaveMediaListEntry")
+            ?: return Result.failure(Exception("AniList: the update was refused — sign in again."))
+        return Result.success("AniList: ${match.title} — watching")
+    }
+
+    private suspend fun malSetWatching(
+        token: String,
+        match: TrackerMatch,
+        media: TrackerMedia,
+    ): Result<String> {
+        val id = match.id.toIntOrNull()
+            ?: return Result.failure(Exception("MyAnimeList: bad title id."))
+        // Status only: PATCHing without the episode fields leaves the progress
+        // the user already has untouched.
+        val reply = sendAny(
+            listOf("PATCH", "PUT"),
+            "https://api.myanimelist.net/v2/" + (if (media.manga) "manga/" else "anime/") +
+                "$id/my_list_status",
+            form("status" to if (media.manga) "reading" else "watching"),
+            malHeaders(token) + ("Content-Type" to FORM),
+            FORM,
+        )
+        if (!reply.ok) return Result.failure(Exception(problem(reply, "MyAnimeList update")))
+        return Result.success("MyAnimeList: ${match.title} — watching")
+    }
+
+    private suspend fun kitsuSetWatching(
+        account: TrackerAccount,
+        match: TrackerMatch,
+    ): Result<String> {
+        if (account.userId.isBlank()) {
+            return Result.failure(Exception("Kitsu: the account was not identified — sign in again."))
+        }
+        val headers = kitsuHeaders(account.token) + ("Content-Type" to JSONAPI)
+        val existing = get(
+            "https://kitsu.io/api/edge/library-entries" +
+                "?filter[userId]=${enc(account.userId)}&filter[animeId]=${enc(match.id)}&page[limit]=1",
+            kitsuHeaders(account.token),
+        ).json()?.optJSONArray("data")?.optJSONObject(0)?.optString("id").orEmpty()
+
+        val attributes = JSONObject().put("status", "current")
+        val payload: JSONObject
+        val method: String
+        val url: String
+        if (existing.isNotBlank()) {
+            method = "PATCH"
+            url = "https://kitsu.io/api/edge/library-entries/$existing"
+            payload = JSONObject().put(
+                "data",
+                JSONObject().apply {
+                    put("id", existing)
+                    put("type", "library-entries")
+                    put("attributes", attributes)
+                },
+            )
+        } else {
+            method = "POST"
+            url = "https://kitsu.io/api/edge/library-entries"
+            payload = JSONObject().put(
+                "data",
+                JSONObject().apply {
+                    put("type", "library-entries")
+                    put("attributes", attributes)
+                    put(
+                        "relationships",
+                        JSONObject().apply {
+                            put("user", JSONObject().put("data", JSONObject().put("type", "users").put("id", account.userId)))
+                            put("anime", JSONObject().put("data", JSONObject().put("type", "anime").put("id", match.id)))
+                        },
+                    )
+                },
+            )
+        }
+        val reply = send(method, url, payload.toString(), headers, JSONAPI)
+        if (!reply.ok) return Result.failure(Exception(problem(reply, "Kitsu update")))
+        return Result.success("Kitsu: ${match.title} — watching")
+    }
+
+    private suspend fun shikimoriSetWatching(
+        token: String,
+        userId: String,
+        match: TrackerMatch,
+    ): Result<String> {
+        val targetId = match.id.toIntOrNull()
+            ?: return Result.failure(Exception("Shikimori: bad title id."))
+        val headers = shikimoriHeaders(token) + ("Content-Type" to "application/json")
+        val rateId = runCatching {
+            get(
+                "https://shikimori.one/api/v2/user_rates?user_id=0&target_id=$targetId&target_type=Anime",
+                shikimoriHeaders(token),
+            ).array()
+        }.getOrNull()?.optJSONObject(0)?.optInt("id", 0) ?: 0
+        val reply = if (rateId > 0) {
+            send(
+                "PATCH",
+                "https://shikimori.one/api/v2/user_rates/$rateId",
+                JSONObject().put("user_rate", JSONObject().put("status", "watching")).toString(),
+                headers,
+            )
+        } else {
+            post(
+                "https://shikimori.one/api/v2/user_rates",
+                JSONObject().put(
+                    "user_rate",
+                    JSONObject().apply {
+                        put("user_id", userId.toIntOrNull() ?: 0)
+                        put("target_id", targetId)
+                        put("target_type", "Anime")
+                        put("status", "watching")
+                    },
+                ).toString(),
+                headers,
+            )
+        }
+        if (!reply.ok) return Result.failure(Exception(problem(reply, "Shikimori update")))
+        return Result.success("Shikimori: ${match.title} — watching")
+    }
+
+    private suspend fun simklSetWatching(
+        clientId: String,
+        token: String,
+        match: TrackerMatch,
+        media: TrackerMedia,
+    ): Result<String> {
+        val id = match.id.toIntOrNull()
+            ?: return Result.failure(Exception("Simkl: bad title id."))
+        // Simkl's own rule: films are atomic and have no watching state — it
+        // silently records "watching" as "completed", which would be a lie.
+        if (media.movie || match.category == "movie") {
+            return Result.failure(
+                Exception("Simkl: films have no watching status — kept in Continue watching only.")
+            )
+        }
+        // `to` is per item; a top-level `to` is rejected with 400 empty_field.
+        val entry = JSONObject().apply {
+            put("to", "watching")
+            put("ids", JSONObject().put("simkl", id))
+        }
+        val payload = JSONObject().apply {
+            if (match.category == "anime") put("anime", JSONArray().put(entry))
+            else put("shows", JSONArray().put(entry))
+        }
+        val reply = post(
+            "https://api.simkl.com/sync/add-to-list?client_id=${enc(clientId)}" +
+                "&app-name=Hikari&app-version=" + enc(com.hikari.app.BuildConfig.VERSION_NAME),
+            payload.toString(),
+            simklHeaders(clientId, token),
+        )
+        if (!reply.ok) return Result.failure(Exception(problem(reply, "Simkl update")))
+        val notFound = reply.json()?.optJSONObject("not_found")
+        val missing = listOf("shows", "anime", "movies").any {
+            (notFound?.optJSONArray(it)?.length() ?: 0) > 0
+        }
+        if (missing) {
+            return Result.failure(Exception("Simkl: ${match.title} was not found in its catalogue."))
+        }
+        return Result.success("Simkl: ${match.title} — watching (on your Upcoming)")
+    }
+
+    /**
+     * Trakt's list model has no "watching" bucket. The watchlist is the list its
+     * personal calendar reads, so that is what gets written — and the sentence
+     * says "watchlist", not "watching", because they are not the same thing.
+     */
+    private suspend fun traktWatchlist(
+        clientId: String,
+        token: String,
+        match: TrackerMatch,
+        media: TrackerMedia,
+    ): Result<String> {
+        val id = match.id.toIntOrNull()
+            ?: return Result.failure(Exception("Trakt: bad title id."))
+        val ids = JSONObject().put("trakt", id)
+        val payload = JSONObject().apply {
+            if (media.movie || match.category == "movie") {
+                put("movies", JSONArray().put(JSONObject().put("ids", ids)))
+            } else {
+                put("shows", JSONArray().put(JSONObject().put("ids", ids)))
+            }
+        }
+        val reply = post("https://api.trakt.tv/sync/watchlist", payload.toString(), traktHeaders(clientId, token))
+        if (!reply.ok) return Result.failure(Exception(problem(reply, "Trakt update")))
+        return Result.success("Trakt: ${match.title} — watchlist (Trakt has no watching status)")
     }
 
     // -------------------------------------------------------------------- AniList

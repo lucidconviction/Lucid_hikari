@@ -4489,13 +4489,22 @@ fun DetailScreen(
                 watchedAt = System.currentTimeMillis(),
             )
             app.store.addHistory(entry)
-            // The trackers (Settings → Trackers) hear about this too: "mark as
-            // watched" is exactly the fact the player reports at the end of an
-            // episode. Reporting only from the player meant marking a season
-            // watched here left the user's own list untouched, which reads as
-            // tracking being broken.
+            // The trackers (Settings → Trackers) hear about this too, but the
+            // two marks are different facts:
+            //
+            //  * "watched" is a watch event — the same one the player reports at
+            //    the end of an episode;
+            //  * "watching" is a STATUS. Sending it as a watch event (which the
+            //    old code did) told Simkl and the rest that the episode had been
+            //    seen. It now sets the list status instead, which is also what
+            //    puts the title on the tracker's calendar — and so on Upcoming.
             runCatching {
-                TrackerSync.pushWatched(app.store, TrackerSync.mediaOf(entry), entry.uniqueKey)
+                val trackerMedia = TrackerSync.mediaOf(entry)
+                if (watched) {
+                    TrackerSync.pushWatched(app.store, trackerMedia, entry.uniqueKey)
+                } else {
+                    TrackerSync.pushWatching(app.store, trackerMedia)
+                }
             }
         }
     }
@@ -4521,7 +4530,7 @@ fun DetailScreen(
                         key = "watching",
                         label = tr("Mark as watching"),
                         supporting = if (markWatching) tr("Shows in Continue watching")
-                        else tr("Puts it in Continue watching"),
+                        else tr("Puts it in Continue watching and your tracker's Watching list"),
                     )
                 )
                 add(

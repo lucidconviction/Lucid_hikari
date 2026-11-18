@@ -158,31 +158,54 @@ object TrackerCalendarRepository {
             }
         }
 
-        // TV shows: one small, cached-at-the-edge response per day.
+        // TV shows: one small response per day. Two Simkl quirks matter here:
+        //
+        //  * `date` must be DD-MM-YYYY (see [dayStringSimkl]); and
+        //  * the returned `date` field carries the air TIME but today's calendar
+        //    date, whatever day was asked for. Taking it at face value filed
+        //    every episode under today — so the rail is built from the requested
+        //    day and only the clock is read from the payload.
         if (shows.isNotEmpty()) {
             coroutineScope {
                 val days = (0 until days.coerceIn(1, 21)).map { offset ->
                     async {
-                        val date = dayString(offset)
-                        runCatching {
+                        offset to runCatching {
                             Http.getStringQuiet(
-                                "https://api.simkl.com/tv/airing?date=$date" +
+                                "https://api.simkl.com/tv/airing?date=" + dayStringSimkl(offset) +
                                     "&client_id=${client.id}&app-name=Hikari&app-version=1.0",
                                 auth,
                             )
                         }.getOrNull()
                     }
                 }
-                for (body in days.awaitAll()) {
+                for ((offset, body) in days.awaitAll()) {
                     val arr = body?.let { runCatching { JSONArray(it) }.getOrNull() } ?: continue
+                    val base = Calendar.getInstance().apply {
+                        add(Calendar.DAY_OF_YEAR, offset)
+                        set(Calendar.HOUR_OF_DAY, 0)
+                        set(Calendar.MINUTE, 0)
+                        set(Calendar.SECOND, 0)
+                        set(Calendar.MILLISECOND, 0)
+                    }
                     for (i in 0 until arr.length()) {
                         val o = arr.optJSONObject(i) ?: continue
                         val simklId = o.optJSONObject("ids")?.optInt("simkl_id", 0) ?: 0
                         if (simklId <= 0 || simklId !in shows || simklId in animeIds) continue
-                        val at = parseDate(o.optString("date")) ?: continue
-                        if (at < now - DAY_MS || at > limit) continue
                         val title = o.optString("title").trim()
                         if (title.isBlank()) continue
+                        // "2026-11-18T22:30:00-05:00" -> "22:30"; blank when the
+                        // catalogue has no air time on file.
+                        val rawTime = o.optString("date")
+                            .substringAfter('T', "")
+                            .take(5)
+                            .takeIf { it.length == 5 && it[2] == ':' && it[0].isDigit() }
+                        val minutes = rawTime?.let {
+                            (it.take(2).toIntOrNull() ?: 0) * 60 + (it.drop(3).toIntOrNull() ?: 0)
+                        }
+                        // Unknown time sits at noon so it cannot drift into the
+                        // previous day; it displays with no clock at all.
+                        val at = base.timeInMillis + (minutes ?: 720) * 60_000L
+                        if (at < now - DAY_MS || at > limit) continue
                         val episode = o.optJSONObject("episode")
                         val season = episode?.optInt("season", 0) ?: 0
                         val number = episode?.optInt("episode", 0) ?: 0
@@ -194,6 +217,7 @@ object TrackerCalendarRepository {
                             tmdbId = "",
                             isSeries = true,
                             tracker = "Simkl",
+                            timeOverride = rawTime?.let(::twelveHour).orEmpty(),
                         )
                     }
                 }
@@ -271,6 +295,8 @@ object TrackerCalendarRepository {
         tmdbId: String,
         isSeries: Boolean,
         tracker: String,
+        /** The service's own air time, when it must not be converted. */
+        timeOverride: String? = null,
     ): Entry {
         val cal = Calendar.getInstance().apply { timeInMillis = at }
         val now = Calendar.getInstance()
@@ -280,7 +306,10 @@ object TrackerCalendarRepository {
             sameDay(cal, tomorrow) -> "Tomorrow"
             else -> SimpleDateFormat("EEE d MMM", Locale.getDefault()).format(Date(at))
         }
-        val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(at))
+        // 12-hour everywhere, matching the rest of the app. The previous
+        // "HH:mm" read as 19:30 — correct, but not what a phone user expects.
+        val time = timeOverride
+            ?: SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(at))
         val item = if (tmdbId.isNotBlank() && tmdbId != "null") {
             MediaItem(
                 providerId = "tmdb",
@@ -299,6 +328,29 @@ object TrackerCalendarRepository {
     private fun sameDay(a: Calendar, b: Calendar): Boolean =
         a.get(Calendar.YEAR) == b.get(Calendar.YEAR) &&
             a.get(Calendar.DAY_OF_YEAR) == b.get(Calendar.DAY_OF_YEAR)
+
+    /**
+     * `/tv/airing` and `/anime/airing` document `DD-MM-YYYY`; a bogus date is
+     * silently replaced with *today*, so an ISO string here made every day of
+     * the window return today's single episode. Trakt keeps [dayString].
+     */
+    private fun dayStringSimkl(offsetDays: Int): String {
+        val cal = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, offsetDays) }
+        return SimpleDateFormat("dd-MM-yyyy", Locale.US).format(cal.time)
+    }
+
+    /** "19:30" -> "7:30 PM", without any timezone conversion. */
+    private fun twelveHour(hhmm: String): String {
+        val h = hhmm.take(2).toIntOrNull() ?: return ""
+        val m = hhmm.drop(3).take(2)
+        val suffix = if (h < 12) "AM" else "PM"
+        val h12 = when {
+            h == 0 -> 12
+            h > 12 -> h - 12
+            else -> h
+        }
+        return "$h12:$m $suffix"
+    }
 
     private fun dayString(offsetDays: Int): String {
         val cal = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, offsetDays) }
