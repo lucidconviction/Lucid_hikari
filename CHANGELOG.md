@@ -1,3 +1,12 @@
+## 0.15.1
+
+**18 November 2026**
+
+### A black opening screen that says what it is
+
+- **The launch screen is now pure black** with **Lucid Conviction Build** and the app's accent loading animation underneath. The platform splash draws no icon, so there is no logo flash before it — black, then the name.
+- The label holds for a moment and fades out while the app finishes composing behind it; it is drawn as a native overlay, so it appears on the first frame and does not change with the app font or the UI scale.
+
 ## 0.15.0
 
 **18 November 2026**
