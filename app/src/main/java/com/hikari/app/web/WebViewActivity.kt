@@ -6,6 +6,14 @@ import android.app.DownloadManager
 import android.widget.Button
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.drawable.GradientDrawable
+import android.text.InputType
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
+import android.widget.ImageView
+import android.widget.ScrollView
 import android.graphics.Color
 import android.net.Uri
 import android.os.Build
@@ -15,6 +23,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.Message
 import android.os.SystemClock
+import android.util.Base64
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -36,6 +45,7 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import com.google.android.material.bottomsheet.BottomSheetDialog
 import androidx.activity.OnBackPressedCallback
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -90,6 +100,15 @@ class WebViewActivity : ComponentActivity() {
     private lateinit var webView: WebView
     private lateinit var progressBar: ProgressBar
     private lateinit var videoChip: TextView
+    private lateinit var urlField: EditText
+    private lateinit var backButton: TextView
+    private lateinit var forwardButton: TextView
+    /** `og:image` (or the first large image) of the page, for the media sheet's
+     *  preview — the PlayBridge-style "what am I about to play" card. */
+    @Volatile
+    private var pagePreviewUrl: String? = null
+    @Volatile
+    private var pagePreviewTitle: String = ""
     private lateinit var rootView: LinearLayout
     private var contentFrame: FrameLayout? = null
     // Main-frame load failure panel. A blank black page with no explanation was
@@ -225,6 +244,36 @@ class WebViewActivity : ComponentActivity() {
      * [allowBlockedRedirect]). Cleared on every new page ([onPageStarted]), so
      * the offer can never point at a link from a page the user has left.
      */
+    /**
+     * When the user last put a finger on the page.
+     *
+     * WebView credits a real tap to `request.hasGesture()` / `onCreateWindow`'s
+     * `isUserGesture` only when the navigation comes straight from the touch
+     * handler. Streaming sites almost never do that: the tap runs a script,
+     * which sets `location.href` from a cross-origin iframe or calls
+     * `window.open` a tick later — and both arrive with the gesture flag
+     * FALSE. Treating that as an automatic redirect is what made a tapped
+     * episode do nothing ("secondary screens don't load") and a tapped player
+     * popup get dropped.
+     *
+     * "A finger was here in the last couple of seconds" is the reliable
+     * signal. It only ever RELAXES the redirect/popup gates — the ad host and
+     * ad pattern checks still run first, and a redirect with no touch behind
+     * it stays cancelled exactly as before.
+     */
+    @Volatile
+    private var lastUserTouchAt = 0L
+
+    private fun recentUserGesture(): Boolean =
+        android.os.SystemClock.uptimeMillis() - lastUserTouchAt < 2_500L
+
+    /** Debug-build breadcrumb for a page that renders blank: what loaded,
+     *  what was cancelled, and which gate cancelled it. Release builds log
+     *  nothing. */
+    private fun dbg(msg: String) {
+        if (com.hikari.app.BuildConfig.DEBUG) android.util.Log.d("HikariWeb", msg)
+    }
+
     @Volatile
     private var lastBlockedRedirectUrl: String? = null
     @Volatile
@@ -777,6 +826,13 @@ class WebViewActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Debug builds only: expose the WebView to `chrome://inspect` /
+        // `adb forward ... webview_devtools_remote_<pid>` so a page that
+        // renders blank can be inspected (its real URL, console errors and
+        // DOM). Release builds stay closed.
+        if (com.hikari.app.BuildConfig.DEBUG) {
+            runCatching { WebView.setWebContentsDebuggingEnabled(true) }
+        }
         // Never allow a window title bar — the app draws no header anywhere.
         window.requestFeature(Window.FEATURE_NO_TITLE)
         super.onCreate(savedInstanceState)
@@ -828,16 +884,20 @@ class WebViewActivity : ComponentActivity() {
             max = 100
         }
 
+        // The media badge lives IN the toolbar, not as a floating pill over the
+        // page: its job is to say "this page has N playable sources" and open
+        // the list, not to cover the site's own controls.
         videoChip = TextView(this).apply {
-            text = I18n.t("\u25B6 Play video")
+            text = "\u25B6 0"
             visibility = View.GONE
-            setBackgroundColor(0xFF3D5AFE.toInt())
+            setBackgroundColor(0xFF2A3A6A.toInt())
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            textSize = 14f
-            setPadding(dp(18), dp(10), dp(18), dp(10))
+            textSize = 12f
+            setPadding(dp(10), dp(5), dp(10), dp(5))
             isClickable = true
-            setOnClickListener { playVideo() }
+            contentDescription = I18n.t("Videos on this page")
+            setOnClickListener { showMediaSheet() }
         }
 
         // A TELEVISION BOX MAY HAVE NO WEBVIEW AT ALL. The WebView is part of
@@ -876,61 +936,79 @@ class WebViewActivity : ComponentActivity() {
             .filter { it.isNotBlank() }
             .toSet()
 
-        // Top margin bar — gives the webview room at the top so the site's own
-        // header / search bar is not covered. Houses the menu (⋯) and tabs pill
-        // as fixed controls in the margin.
-        val TOP_BAR_HEIGHT = dp(48)
+        // ---- Browser chrome -------------------------------------------------
+        //
+        // A real address bar in the PlayBridge mould: back / forward, the URL
+        // (tap to edit, spaces become a search), reload, the media badge that
+        // opens the source list, and the ⋯ menu. Tabs moved into the menu; a
+        // "Tabs" pill next to a URL field was two permanent buttons for one
+        // occasional action.
+        val TOP_BAR_HEIGHT = dp(52)
         val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 TOP_BAR_HEIGHT,
             )
-            gravity = Gravity.CENTER_VERTICAL or Gravity.END
-            setBackgroundColor(0xAA000000.toInt())
-            setPadding(dp(8), 0, dp(8), 0)
-
-            // Tab-count pill — left side of the bar. Tapping it opens the tab
-            // grid dialog so the user can switch between or close open tabs.
-            val tabPill = TextView(this@WebViewActivity).apply {
-                text = "Tabs"
-                textSize = 12f
-                setTextColor(Color.WHITE)
-                gravity = Gravity.CENTER
-                setBackgroundColor(0x661A1A1A.toInt())
-                setPadding(dp(12), dp(4), dp(12), dp(4))
-                contentDescription = I18n.t("Open tabs")
-                isClickable = true
-                setOnClickListener { showTabGrid() }
-            }
-            addView(tabPill)
-
-            // Small floating ⋯ pill — the only always-visible control. Tapping
-            // it opens a small menu (Back/Forward/Reload/Player).
-            val togglePill = TextView(this@WebViewActivity).apply {
-                text = "\u22EE"
-                textSize = 20f
-                setTextColor(Color.WHITE)
-                gravity = Gravity.CENTER
-                setBackgroundColor(0x661A1A1A.toInt())
-                setPadding(dp(12), dp(2), dp(12), dp(6))
-                contentDescription = I18n.t("Browser menu")
-                isClickable = true
-                setOnClickListener { showMenu(it) }
-            }
-            addView(togglePill)
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(0xF00B0E16.toInt())
+            setPadding(dp(2), 0, dp(2), 0)
         }
+
+        fun barButton(glyph: String, desc: String, onClick: (View) -> Unit): TextView =
+            TextView(this@WebViewActivity).apply {
+                text = glyph
+                textSize = 19f
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+                setPadding(dp(10), dp(6), dp(10), dp(6))
+                contentDescription = desc
+                isClickable = true
+                setOnClickListener { v -> onClick(v) }
+            }
+
+        backButton = barButton("\u2039", I18n.t("Back")) { if (webView.canGoBack()) webView.goBack() }
+        forwardButton = barButton("\u203A", I18n.t("Forward")) { if (webView.canGoForward()) webView.goForward() }
+        val reloadButton = barButton("\u27F3", I18n.t("Reload")) { webView.reload() }
+        val menuButton = barButton("\u22EE", I18n.t("Browser menu")) { showMenu(it) }
+
+        urlField = EditText(this).apply {
+            setSingleLine(true)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            imeOptions = EditorInfo.IME_ACTION_GO
+            setTextColor(Color.WHITE)
+            setHintTextColor(0xFF8A93AE.toInt())
+            hint = I18n.t("Search or enter address")
+            textSize = 13f
+            includeFontPadding = false
+            background = GradientDrawable().apply {
+                cornerRadius = dp(20).toFloat()
+                setColor(0x22FFFFFF)
+                setStroke(dp(1), 0x33FFFFFF)
+            }
+            setPadding(dp(14), dp(7), dp(14), dp(7))
+            setOnFocusChangeListener { _, hasFocus -> if (hasFocus) selectAll() }
+            setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == EditorInfo.IME_ACTION_GO) {
+                    loadFromAddressBar(text.toString())
+                    clearFocus()
+                    hideKeyboard()
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+
+        topBar.addView(backButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        topBar.addView(forwardButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        topBar.addView(urlField, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        topBar.addView(videoChip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(4) })
+        topBar.addView(reloadButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        topBar.addView(menuButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
         val content = FrameLayout(this).apply {
             addView(webView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-            addView(
-                videoChip,
-                FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-                ).apply { bottomMargin = dp(28) }
-            )
             val panel = LinearLayout(this@WebViewActivity).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
@@ -987,9 +1065,26 @@ class WebViewActivity : ComponentActivity() {
             setBackgroundColor(Color.BLACK)
             addView(progressBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(4)))
             addView(topBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, TOP_BAR_HEIGHT))
-            addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+            // A little air between the chrome and the page: sites open with a
+            // header banner pressed right against the URL bar otherwise, and a
+            // fixed site header reads as part of Hikari's own toolbar.
+            addView(
+                content,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
+                    topMargin = dp(8)
+                },
+            )
         }
         setContentView(rootView)
+        // When the system bars are showing (the user swiped them back, or the
+        // device ignores the immersive request), reserve their height at the
+        // top instead of letting the status bar draw over the address field.
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(rootView) { v, insets ->
+            val top = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars()).top
+            if (v.paddingTop != top) v.setPadding(0, top, 0, 0)
+            insets
+        }
+        androidx.core.view.ViewCompat.requestApplyInsets(rootView)
         contentFrame = rootView.getChildAt(2) as? FrameLayout
         mouseMode = com.hikari.app.tv.MouseMode.enabled
         desktopMode = getSharedPreferences("webview_prefs", MODE_PRIVATE)
@@ -1285,12 +1380,17 @@ class WebViewActivity : ComponentActivity() {
                             // (see askRedirectPermission), not a bare toast and
                             // a trip to the ⋯ menu. Automatic redirects keep the
                             // silent block — they are never the user's tap.
-                            if (request.hasGesture()) {
-                                askRedirectPermission(request.url.toString(), host)
-                            } else {
-                                showBlockedToast(blockedRedirectToast(request.url))
-                                rememberBlockedRedirect(request.url.toString())
+                            if (request.hasGesture() || recentUserGesture()) {
+                                // A tapped link: the user asked for this page, so
+                                // it loads. Only AUTOMATIC redirects are
+                                // cancelled — an ad hijack has no finger behind
+                                // it, and the ad host/pattern gates above and
+                                // below still apply.
+                                return false
                             }
+                            dbg("cancel-navigation " + request.url)
+                            showBlockedToast(blockedRedirectToast(request.url))
+                            rememberBlockedRedirect(request.url.toString())
                             return true
                         }
                     }
@@ -1315,6 +1415,7 @@ class WebViewActivity : ComponentActivity() {
                 // other way (a meta refresh, a script assignment, a redirect
                 // chain) still gets an empty body instead of a donate card.
                 if (request.isForMainFrame && PromoGuard.isDonationUrl(u)) {
+                    dbg("block-donation " + u)
                     showBlockedToast("Blocked a donation page")
                     return WebResourceResponse(
                         "text/plain", "utf-8", ByteArrayInputStream(ByteArray(0))
@@ -1333,12 +1434,39 @@ class WebViewActivity : ComponentActivity() {
                     if (AdBlocker.matches(host, whitelistDomains)) {
                         return null
                     }
-                    if (AdBlocker.matches(host, blockedDomains)) {
+                    val firstParty = currentPageHost()?.let { isSameSite(host, it) } == true ||
+                        AdBlocker.isAlwaysAllowedHost(host)
+                    if (!firstParty && AdBlocker.matches(host, blockedDomains)) {
+                        dbg("ad-host " + host + " main=" + request.isForMainFrame)
                         // NEVER block actual media — blocklists routinely contain
                         // tube-site CDN domains (phncdn.com, …) that serve the
                         // actual video. Blocking those turns "video loads" into
                         // "video buffering forever" (the Pornhub-style stall).
                         if (!isMediaRequest(request)) {
+                            if (request.isForMainFrame) {
+                                // An ad GATE: follow the destination it carries
+                                // instead of leaving an empty document.
+                                val cur = currentPageHost()
+                                val dest = adGateDestination(u)?.takeIf { d ->
+                                    val dh = runCatching { java.net.URI(d).host }
+                                        .getOrNull().orEmpty()
+                                    // The site's own domain is allowed as a gate
+                                    // destination even when a list carries it:
+                                    // blocklists name streaming domains for
+                                    // their ad subresources, not because the
+                                    // page itself is an advert.
+                                    !isAdHost(d) || (cur != null && isSameSite(dh, cur))
+                                }
+                                dbg("ad-gate " + host + " -> " + dest)
+                                if (dest != null) return adGatePage(dest)
+                                // A top-level DOCUMENT is never turned into a
+                                // blank page. Rumble itself is in three ad lists
+                                // (for its ad subresources), and blanking the
+                                // page's own domain is what stopped Rumble from
+                                // loading anything past the first page.
+                                dbg("ad-gate allow-document " + host)
+                                return null
+                            }
                             return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
                         }
                     }
@@ -1347,9 +1475,10 @@ class WebViewActivity : ComponentActivity() {
                     // subdomains no list names, rotating popunder hosts. Same
                     // guarantees as above: whitelist already won, media never
                     // blocked.
-                    if (!isMediaRequest(request) &&
+                    if (!request.isForMainFrame && !isMediaRequest(request) &&
                         AdBlocker.matchesPattern(request, currentPageHost())
                     ) {
+                        dbg("ad-pattern " + u + " main=" + request.isForMainFrame)
                         return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
                     }
                 }
@@ -1390,12 +1519,15 @@ class WebViewActivity : ComponentActivity() {
                             // Same tap-choice as the override gate above: a
                             // user-gesture navigation asks inline, an
                             // automatic one is dropped silently.
-                            if (request.hasGesture()) {
-                                askRedirectPermission(u, host)
-                            } else {
-                                showBlockedToast(blockedRedirectToast(request.url))
-                                rememberBlockedRedirect(u)
+                            if (request.hasGesture() || recentUserGesture()) {
+                                // Same rule as the override gate: a finger on
+                                // the page means the navigation is the user's,
+                                // not an ad hijack's.
+                                return null
                             }
+                            dbg("cancel-request " + u + " main=" + request.isForMainFrame)
+                            showBlockedToast(blockedRedirectToast(request.url))
+                            rememberBlockedRedirect(u)
                             return WebResourceResponse(
                                 "text/plain", "utf-8", ByteArrayInputStream(ByteArray(0))
                             )
@@ -1418,6 +1550,18 @@ class WebViewActivity : ComponentActivity() {
             }
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                dbg("start " + url)
+                syncToolbar(url)
+                // A full navigation starts a new page: sources detected on the
+                // previous one are not this page's. SPA route changes do not
+                // fire onPageStarted, so a client-side page keeps its list.
+                if (url != null && !url.startsWith("about:")) {
+                    detectedVideos.clear()
+                    videoScores.clear()
+                    videoChip.visibility = View.GONE
+                    pagePreviewUrl = null
+                    pagePreviewTitle = ""
+                }
                 pageUrl = url
                 pageHostCache = runCatching { url?.let { java.net.URI(it).host?.lowercase() } }.getOrNull()
                 loadFailed = false
@@ -1452,7 +1596,9 @@ class WebViewActivity : ComponentActivity() {
                 // idempotent and is also injected on finish in case the very
                 // first document was not ready here.
                 if (!autoCloseWhenCloudflarePassed && !addonConfig) {
+                    runCatching { view?.evaluateJavascript(COMPAT_JS, null) }
                     runCatching { view?.evaluateJavascript(POPUP_GUARD_JS, null) }
+                    runCatching { view?.evaluateJavascript(SNIFFER_JS, null) }
                 }
                 // A measured, sustained video is the only thing allowed to keep
                 // the screen awake; clear the stale flag from the last page.
@@ -1476,8 +1622,13 @@ class WebViewActivity : ComponentActivity() {
                         runCatching { view?.evaluateJavascript(js, null) }
                     }
                 }
+                syncToolbar(url)
+                loadPagePreview(view)
                 view?.evaluateJavascript(AD_CLEAN_JS, null)
                 view?.evaluateJavascript(PROMO_CLEAN_JS, null)
+                if (!autoCloseWhenCloudflarePassed && !addonConfig) {
+                    runCatching { view?.evaluateJavascript(SNIFFER_JS, null) }
+                }
                 if (!autoCloseWhenCloudflarePassed && !addonConfig) {
                     view?.evaluateJavascript(POPUP_GUARD_JS, null)
                 }
@@ -1560,6 +1711,57 @@ class WebViewActivity : ComponentActivity() {
         })
 
         webView.webChromeClient = object : WebChromeClient() {
+            /**
+             * Page dialogs that appear on their own.
+             *
+             * A video site fires `alert()`/`confirm()` from load scripts and
+             * from "are you still watching" timers; each one is a modal over
+             * the page that the user did not ask for, and one of them ("This
+             * page says: …") can wedge a player that only dismisses on OK. A
+             * dialog with no recent touch behind it is answered for the user;
+             * one they triggered keeps the platform dialog.
+             */
+            override fun onJsAlert(
+                view: WebView?,
+                url: String?,
+                message: String?,
+                result: android.webkit.JsResult?,
+            ): Boolean {
+                if (!recentUserGesture() || videoPlaying) {
+                    dbg("suppress-alert " + url)
+                    result?.confirm()
+                    return true
+                }
+                return false
+            }
+
+            override fun onJsConfirm(
+                view: WebView?,
+                url: String?,
+                message: String?,
+                result: android.webkit.JsResult?,
+            ): Boolean {
+                if (!recentUserGesture() || videoPlaying) {
+                    dbg("suppress-confirm " + url)
+                    result?.cancel()
+                    return true
+                }
+                return false
+            }
+
+            override fun onJsBeforeUnload(
+                view: WebView?,
+                url: String?,
+                message: String?,
+                result: android.webkit.JsResult?,
+            ): Boolean {
+                if (!recentUserGesture() || videoPlaying) {
+                    result?.confirm()
+                    return true
+                }
+                return false
+            }
+
             override fun onCloseWindow(window: WebView?) {
                 // Prevent ad scripts / popunders from closing the main WebView via window.close()
                 if (window === popupChild) {
@@ -1593,7 +1795,7 @@ class WebViewActivity : ComponentActivity() {
                 // page sat on "Waiting for Google..." forever with the popup
                 // dropped. Same-site/video gates below still apply to
                 // everything that is not a config page.
-                if (popupProtection && !isUserGesture && !addonConfig) {
+                if (popupProtection && !isUserGesture && !recentUserGesture() && !addonConfig) {
                     showBlockedToast("Blocked popup")
                     return false
                 }
@@ -1633,6 +1835,7 @@ class WebViewActivity : ComponentActivity() {
                                 return
                             }
                             relayed = true
+                            dbg("relay-popup " + url)
                             runCatching {
                                 lastPopupUrl = url
                                 lastPopupHost = runCatching { java.net.URI(url).host }
@@ -1707,7 +1910,14 @@ class WebViewActivity : ComponentActivity() {
                                 if (host == null || cur == null ||
                                     (host != cur && !AdBlocker.matches(host, whitelistDomains) && !isSameSite(host, cur))
                                 ) {
-                                    if (isPopupHostAllowed(host)) {
+                                    // A popup opened by the user's own tap is the
+                                    // player (Kwik, Dood, Streamtape…) or a
+                                    // sign-in hand-off — load it. The dialog was
+                                    // an extra step that often never appeared
+                                    // because the gesture flag had already been
+                                    // lost. Automatic popunders still hit the
+                                    // !recentUserGesture() gate above.
+                                    if (isPopupHostAllowed(host) || recentUserGesture()) {
                                         allowOnce(url)
                                         runOnUiThread { webView.loadUrl(url) }
                                     } else {
@@ -2205,6 +2415,15 @@ class WebViewActivity : ComponentActivity() {
         upEv.recycle()
     }
 
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN ||
+            ev.actionMasked == android.view.MotionEvent.ACTION_UP
+        ) {
+            lastUserTouchAt = android.os.SystemClock.uptimeMillis()
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         if (mouseMode && event.action == android.view.KeyEvent.ACTION_DOWN) {
             when (event.keyCode) {
@@ -2333,6 +2552,10 @@ class WebViewActivity : ComponentActivity() {
         // anyway: it is one page shown solely to pass the check.
         if (autoCloseWhenCloudflarePassed) return
         view?.evaluateJavascript(ELEMENT_BLOCK_JS, null)
+        // In-page ad overlays (see INTERSTITIAL_KILL_JS). Separate from the
+        // element blocker because it has nothing to do with the user's saved
+        // selectors: it is the "the ad is drawn by the site itself" case.
+        view?.evaluateJavascript(INTERSTITIAL_KILL_JS, null)
         val arr = JSONArray().apply { blockedSelectors.forEach { put(it) } }
         view?.evaluateJavascript(
             "window.__hikariBlocks=" + arr.toString() +
@@ -2349,9 +2572,33 @@ class WebViewActivity : ComponentActivity() {
         }.getOrNull()
     }
 
-    /** Same host or one being a subdomain of the other (registrable-domain-ish). */
-    private fun isSameSite(host: String, current: String): Boolean =
-        host == current || host.endsWith("." + current) || current.endsWith("." + host)
+    /**
+     * Same SITE, not merely a subdomain chain.
+     *
+     * `www.dailymotion.com` and `static.neon-ssr.dailymotion.com` are the same
+     * site even though neither is a suffix of the other — the earlier
+     * "a.b is a subdomain of a" test called them different, so the site's own
+     * static host was treated as a third party and could be ad-blocked. The
+     * comparison is now on the registrable domain (eTLD+1, with the common
+     * two-level suffixes handled).
+     */
+    private fun isSameSite(host: String, current: String): Boolean {
+        val h = host.trim().trimEnd('.').lowercase()
+        val c = current.trim().trimEnd('.').lowercase()
+        if (h.isBlank() || c.isBlank()) return false
+        if (h == c || h.endsWith("." + c) || c.endsWith("." + h)) return true
+        return registrableDomain(h) == registrableDomain(c)
+    }
+
+    private fun registrableDomain(host: String): String {
+        val parts = host.split('.').filter { it.isNotBlank() }
+        if (parts.size <= 2) return parts.joinToString(".")
+        val tld = parts.last()
+        val sld = parts[parts.size - 2]
+        val twoLevel = tld.length == 2 &&
+            sld in setOf("co", "com", "net", "org", "gov", "ac", "edu", "ne", "or", "go")
+        return parts.takeLast(if (twoLevel) 3 else 2).joinToString(".")
+    }
 
     /** Cloudflare's own challenge infrastructure — the scripts, iframes and
      *  /cdn-cgi/ endpoints that mint the cf_clearance cookie. These must NEVER
@@ -2617,18 +2864,41 @@ class WebViewActivity : ComponentActivity() {
         if (hasFocus) hideSystemBars()
     }
 
-    /** Adds [url] to the detected set ONLY after confirming it serves real video. */
+    /**
+     * How good a source is, 0 = not a video. Populated by [maybeAddVideo]'s
+     * probe and used to order the player's server list.
+     *
+     * The scale mirrors what makes a source *playable* rather than merely
+     * present: an adaptive master (it carries the whole ladder, so the player
+     * can pick a rendition and seek) beats a single media playlist, which beats
+     * a bare file. An HLS playlist whose only tracks are audio is not a video
+     * at all and scores 0.
+     */
+    private val videoScores = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+    /** Request headers the page's own fetch/XHR used for a source, keyed by
+     *  URL (reported by SNIFFER_JS). Merged into the player's hand-off so a
+     *  CDN sees exactly what its own page sent. */
+    private val sniffHeaders = java.util.concurrent.ConcurrentHashMap<String, Map<String, String>>()
+
     private fun maybeAddVideo(url: String) {
         // Verification view never offers video.
         if (autoCloseWhenCloudflarePassed) return
         if (detectedVideos.contains(url)) return
+        // An ad that happens to be served as video is still an ad.
+        if (isAdVideoCandidate(url)) return
+        // A fragment of a stream is not a stream. HLS/DASH players fetch
+        // `init.mp4`, `.m4s` and audio renditions while the manifest is already
+        // in the list, so offering them as separate "videos" makes the sheet a
+        // pile of unusable rows (and can win the sort as a bare MP4).
+        if (isStreamFragment(url)) return
         Thread {
-            val isVideo = isRealVideo(url)
-            if (isVideo) {
+            val score = probeVideoScore(url)
+            if (score > 0) {
                 runOnUiThread {
                     if (detectedVideos.add(url)) {
-                        videoChip.text = "\u25B6 ${detectedVideos.size} video" +
-                            if (detectedVideos.size > 1) "s" else ""
+                        videoScores[url] = score
+                        videoChip.text = "\u25B6 " + detectedVideos.size
                         videoChip.visibility = View.VISIBLE
                     }
                 }
@@ -2653,8 +2923,20 @@ class WebViewActivity : ComponentActivity() {
             u.contains("/media/") || u.contains("phncdn") || u.contains("streamable")
     }
 
-    /** Fetches a few bytes and decides whether [url] is actual video content. */
-    private fun isRealVideo(url: String): Boolean {
+    /**
+     * Fetches the first couple of kilobytes and scores the source:
+     *
+     *  - 0    not video (or an audio-only HLS playlist)
+     *  - 40   a direct file (mp4/webm)
+     *  - 60   an HLS media playlist (one rendition)
+     *  - 110  a DASH manifest
+     *  - 120  an HLS master playlist (a full quality ladder)
+     *
+     * A master playlist is the difference between "opens at 480p and cannot
+     * seek well" and a normal adaptive stream; it is why this ranks above a
+     * single media playlist instead of both being "a video".
+     */
+    private fun probeVideoScore(url: String): Int {
         // Share the WebView's cookie jar with the probe request — Cloudflare /
         // auth-token CDNs answer with a 403 (or a challenge page) without it.
         val cookie = runCatching { CookieManager.getInstance().getCookie(url) }.getOrNull()
@@ -2664,20 +2946,131 @@ class WebViewActivity : ComponentActivity() {
             put("User-Agent", (application as HikariApp).effectiveWebViewUa())
             if (!cookie.isNullOrBlank()) put("Cookie", cookie)
         }
-        val r = runCatching { Http.get(url, headers) }.getOrNull() ?: return false
+        val r = runCatching { Http.get(url, headers) }.getOrNull() ?: return 0
         r.use { resp ->
-            if (!resp.isSuccessful) return false
+            if (!resp.isSuccessful) return 0
             val ct = resp.header("Content-Type")?.lowercase().orEmpty()
-            val body = resp.body?.bytes() ?: return false
-            val head = String(body, 0, minOf(body.size, 2048), Charsets.ISO_8859_1)
+            val body = resp.body?.bytes() ?: return 0
+            val head = String(body, 0, minOf(body.size, 4096), Charsets.ISO_8859_1)
             return when {
-                head.startsWith("#EXTM3U") -> true // HLS manifest
-                ct.contains("application/dash+xml") || head.contains("<mpd") -> true // DASH
-                ct.contains("video/") -> true // mp4/webm/etc
-                ct.contains("application/octet-stream") && looksLikeMp4(body) -> true
-                else -> false
+                head.startsWith("#EXTM3U") -> {
+                    val master = head.contains("#EXT-X-STREAM-INF")
+                    val media = head.contains("#EXTINF")
+                    val videoCodec = Regex("avc1|hvc1|hev1|vp09|av01|dvh1|dvhe", RegexOption.IGNORE_CASE)
+                        .containsMatchIn(head)
+                    // An audio-only playlist (demuxed live audio) is not a
+                    // playable "video" and must never occupy a server slot.
+                    if (!master && media && !videoCodec) 0
+                    else if (master) 120
+                    else 60
+                }
+                ct.contains("application/dash+xml") || head.contains("<mpd") -> 110
+                ct.contains("video/") -> 40
+                ct.contains("application/octet-stream") && looksLikeMp4(body) -> 40
+                else -> 0
             }
         }
+    }
+
+    /**
+     * The real destination carried by an ad GATE.
+     *
+     * Streaming sites and Rumble wrap a click in a click-tracker on an ad host
+     * (`d4.ads.rmbl.ws/c?…&fb=<base64 of the video page>`): the main frame is
+     * sent to the tracker, which then 302s to the page. Blocking the tracker
+     * outright left the WebView on an empty document — the white page at
+     * "level 2". The destination is in the query, so we take it and load the
+     * page the click was for; only a gate with nothing usable behind it is
+     * cancelled.
+     */
+    private fun adGateDestination(raw: String): String? {
+        val uri = runCatching { Uri.parse(raw) }.getOrNull() ?: return null
+        for (key in listOf("fb", "url", "u", "dest", "destination", "redirect", "redirect_url", "to", "target")) {
+            val v = uri.getQueryParameter(key) ?: continue
+            for (candidate in listOf(v, decodeBase64(v))) {
+                val c = candidate?.trim().orEmpty()
+                if (c.startsWith("http://") || c.startsWith("https://")) return c
+            }
+        }
+        return null
+    }
+
+    private fun decodeBase64(raw: String): String? = runCatching {
+        val t = Uri.decode(raw).trim()
+        val bytes = runCatching {
+            Base64.decode(t, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+        }.recoverCatching {
+            Base64.decode(t, Base64.DEFAULT)
+        }.getOrThrow()
+        String(bytes, Charsets.UTF_8)
+    }.getOrNull()
+
+    /** True when [url]'s host is one the ad lists block. */
+    private fun isAdHost(url: String): Boolean {
+        val h = runCatching { java.net.URI(url).host }.getOrNull().orEmpty()
+        return h.isNotBlank() && AdBlocker.matches(h, blockedDomains)
+    }
+
+    /**
+     * What a main-frame navigation to a blocked ad host renders instead of a
+     * blank document. With a destination it forwards there immediately; with
+     * none it says what happened and offers the way back, because a white
+     * page reads as "the app is broken".
+     */
+    private fun adGatePage(destination: String?): WebResourceResponse {
+        val style = "html,body{background:#000;color:#fff;font:15px sans-serif;margin:0}" +
+            ".w{display:flex;height:100vh;flex-direction:column;gap:14px;align-items:center;" +
+            "justify-content:center;padding:24px;text-align:center}a{color:#7DD3FC}"
+        val html = if (destination != null) {
+            val url = destination.replace("\"", "%22")
+            "<!doctype html><meta charset=\"utf-8\">" +
+                "<meta http-equiv=\"refresh\" content=\"0;url=" + url + "\">" +
+                "<style>" + style + "</style><div class=\"w\">Opening…</div>" +
+                "<script>location.replace(" + org.json.JSONObject.quote(destination) + ")</script>"
+        } else {
+            "<!doctype html><meta charset=\"utf-8\"><style>" + style + "</style>" +
+                "<div class=\"w\"><div>An ad link was blocked.</div>" +
+                "<a href=\"javascript:history.back()\">Go back</a></div>"
+        }
+        return WebResourceResponse(
+            "text/html", "utf-8",
+            java.io.ByteArrayInputStream(html.toByteArray(Charsets.UTF_8)),
+        )
+    }
+
+    /**
+     * True for the pieces a manifest hands the player: initialization
+     * segments, .m4s fragments, transport-stream chunks and demuxed audio.
+     * These are only playable as part of their parent playlist.
+     */
+    private fun isStreamFragment(url: String): Boolean {
+        val path = url.substringBefore('?').substringBefore('#').lowercase()
+        if (path.contains(".m3u8") || path.contains(".mpd")) return false
+        return path.endsWith("/init.mp4") ||
+            path.contains("/init.") ||
+            path.endsWith(".m4s") || path.endsWith(".cmfv") || path.endsWith(".cmfa") ||
+            path.endsWith(".ts") ||
+            path.contains("aac_") || path.contains("_audio_") || path.contains("/audio/") ||
+            path.contains("h264_sd/") || path.contains("h264_hq/") || path.contains("h264_hd/")
+    }
+
+    /** True when [url] is a host/pattern the ad lists already call an ad. */
+    private fun isAdVideoCandidate(url: String): Boolean {
+        val host = runCatching { java.net.URI(url).host }.getOrNull().orEmpty()
+        if (host.isBlank()) return true
+        val page = currentPageHost()
+        // A source served from the page's own site is not an ad however many
+        // lists carry that domain (Rumble is in three of them, for its ad
+        // subresources — treating that as "every video is an ad" left the chip
+        // empty on every Rumble page).
+        if (AdBlocker.isAlwaysAllowedHost(host)) {
+            return AdBlocker.matchesPatternUrl(url, page)
+        }
+        if (page != null && isSameSite(host, page)) {
+            return AdBlocker.matchesPatternUrl(url, page)
+        }
+        if (AdBlocker.matches(host, blockedDomains)) return true
+        return AdBlocker.matchesPatternUrl(url, page)
     }
 
     private fun looksLikeMp4(b: ByteArray): Boolean {
@@ -2689,19 +3082,217 @@ class WebViewActivity : ComponentActivity() {
                 (b[4] == 'm'.code.toByte() && b[5] == 'd'.code.toByte() && b[6] == 'a'.code.toByte() && b[7] == 't'.code.toByte()))
     }
 
-    private fun playVideo() {
-        val ref = pageUrl ?: webView.url
-        if (detectedVideos.isEmpty()) {
-            webView.evaluateJavascript(VIDEO_SCAN_JS) { res ->
-                val urls = extractUrls(res)
-                if (urls.isEmpty()) {
-                    Toast.makeText(this, I18n.t("No video found on this page"), Toast.LENGTH_SHORT).show()
-                } else {
-                    launchPlayer(urls, ref)
+    // ---- Browser chrome helpers -----------------------------------------
+
+    /** `https://www.example.com/a` → `example.com/a` for the address field. */
+    private fun stripScheme(url: String): String =
+        url.removePrefix("https://").removePrefix("http://").removePrefix("www.")
+
+    private fun hideKeyboard() {
+        runCatching {
+            (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)
+                ?.hideSoftInputFromWindow(urlField.windowToken, 0)
+        }
+    }
+
+    /** Keeps the address field and the back/forward affordances in step with
+     *  the page. Never overwrites what the user is typing. */
+    private fun syncToolbar(url: String?) {
+        runCatching {
+            if (!url.isNullOrBlank() && !url.startsWith("about:")) {
+                if (!urlField.hasFocus()) {
+                    urlField.setText(stripScheme(url))
+                    urlField.setSelection(urlField.text.length)
                 }
             }
-        } else {
-            launchPlayer(detectedVideos.toList(), ref)
+            backButton.alpha = if (webView.canGoBack()) 1f else 0.3f
+            forwardButton.alpha = if (webView.canGoForward()) 1f else 0.3f
+        }
+    }
+
+    /** A typed address: a real URL loads, anything else is a search. */
+    private fun loadFromAddressBar(raw: String) {
+        val t = raw.trim()
+        if (t.isBlank()) return
+        val target = when {
+            t.contains("://") -> t
+            t.contains('.') && !t.contains(' ') -> "https://" + t
+            else -> "https://www.google.com/search?q=" + Uri.encode(t)
+        }
+        runCatching { webView.loadUrl(target) }
+    }
+
+    /**
+     * The page's preview card (`og:image` + title), the PlayBridge idea of
+     * showing WHAT is about to be played instead of a bare URL. Fetched once
+     * per page; a page without OpenGraph falls back to its <title>.
+     */
+    private fun loadPagePreview(view: WebView?) {
+        view ?: return
+        view.evaluateJavascript(
+            """(function(){try{
+                 var m=document.querySelector('meta[property="og:image"],meta[name="og:image"],meta[name="twitter:image"]');
+                 var t=document.querySelector('meta[property="og:title"],meta[name="twitter:title"]');
+                 return JSON.stringify({i:m?m.content:'',t:t?t.content:(document.title||'')});
+               }catch(e){return '{}';}})();""",
+        ) { res ->
+            runCatching {
+                val raw = org.json.JSONTokener(res).nextValue() as? String ?: return@runCatching
+                val o = org.json.JSONObject(raw)
+                pagePreviewUrl = o.optString("i").takeIf { it.startsWith("http") }
+                pagePreviewTitle = o.optString("t")
+            }
+        }
+    }
+
+    /** Detected sources in the order the player will use them. */
+    private fun sortedDetected(): List<String> {
+        val page = currentPageHost().orEmpty()
+        fun same(u: String): Boolean {
+            val h = runCatching { java.net.URI(u).host }.getOrNull()?.lowercase() ?: return false
+            if (page.isBlank()) return false
+            return h == page || h.endsWith(".$page") || page.endsWith(".$h")
+        }
+        return detectedVideos.toList().sortedWith(
+            compareByDescending<String> { if (same(it)) 1 else 0 }
+                .thenByDescending { videoScores[it] ?: 0 },
+        )
+    }
+
+    private fun mediaTypeLabel(url: String): String = when (videoScores[url] ?: 0) {
+        120 -> "HLS \u00B7 adaptive"
+        110 -> "DASH"
+        60 -> "HLS"
+        40 -> if (url.contains(".mp4", true)) "MP4" else I18n.t("Video")
+        else -> I18n.t("Video")
+    }
+
+    /**
+     * The source list, modelled on PlayBridge's cast sheet: a preview of the
+     * page, one tap for "play the best", and a row per source with its type,
+     * host and a play button. This is the "finding video" surface — the badge
+     * only says how many, this says which.
+     */
+    private fun showMediaSheet() {
+        val list = sortedDetected()
+        if (list.isEmpty()) {
+            // Nothing sniffed yet: fall back to the page scan.
+            playVideo()
+            return
+        }
+        val dialog = BottomSheetDialog(this)
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(14), dp(20), dp(22))
+            setBackgroundColor(0xFF10131C.toInt())
+        }
+
+        val preview = pagePreviewUrl
+        if (preview != null) {
+            val image = ImageView(this).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                setBackgroundColor(0xFF1B2030.toInt())
+            }
+            root.addView(
+                image,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(150),
+                ).apply { bottomMargin = dp(12) },
+            )
+            Thread {
+                val bmp = runCatching {
+                    Http.get(preview).use { r ->
+                        BitmapFactory.decodeStream(r.body?.byteStream())
+                    }
+                }.getOrNull()
+                if (bmp != null) runOnUiThread { image.setImageBitmap(bmp) }
+            }.start()
+        }
+
+        root.addView(
+            TextView(this).apply {
+                text = pagePreviewTitle.ifBlank { pageTitle }
+                textSize = 16f
+                setTextColor(Color.WHITE)
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            },
+        )
+        root.addView(
+            TextView(this).apply {
+                text = I18n.t("Tap a source to play it in Hikari")
+                textSize = 12f
+                setTextColor(0xFF9AA3C0.toInt())
+                setPadding(0, dp(4), 0, dp(12))
+            },
+        )
+        root.addView(
+            TextView(this).apply {
+                text = I18n.t("\u25B6 Play best")
+                textSize = 15f
+                gravity = Gravity.CENTER
+                setTextColor(Color.WHITE)
+                setBackgroundColor(0xFF3D5AFE.toInt())
+                setPadding(0, dp(12), 0, dp(12))
+                isClickable = true
+                setOnClickListener { dialog.dismiss(); playVideo() }
+            },
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(10) },
+        )
+
+        for (u in list) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(2), dp(10), dp(2), dp(10))
+                isClickable = true
+                setOnClickListener {
+                    dialog.dismiss()
+                    launchPlayer(listOf(u), pageUrl ?: webView.url, preferred = setOf(u))
+                }
+            }
+            row.addView(
+                TextView(this).apply {
+                    text = mediaTypeLabel(u) + "  \u00B7  " + urlHost(u)
+                    textSize = 14f
+                    setTextColor(Color.WHITE)
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                },
+            )
+            row.addView(
+                TextView(this).apply {
+                    text = u
+                    textSize = 11f
+                    setTextColor(0xFF7C86A2.toInt())
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                },
+            )
+            root.addView(row)
+        }
+
+        dialog.setContentView(ScrollView(this).apply { addView(root) })
+        dialog.show()
+    }
+
+    private fun playVideo() {
+        val ref = pageUrl ?: webView.url
+        // The page's own <video> element is the strongest signal there is: it
+        // is the source the site itself is playing. Network sniffing also sees
+        // the ad clip a click fires, and that is how "server 1" used to be an
+        // advert. DOM sources go first, sniffed ones follow as fallbacks.
+        webView.evaluateJavascript(VIDEO_SCAN_JS) { res ->
+            val dom = extractUrls(res)
+            val all = (dom + detectedVideos.toList()).distinct()
+            if (all.isEmpty()) {
+                Toast.makeText(this, I18n.t("No video found on this page"), Toast.LENGTH_SHORT).show()
+            } else {
+                launchPlayer(all, ref, preferred = dom.toSet())
+            }
         }
     }
 
@@ -2716,8 +3307,43 @@ class WebViewActivity : ComponentActivity() {
         }.getOrDefault(emptyList())
     }
 
-    private fun launchPlayer(urls: List<String>, referer: String?) {
-        val unique = urls.distinct().filter { it.startsWith("http") }
+    private fun launchPlayer(
+        urls: List<String>,
+        referer: String?,
+        /** Sources that came from the page's own <video> element — always
+         *  ordered before anything that was merely sniffed off the wire. */
+        preferred: Set<String> = emptySet(),
+    ) {
+        // Manifests first: a page usually exposes the HLS/DASH master and the
+        // individual segments it is currently fetching. The master is the one
+        // the player can adapt from (and seek in); a segment URL pins one
+        // quality and often expires. The player lists the rest as alternates.
+        val pageHost = runCatching { java.net.URI(referer.orEmpty()).host }
+            .getOrNull().orEmpty().lowercase()
+        fun sameSiteAsPage(u: String): Boolean {
+            val h = runCatching { java.net.URI(u).host }.getOrNull()?.lowercase() ?: return false
+            if (pageHost.isBlank()) return false
+            return h == pageHost || h.endsWith(".$pageHost") || pageHost.endsWith(".$h")
+        }
+        val unique = urls.distinct()
+            .filter { it.startsWith("http") }
+            // Drop anything the ad lists recognise outright — the "2 videos"
+            // chip must never count an advert as a source.
+            .filterNot { isAdVideoCandidate(it) }
+            .sortedWith(
+                // The episode's own CDN first: it is normally served from the
+                // site's domain or a subdomain of it, while an advert comes from
+                // an unrelated host. Manifests before fragments after that.
+                compareByDescending<String> {
+                    // 1. What the page's player is actually using.
+                    if (it in preferred) 1 else 0
+                }
+                    // 2. Its own CDN before an unrelated host.
+                    .thenByDescending { if (sameSiteAsPage(it)) 1 else 0 }
+                    // 3. The probed source score: a master playlist with a full
+                    //    ladder above a single rendition above a bare file.
+                    .thenByDescending { videoScores[it] ?: 0 }
+            )
         if (unique.isEmpty()) {
             Toast.makeText(this, I18n.t("No playable video found"), Toast.LENGTH_SHORT).show()
             return
@@ -2725,16 +3351,44 @@ class WebViewActivity : ComponentActivity() {
         val cookie = runCatching {
             unique.firstNotNullOfOrNull { CookieManager.getInstance().getCookie(it) }
         }.getOrNull()
+        // The credentials the PAGE used. A CDN that handed the WebView its
+        // media rejects a request missing any of these, and for HLS it checks
+        // the child playlist and every segment, not just the first URL — which
+        // is why they are handed to the loopback proxy (StreamProxy) rather
+        // than only to the first request.
+        val headerMap = buildMap {
+            put("User-Agent", (application as HikariApp).effectiveWebViewUa())
+            referer?.takeIf { it.isNotBlank() }?.let { put("Referer", it) }
+            if (!cookie.isNullOrBlank()) put("Cookie", cookie)
+            referer?.let { ref ->
+                runCatching { java.net.URI(ref) }.getOrNull()
+                    ?.let { u -> "${u.scheme}://${u.host}" }
+                    ?.let { put("Origin", it) }
+            }
+        }
         val sources = JSONArray()
         unique.forEach { u ->
+            // DASH is left direct: its MPD points at relative segment
+            // templates the player resolves itself, which the proxy would have
+            // to parse and rewrite. HLS is rewritten, so it goes through.
+            val effectiveHeaders = HashMap<String, String>()
+            sniffHeaders[u]?.let { effectiveHeaders.putAll(it) }
+            effectiveHeaders.putAll(headerMap)
+            val proxied = if (u.contains(".mpd", true)) {
+                null
+            } else {
+                runCatching {
+                    com.hikari.app.player.StreamProxy.register(u, effectiveHeaders)
+                }.getOrNull()
+            }
             val headers = JSONObject()
-            if (!referer.isNullOrBlank()) headers.put("Referer", referer)
-            headers.put("User-Agent", Http.UA)
-            if (!cookie.isNullOrBlank()) headers.put("Cookie", cookie)
+            // A proxied source needs no headers of its own (the proxy adds the
+            // page's); a direct one still does.
+            if (proxied == null) effectiveHeaders.forEach { (k, v) -> headers.put(k, v) }
             sources.put(
                 JSONObject()
                     .put("name", "Web · ${urlHost(u)}")
-                    .put("url", u)
+                    .put("url", proxied ?: u)
                     .put("headers", headers)
                     .put("isM3u8", u.contains(".m3u8", true))
                     .put("isMpd", u.contains(".mpd", true))
@@ -2776,6 +3430,38 @@ class WebViewActivity : ComponentActivity() {
             runCatching { block() }.onFailure {
                 android.util.Log.w("HikariBridge", "$tag failed (swallowed)", it)
             }.getOrNull()
+
+        /**
+         * A media URL the page's own JS saw (SNIFFER_JS): `{url, kind,
+         * contentType, poster, headers}`. The headers are the ones that page
+         * actually sent, which the player hand-off reuses.
+         */
+        @android.webkit.JavascriptInterface
+        fun sniff(payload: String) {
+            safe("sniff") {
+                val o = org.json.JSONObject(payload)
+                val url = o.optString("url")
+                if (!url.startsWith("http://") && !url.startsWith("https://")) return@safe
+                val headers = HashMap<String, String>()
+                o.optJSONObject("headers")?.let { h ->
+                    h.keys().forEach { key ->
+                        val v = h.optString(key)
+                        if (v.isNotBlank() && key.isNotBlank()) headers[key] = v
+                    }
+                }
+                if (headers.isNotEmpty()) sniffHeaders[url] = headers
+                val poster = o.optString("poster")
+                if (pagePreviewUrl == null && poster.startsWith("http")) pagePreviewUrl = poster
+                val contentType = o.optString("contentType").lowercase()
+                val looksMedia = VIDEO_URL_RE.containsMatchIn(url) ||
+                    contentType.contains("video/") ||
+                    contentType.contains("mpegurl") ||
+                    contentType.contains("dash")
+                if (!looksMedia) return@safe
+                if (isAdVideoCandidate(url) || isStreamFragment(url)) return@safe
+                maybeAddVideo(url)
+            }
+        }
 
         @android.webkit.JavascriptInterface
         fun stuckVideo(url: String) {
@@ -3413,6 +4099,225 @@ class WebViewActivity : ComponentActivity() {
          * (rotating GIF banners, SPA sliders) recreate containers with the same
          * selectors, which is what made blocked elements "come back".
          */
+        /**
+         * Watches the page's OWN network calls (fetch / XHR), its DOM and the
+         * performance timeline, and reports every media URL to the bridge.
+         *
+         * Why it earns its keep over `shouldInterceptRequest`: an SPA can hold
+         * a stream in JavaScript (a fetch response it parses, a URL assembled
+         * at runtime) without ever issuing a request the WebView exposes as a
+         * resource, and it knows the headers it used. That is the PlayBridge /
+         * Nuvio `sniffer.js` idea, reduced to what Hikari's hand-off needs.
+         */
+        private val SNIFFER_JS = """
+            (function(){
+              if(window.__hikariSniffer)return;
+              window.__hikariSniffer=true;
+              var seen={};
+              function poster(){
+                try{
+                  var m=document.querySelector('meta[property="og:image"],meta[name="twitter:image"]');
+                  return m&&m.content?m.content:'';
+                }catch(e){return ''}
+              }
+              function report(url,kind,headers,contentType){
+                try{
+                  if(!url||typeof url!=='string'||url.indexOf('http')!==0)return;
+                  var key=kind+'|'+url;
+                  if(seen[key])return;
+                  seen[key]=true;
+                  if(window.HikariBridge&&window.HikariBridge.sniff){
+                    window.HikariBridge.sniff(JSON.stringify({
+                      url:url,kind:kind||'',contentType:contentType||'',
+                      poster:poster(),headers:headers||{}
+                    }));
+                  }
+                }catch(e){}
+              }
+              function extract(text){
+                if(!text||typeof text!=='string'||text.length>524288)return;
+                try{
+                  var cleaned=text.replace(/\\\//g,'/');
+                  var re=/https?:\/\/[^\s"'<>]+?\.(?:m3u8|mpd|mp4|webm|mkv|mov|m4v)(?:\?[^\s"'<>]*)?/gi;
+                  var m,count=0;
+                  while((m=re.exec(cleaned))&&count<25){report(m[0],'page',{},'');count++}
+                }catch(e){}
+              }
+              function scanPage(){
+                try{
+                  try{
+                    if(document.getElementsByTagName('*').length<4000){
+                      extract(document.documentElement?document.documentElement.innerHTML:'');
+                    }
+                  }catch(e){}
+                  var links=document.querySelectorAll('video source,video,a[href],link[rel="preload"]');
+                  for(var i=0;i<links.length&&i<120;i++){
+                    var el=links[i];
+                    var u=el.currentSrc||el.src||el.href||el.getAttribute('data-src')||'';
+                    if(u)report(u,'dom',{},'');
+                  }
+                  var metas=document.querySelectorAll('meta[property="og:video"],meta[property="og:video:url"],meta[name="twitter:player:stream"]');
+                  for(var j=0;j<metas.length;j++){if(metas[j].content)report(metas[j].content,'dom',{},'')}
+                  try{
+                    var entries=performance.getEntriesByType('resource')||[];
+                    for(var k=0;k<entries.length&&k<400;k++){
+                      var n=entries[k].name||'';
+                      if(/\.(m3u8|mpd|mp4|webm)(\?|${'$'})/i.test(n))report(n,'perf',{},'');
+                    }
+                  }catch(e){}
+                }catch(e){}
+              }
+              try{
+                var origFetch=window.fetch;
+                if(origFetch){
+                  window.fetch=function(input,init){
+                    var url=typeof input==='string'?input:(input&&input.url)||'';
+                    var headers={};
+                    try{
+                      if(init&&init.headers){
+                        if(init.headers.forEach)init.headers.forEach(function(v,k){headers[k]=v});
+                        else for(var k in init.headers)headers[k]=init.headers[k];
+                      }
+                    }catch(e){}
+                    report(url,'fetch',headers,'');
+                    var promise=origFetch.apply(window,arguments);
+                    try{
+                      promise.then(function(res){
+                        var ct=(res&&res.headers&&res.headers.get('content-type'))||'';
+                        report(url,'fetch',headers,ct);
+                        if(/text|json|javascript|mpegurl|dash/i.test(ct)){
+                          res.clone().text().then(extract).catch(function(){});
+                        }
+                      }).catch(function(){});
+                    }catch(e){}
+                    return promise;
+                  };
+                }
+              }catch(e){}
+              try{
+                var XHR=window.XMLHttpRequest;
+                if(XHR){
+                  var open=XHR.prototype.open,send=XHR.prototype.send,setH=XHR.prototype.setRequestHeader;
+                  XHR.prototype.open=function(method,url){this.__hkUrl=url;this.__hkHeaders={};return open.apply(this,arguments)};
+                  XHR.prototype.setRequestHeader=function(k,v){
+                    try{this.__hkHeaders=this.__hkHeaders||{};this.__hkHeaders[k]=v}catch(e){}
+                    return setH.apply(this,arguments);
+                  };
+                  XHR.prototype.send=function(body){
+                    var xhr=this;
+                    try{
+                      report(xhr.__hkUrl,'xhr',xhr.__hkHeaders||{},'');
+                      xhr.addEventListener('load',function(){
+                        try{
+                          var ct=xhr.getResponseHeader('content-type')||'';
+                          report(xhr.__hkUrl,'xhr',xhr.__hkHeaders||{},ct);
+                          if(/text|json|javascript|mpegurl|dash/i.test(ct)){
+                            var t=xhr.responseText||'';
+                            if(t.length<524288)extract(t);
+                          }
+                        }catch(e){}
+                      });
+                    }catch(e){}
+                    return send.apply(this,arguments);
+                  };
+                }
+              }catch(e){}
+              scanPage();
+              try{new MutationObserver(scanPage).observe(document.documentElement,{childList:true,subtree:true});}catch(e){}
+              setInterval(scanPage,4000);
+            })();
+        """
+
+        /**
+         * Small document-start compatibility shims.
+         *
+         * Sites' own players test `window.chrome` (and a non-empty plugin
+         * list) as "is this a real browser", and refuse to initialise the
+         * player when the object is missing. WebView does not provide
+         * `window.chrome`, so a page that plays in Chrome can sit on a black
+         * rectangle here. The shims are deliberately inert: no fingerprint
+         * spoofing, no automation flags, nothing a normal browser would not
+         * answer.
+         *
+         * Notification prompts gain the same treatment: a page may only ask
+         * while the user is actually interacting with it, which is what
+         * browsers do and what stops the "allow notifications?" card that
+         * appears the instant a video page loads.
+         */
+        private val COMPAT_JS = """
+            (function(){
+              try{
+                if(!window.chrome)window.chrome={};
+                if(!window.chrome.runtime)window.chrome.runtime={};
+              }catch(e){}
+              try{
+                if(window.Notification&&Notification.requestPermission){
+                  var original=Notification.requestPermission.bind(Notification);
+                  Notification.requestPermission=function(){
+                    try{
+                      if(!(navigator.userActivation&&navigator.userActivation.isActive)){
+                        return Promise.resolve('denied');
+                      }
+                    }catch(e){}
+                    return original.apply(null,arguments);
+                  };
+                }
+              }catch(e){}
+            })();
+        """
+
+        /**
+         * Hides full-screen AD UIs that live INSIDE the page.
+         *
+         * The request blocker can stop the ad's network traffic, but a site is
+         * free to draw its own "click to watch" interstitial over the content
+         * with a plain div: nothing to block, and it sits on top of the page
+         * until dismissed. Animepahe's episode link is exactly this — the
+         * player never appears because an illustration + "Watch!" panel covers
+         * the page.
+         *
+         * The rule is deliberately narrow: an element must be positioned over
+         * at least half the viewport, sit above z-index 40, carry an ad-like
+         * id/class (or wrap a known ad frame), and must NOT contain a
+         * `<video>`/`<audio>` — so a player, a cookie banner with a neutral
+         * name, or a site's own dialog is never touched. Anything hidden comes
+         * back on reload, which makes a false positive a refresh away.
+         */
+        private val INTERSTITIAL_KILL_JS = """
+            (function(){
+              if(window.__hkInterstitialInit)return;
+              window.__hkInterstitialInit=true;
+              var AD=/(^|[-_ ])(ads?|advert(isement)?|sponsor(ed)?|promo(ted)?|popup|popunder|interstitial|overlay-ad|ad-overlay|adbox|ad-slot|adunit)([-_ ]|${'$'})/i;
+              function kill(el){
+                try{
+                  if(!el||el.__hkKilled)return;
+                  var cs=getComputedStyle(el);
+                  if(!cs)return;
+                  if(cs.position!=='fixed'&&cs.position!=='absolute')return;
+                  var r=el.getBoundingClientRect();
+                  var vw=innerWidth||1, vh=innerHeight||1;
+                  if(r.width<=0||r.height<=0)return;
+                  if(r.width*r.height < vw*vh*0.5)return;
+                  var z=parseInt(cs.zIndex||'0',10)||0;
+                  if(z<40)return;
+                  if(el.querySelector('video,audio'))return;
+                  var sig=(el.id||'')+' '+(typeof el.className==='string'?el.className:'');
+                  var adFrame=el.querySelector('iframe[src*="doubleclick"],iframe[src*="googlesyndication"],iframe[src*="adservice"],iframe[src*="adsystem"],a[href*=".cyou"],a[href*=".cfd"]');
+                  if(!AD.test(sig)&&!adFrame)return;
+                  el.style.setProperty('display','none','important');
+                  el.__hkKilled=1;
+                }catch(e){}
+              }
+              function scan(){
+                var els=document.querySelectorAll('div,section,aside,ins');
+                for(var i=0;i<els.length;i++)kill(els[i]);
+              }
+              scan();
+              try{new MutationObserver(scan).observe(document.documentElement,{childList:true,subtree:true});}catch(e){}
+              setInterval(scan,2000);
+            })();
+        """
+
         private val ELEMENT_BLOCK_JS = """
             (function(){
               if(window.__hikariBlockerInit)return;
@@ -3430,11 +4335,100 @@ class WebViewActivity : ComponentActivity() {
                   window.__hikariPendingEl=null;
                 }
               }
+              // ---- adaptive relocation -------------------------------------
+              // A blocked element is identified by more than its CSS selector.
+              // Sites re-render constantly and the selector stops matching; the
+              // fingerprint below is the Scrapling idea, reduced to what a
+              // browser needs: tag, text, the identifying attributes, the short
+              // ancestor path and the parent. When the selector misses, the
+              // best candidate above 55% is hidden instead, so a block survives
+              // a redesign without ever guessing wildly.
+              function hkText(e){
+                try{return (e.innerText||e.textContent||'').replace(/\s+/g,' ').trim().slice(0,120)}catch(x){return ''}
+              }
+              function hkFingerprint(e){
+                try{
+                  var attrs={};
+                  ['class','id','href','src','role','data-testid'].forEach(function(a){
+                    var v=e.getAttribute&&e.getAttribute(a);
+                    if(v)attrs[a]=String(v).slice(0,120);
+                  });
+                  var path=[];var n=e;
+                  for(var i=0;i<4&&n&&n.nodeType===1;i++){
+                    path.unshift(n.tagName.toLowerCase());n=n.parentElement;
+                  }
+                  return {
+                    tag:e.tagName.toLowerCase(),
+                    text:hkText(e),
+                    attrs:attrs,
+                    path:path.join('>'),
+                    parent:e.parentElement?e.parentElement.tagName.toLowerCase():'',
+                    parentClass:e.parentElement?String(e.parentElement.className||'').slice(0,80):''
+                  };
+                }catch(x){return null}
+              }
+              function hkSim(a,b){
+                if(!a||!b)return 0;
+                var x=String(a).toLowerCase(),y=String(b).toLowerCase();
+                if(x===y)return 1;
+                if(x.indexOf(y)>=0||y.indexOf(x)>=0)return 0.8;
+                var A=x.split(/\s+/),B=y.split(/\s+/),hit=0;
+                for(var i=0;i<A.length;i++)if(B.indexOf(A[i])>=0)hit++;
+                return A.length?hit/A.length:0;
+              }
+              function hkScore(fp,e){
+                var c=hkFingerprint(e);if(!c)return 0;
+                var total=0,checks=0;
+                total+=(fp.tag===c.tag?1:0);checks++;
+                if(fp.text){total+=hkSim(fp.text,c.text);checks++}
+                var keys=Object.keys(fp.attrs||{});
+                if(keys.length){
+                  var hit=0;
+                  for(var i=0;i<keys.length;i++){
+                    hit+=hkSim(fp.attrs[keys[i]],(c.attrs||{})[keys[i]]||'');
+                  }
+                  total+=hit/keys.length;checks++;
+                }
+                total+=hkSim(fp.path,c.path);checks++;
+                if(fp.parent){
+                  total+=hkSim(fp.parent,c.parent);checks++;
+                  total+=hkSim(fp.parentClass,c.parentClass);checks++;
+                }
+                return checks?total/checks:0;
+              }
+              function hkAdaptiveHide(sel){
+                var raw=null;
+                try{raw=localStorage.getItem('hk_fp_'+sel)}catch(e){}
+                if(!raw)return false;
+                var fp=null;
+                try{fp=JSON.parse(raw)}catch(e){return false}
+                if(!fp)return false;
+                var best=null,bestScore=0;
+                var cands=document.querySelectorAll('div,section,aside,ins,iframe,img,a');
+                for(var i=0;i<cands.length&&i<4000;i++){
+                  var e=cands[i];
+                  if(!e||!e.parentNode)continue;
+                  if(e.querySelector&&e.querySelector('video,audio'))continue;
+                  var sc=hkScore(fp,e);
+                  if(sc>bestScore){bestScore=sc;best=e}
+                }
+                if(best&&bestScore>=0.55){
+                  if(!best.__hikariBlocked){
+                    best.__hikariBlocked=true;
+                    window.__hikariBlockRegistry.push({el:best,sel:sel});
+                  }
+                  best.style.setProperty('display','none','important');
+                  best.style.setProperty('pointer-events','none','important');
+                  return true;
+                }
+                return false;
+              }
               function hideAll(){
                 var sels=window.__hikariBlocks||[];
                 for(var i=0;i<sels.length;i++){
                   try{
                     var els=document.querySelectorAll(sels[i]);
+                    if(!els.length){hkAdaptiveHide(sels[i]);continue}
                     for(var j=0;j<els.length;j++){
                       var e=els[j];
                       if(!e||!e.parentNode)continue;
@@ -3443,6 +4437,14 @@ class WebViewActivity : ComponentActivity() {
                       if(!e.__hikariBlocked){
                         e.__hikariBlocked=true;
                         window.__hikariBlockRegistry.push({el:e,sel:sels[i]});
+                        // Remember what this element looked like the first time,
+                        // so the fallback has something to score against.
+                        try{
+                          if(!localStorage.getItem('hk_fp_'+sels[i])){
+                            var fp=hkFingerprint(e);
+                            if(fp)localStorage.setItem('hk_fp_'+sels[i],JSON.stringify(fp));
+                          }
+                        }catch(err){}
                       }
                       e.style.setProperty('display','none','important');
                       e.style.setProperty('pointer-events','none','important');
