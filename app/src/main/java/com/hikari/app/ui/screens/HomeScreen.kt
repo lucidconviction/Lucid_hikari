@@ -4352,11 +4352,14 @@ private fun StreamingServicesRow(
 ) {
     val tv = TvMode.current()
     val tile = if (tv) 96.dp else 72.dp
-    var logos by remember { mutableStateOf<Map<Int, String>>(emptyMap()) }
+    // VyseTV's full featured set (36 services), starting from the offline
+    // names so the row is populated on the first frame; the catalogue then
+    // replaces them with TMDB's names and artwork.
+    var platforms by remember { mutableStateOf(com.hikari.app.data.StreamingPlatforms.fallback()) }
 
     LaunchedEffect(Unit) {
-        logos = runCatching { com.hikari.app.data.StreamingPlatforms.logos() }
-            .getOrDefault(emptyMap())
+        platforms = runCatching { com.hikari.app.data.StreamingPlatforms.catalogue() }
+            .getOrDefault(platforms)
     }
 
     Column(Modifier.padding(top = if (tv) 20.dp else 16.dp)) {
@@ -4368,13 +4371,11 @@ private fun StreamingServicesRow(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 2.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            items(com.hikari.app.data.StreamingPlatforms.ALL, key = { it.key }) { platform ->
-                // TMDB's own provider logo is the service's real brand mark.
-                // The domain favicon is the fallback, the initial the last
-                // resort — never a blank tile.
-                val logoPath = logos[platform.providerId]
-                val iconModel = logoPath?.let { "https://image.tmdb.org/t/p/w185" + it }
-                    ?: ("https://www.google.com/s2/favicons?domain=" + platform.domain + "&sz=128")
+            items(platforms, key = { it.id }) { platform ->
+                // TMDB's own provider logo is the service's real brand mark;
+                // the initial underneath is the fallback, so a tile is never
+                // an empty square.
+                val iconModel = platform.logoPath?.let { "https://image.tmdb.org/t/p/w185" + it }
                 Column(
                     Modifier
                         .width(tile + 20.dp)
@@ -4400,14 +4401,16 @@ private fun StreamingServicesRow(
                             style = MaterialTheme.typography.headlineMedium,
                             color = MaterialTheme.colorScheme.primary,
                         )
-                        AsyncImage(
-                            model = iconModel,
-                            contentDescription = platform.name,
-                            contentScale = ContentScale.Fit,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(if (tv) 12.dp else 9.dp),
-                        )
+                        if (iconModel != null) {
+                            AsyncImage(
+                                model = iconModel,
+                                contentDescription = platform.name,
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(if (tv) 12.dp else 9.dp),
+                            )
+                        }
                     }
                     Spacer(Modifier.height(6.dp))
                     Text(
