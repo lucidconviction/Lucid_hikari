@@ -1,3 +1,20 @@
+## 0.15.0
+
+**18 November 2026**
+
+### A refreshed look, tablet layouts, motion and effects, and trackers in My Stuff
+
+- **Quieter surfaces.** Cards separate by fill and spacing instead of an outline: the hairline drops from 14% to 9%, the sheen halves, and the card radius moves from 26dp to 18dp. The light theme follows.
+- **Motion & effects**: Settings → Appearance & Theme → Motion & effects (Off / Subtle / Full). Cards press, lift and catch a light sweep; shelves snap to a card edge; pages glide. TVs default to Subtle, and the system animator scale still wins.
+- **Floating sliders.** Settings sliders are now a pill track with the value riding the thumb; the remote still steps them left/right.
+- **Tablets get their own layout**: a tall, always-labelled left rail instead of the phone taskbar, wider gutters, poster grids sized for the screen, and a centred reading column on Detail instead of a full-width stretch.
+- **The hero belongs to the theme**: "View Details" uses the accent colour instead of hardcoded white, and the hero title uses the app's display style.
+- **Quieter rating badges on Detail**: the brand colour stays in IMDb's wordmark, the tomato, the M and the Letterboxd dots, while the numbers sit in the page's own ink instead of five saturated pills.
+- **A Trackers section in My Stuff** beside Library, History and Downloads. Every connected service (AniList, MAL, Kitsu, Simkl, Shikimori, Trakt) loads separately, so one dead token cannot hide the others; each shelf opens Detail, and manga rows search the manga section. With nothing connected it explains where to sign in.
+- **A full first-run catalogue.** Fresh installs seed 71 extension repositories across every engine (CloudStream, Hikari, Nuvio, Aniyomi, Zangetsu, Sora, SkyStream, Vega, Anymex, LNReader, Kotatsu) plus 7 Stremio addons. Existing installs are never retro-fitted, and anything you removed is skipped.
+- **Television**: the navy + purple reference look is kept; only the corner language is refreshed, by value.
+- The player's seek bar and the dependency upgrades are deliberately unchanged in this release; both are separate, tested efforts.
+
 ## 0.14.0
 
 **18 November 2026**
