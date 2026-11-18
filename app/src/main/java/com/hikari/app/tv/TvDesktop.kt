@@ -4,6 +4,7 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.border
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -110,4 +111,38 @@ fun Modifier.tvFocusGlow(corner: Dp = TvDesktop.CornerCard): Modifier {
             color = accent.copy(alpha = 0.85f * ring),
             shape = RoundedCornerShape(corner),
         )
+}
+
+/**
+ * A scroll-depth cue for shelf cards: a card at the edge of the viewport sits
+ * slightly smaller and dimmer, and grows to full strength as it reaches the
+ * middle. The lazy layout is read inside `graphicsLayer`, so scrolling only
+ * invalidates the layer instead of recomposing every card in the row. A
+ * focused card ignores the cue — the remote's target is always at full size.
+ */
+@Composable
+fun Modifier.tvScrollReveal(index: Int, state: LazyListState): Modifier {
+    var focused by remember { mutableStateOf(false) }
+    return this
+        .onFocusChanged { focused = it.isFocused }
+        .graphicsLayer {
+            if (focused) {
+                alpha = 1f
+                scaleX = 1f
+                scaleY = 1f
+                return@graphicsLayer
+            }
+            val info = state.layoutInfo
+            val item = info.visibleItemsInfo.firstOrNull { it.index == index }
+                ?: return@graphicsLayer
+            val viewport = (info.viewportEndOffset - info.viewportStartOffset).coerceAtLeast(1)
+            val center = (info.viewportStartOffset + info.viewportEndOffset) / 2f
+            val itemCenter = item.offset + item.size / 2f
+            val edge = (kotlin.math.abs(itemCenter - center) / (viewport / 2f)).coerceIn(0f, 1f)
+            val depth = 1f - edge
+            alpha = 0.85f + 0.15f * depth
+            val cardScale = 0.96f + 0.04f * depth
+            scaleX = cardScale
+            scaleY = cardScale
+        }
 }

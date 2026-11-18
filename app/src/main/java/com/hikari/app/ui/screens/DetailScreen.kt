@@ -179,8 +179,9 @@ import com.hikari.app.ui.LoadingStyles
 import com.hikari.app.ui.PosterArt
 import com.hikari.app.ui.PosterLoader
 import com.hikari.app.cs3.YouTubePlayables
+import com.hikari.app.youtube.YouTubePlayRequest
+import com.hikari.app.youtube.youTubePlayerIntent
 import com.hikari.app.ui.openUrl
-import com.hikari.app.ui.openYouTubeVideo
 import com.hikari.app.ui.rememberPosterScore
 import com.hikari.app.ui.rememberPosterStyle
 import com.hikari.app.ui.components.ChoiceDialog
@@ -6842,9 +6843,9 @@ fun DetailScreen(
                                         s.ytId != null -> {
                                             showSheet = false
                                             // Main-release route: a YouTube link row opens in
-                                            // Hikari's own WebView (the trailer BUTTON above
-                                            // still uses openYouTubeVideo for the YouTube app —
-                                            // this row is somebody else's watch page).
+                                            // Hikari's own WebView (the trailer cards above
+                                            // use the in-app YouTube engine — this row is
+                                            // somebody else's watch page).
                                             context.startActivity(
                                                 Intent(context, WebViewActivity::class.java).apply {
                                                     putExtra("url", "https://www.youtube.com/watch?v=${s.ytId}")
@@ -6929,18 +6930,33 @@ fun DetailScreen(
         }
     }
 
-    // YouTube trailer — resolves via NewPipeExtractor and plays in Hikari's
-    // player. Falls back to opening the YouTube app only when resolution
-    // returns no streams (rare — most videos have a muxed format).
+    // Trailers always go through the SmartTube engine and the YouTube player:
+    // no NewPipe fallback and no hand-off to the external YouTube app. That
+    // keeps the engine's full quality/track set and records the trailer as a
+    // YouTube video instead of overwriting the title's resume position.
     activeTrailerKey?.let { (ytKey, ytTitle) ->
         LaunchedEffect(ytKey) {
-            val sources = YouTubePlayables.resolve(ytKey)
-            if (sources.isNotEmpty()) {
-                // No live server session for a trailer: the YouTube engine has
-                // already produced the HD manifest the player should open.
-                launchPlayer(sources, null, "", 0L, false)
-            } else {
-                openYouTubeVideo(context, ytKey, ytTitle)
+            val source = YouTubePlayables.resolveWithEngine(ytKey).firstOrNull()
+            if (source != null && !playerLaunched) {
+                playerLaunched = true
+                val request = YouTubePlayRequest(
+                    url = source.url,
+                    title = ytTitle,
+                    poster = "https://i.ytimg.com/vi/$ytKey/hqdefault.jpg",
+                    videoId = ytKey,
+                    headers = source.headers,
+                    isLive = source.isLive,
+                )
+                val launched = runCatching {
+                    playerLauncher.launch(youTubePlayerIntent(context, request))
+                }.isSuccess
+                if (!launched) playerLaunched = false
+            } else if (source == null) {
+                android.widget.Toast.makeText(
+                    context,
+                    "Couldn't play this trailer with the YouTube engine.",
+                    android.widget.Toast.LENGTH_SHORT,
+                ).show()
             }
             activeTrailerKey = null
         }
@@ -9166,9 +9182,8 @@ private fun CastRow(
     }
 }
 
-/** Trailer thumbnails (TMDB `videos` → YouTube stills). Tapping hands the
- *  video to the YouTube app (see [openYouTubeVideo]) instead of playing it in
- *  the in-app WebView, where YouTube's m.youtube.com redirect is blocked. */
+/** Trailer thumbnails (TMDB `videos` → YouTube stills). Tapping resolves the
+ *  video through the in-app YouTube engine and plays it in Hikari's player. */
 @Composable
 private fun TrailerRow(trailers: List<Trailer>, onClick: (Trailer) -> Unit) {
     Column(Modifier.padding(top = 14.dp)) {

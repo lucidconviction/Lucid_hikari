@@ -415,6 +415,9 @@ class AppStore(private val ctx: Context) {
         /** Show the muted next-video preview in the corner during the last
          *  ten seconds (ON by default; Settings → Playback & Servers). */
         val PLAYER_NEXT_PREVIEW = booleanPreferencesKey("playerNextPreview")
+        /** Hand the first source straight to ExoPlayer instead of probing /
+         *  waiting for a "healthy" one (ON by default; CloudStream-style). */
+        val PLAYER_FAST_START = booleanPreferencesKey("playerFastStart")
         /** Auto-advance to the next IPTV stream in the playlist when the current
          *  one ends (ON by default; the player's Auto-Next pill toggles it). */
         val PLAYER_AUTO_NEXT = booleanPreferencesKey("playerAutoNext")
@@ -3926,6 +3929,18 @@ fun searchExceptionOnFlow(): Flow<Boolean> =
 
     suspend fun setNextPreview(on: Boolean) {
         write("PLAYER_NEXT_PREVIEW") { it[K.PLAYER_NEXT_PREVIEW] = on }
+    }
+
+    /** Hand the first source to ExoPlayer immediately, skipping the pre-play
+     *  probe and the wait-for-more-servers gate (ON by default). */
+    fun fastStartFlow(): Flow<Boolean> =
+        store.data.map { it[K.PLAYER_FAST_START] ?: true }
+            .distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    suspend fun fastStart(): Boolean = fastStartFlow().first()
+
+    suspend fun setFastStart(on: Boolean) {
+        write("PLAYER_FAST_START") { it[K.PLAYER_FAST_START] = on }
     }
 
     /** Whether the player advances to the next IPTV stream in the playlist

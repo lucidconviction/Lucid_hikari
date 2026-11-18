@@ -195,6 +195,15 @@ object YouTubePlayables {
         emptyList()
     }
 
+    /**
+     * Engine-only resolution for trailers and other in-app YouTube playback:
+     * the SmartTube engine's DASH/HLS answer, with no NewPipe fallback and no
+     * hand-off to the external YouTube app.
+     */
+    suspend fun resolveWithEngine(ytId: String): List<StreamSource> =
+        if (ytId.isBlank()) emptyList()
+        else runCatching { engineResolve(ytId) }.getOrDefault(emptyList())
+
     suspend fun resolve(ytId: String): List<StreamSource> {
         if (ytId.isBlank()) return emptyList()
         // The YouTube page's own engine (SmartTube/MediaServiceCore) is the

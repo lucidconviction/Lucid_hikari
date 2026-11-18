@@ -16,7 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronLeft
@@ -234,9 +234,10 @@ fun TvCinemaRow(
     if (providerName.isNotBlank()) Text(providerName.uppercase(), style = MaterialTheme.typography.labelSmall, color = TvDesktop.accent, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp))
     Spacer(Modifier.height(10.dp))
     LazyRow(state = rowState, contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-      items(unique, key = { it.uniqueId }) { item ->
-        if (vertical) TvVerticalCard(item = item, onClick = { onOpen(item) })
-        else TvCinemaCard(item = item, onClick = { onOpen(item) }, cardWidth = cardWidth)
+      itemsIndexed(unique, key = { _, item -> item.uniqueId }) { index, item ->
+        val scrollFx = Modifier.tvScrollReveal(index, rowState)
+        if (vertical) TvVerticalCard(item = item, onClick = { onOpen(item) }, modifier = scrollFx)
+        else TvCinemaCard(item = item, onClick = { onOpen(item) }, modifier = scrollFx, cardWidth = cardWidth)
       }
     }
   }

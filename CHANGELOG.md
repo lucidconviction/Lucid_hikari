@@ -1,3 +1,13 @@
+## 0.13.4
+
+**17 November 2026**
+
+### Instant starts, engine-only trailers, and scroll-depth shelves
+
+- **Instant playback is on by default**: the first server is handed to ExoPlayer immediately. Source probes, health checks and the wait-for-more-servers choice no longer hold the first frame; a switch in Settings → Playback & Servers → Playback start restores the old behaviour.
+- **Every trailer now uses the YouTube engine**: trailers resolve through the SmartTube engine and open in Hikari’s YouTube player. There is no NewPipe fallback and no hand-off to the external YouTube app, and trailer progress is kept as YouTube history instead of overwriting the title’s resume position.
+- **Shelves and YouTube rows have a scroll-depth effect**: cards at the edge of the viewport sit slightly smaller and dimmer, settle to full size in the middle, and always return to full strength while focused.
+
 ## 0.13.3
 
 **16 November 2026**

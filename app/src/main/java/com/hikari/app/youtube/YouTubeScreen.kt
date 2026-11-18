@@ -72,6 +72,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import com.hikari.app.tv.tvScrollReveal
 import com.hikari.app.youtube.LocalYouTubeBottomPadding
 import com.hikari.app.youtube.LocalScreenActive
 import com.hikari.app.youtube.YouTubePlayRequest
@@ -375,8 +376,11 @@ private fun FeedRowsClassic(state: YtUiState, onItem: (YtItem, List<YtItem>) -> 
                     contentPadding = PaddingValues(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    items(row.items) { item ->
-                        VideoCard(item, Modifier.width(260.dp)) { onItem(item, row.items) }
+                    itemsIndexed(row.items) { index, item ->
+                        VideoCard(
+                            item,
+                            Modifier.width(260.dp).tvScrollReveal(index, listState),
+                        ) { onItem(item, row.items) }
                     }
                 }
             }

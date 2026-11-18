@@ -2527,6 +2527,16 @@ class PlayerActivity : ComponentActivity() {
             }
         }
         lifecycleScope.launch {
+            fastStartOn = runCatching {
+                (applicationContext as HikariApp).store.fastStart()
+            }.getOrDefault(true)
+        }
+        lifecycleScope.launch {
+            (applicationContext as HikariApp).store.fastStartFlow().collect { on ->
+                fastStartOn = on
+            }
+        }
+        lifecycleScope.launch {
             autoNextOn = runCatching {
                 (applicationContext as HikariApp).store.autoNext()
             }.getOrDefault(true)
@@ -2974,11 +2984,10 @@ class PlayerActivity : ComponentActivity() {
                 // How many servers must be known before playback starts. 1 (the
                 // default) means "the instant the first server is found"; a
                 // higher value is the Settings "wait for more servers" choice.
-                // The search FINISHING always counts as enough too, so a title
-                // that only ever finds 2 servers starts as soon as every
-                // installed extension has answered, instead of waiting forever
-                // for a 3rd..5th one that does not exist.
-                val startAfter = intent.getIntExtra("startAfterServers", 1).coerceIn(1, 8)
+                // Fast start overrides that choice: the whole point is to put
+                // the first link on screen and resolve the rest in parallel.
+                val startAfter = if (fastStartOn) 1
+                else intent.getIntExtra("startAfterServers", 1).coerceIn(1, 8)
                 // "Don't play directly": the chooser is the destination, so ONE
                 // server is already enough to put the list on screen — the
                 // "wait for N servers" setting must not hold the chooser back.
@@ -5953,6 +5962,9 @@ class PlayerActivity : ComponentActivity() {
     private var nextPreviewStarted = false
     private var nextPreviewAttemptedAt = 0L
     private var nextPreviewOn = true
+    /** CloudStream-style start: hand the first source to ExoPlayer now and let
+     *  its own error path fail over, instead of probing before the first frame. */
+    @Volatile private var fastStartOn = true
     /** True while the corner preview is covering the screen during the main
      *  player's handoff preparation (see [promotePreviewFullscreen]). */
     private var previewPromoted = false
@@ -14665,9 +14677,20 @@ class PlayerActivity : ComponentActivity() {
             // are single-use, and a probe burns the token the play needs.
             val needsProbe = !src.torrentStream && !isLoopbackHost(src.url) &&
                 StreamProbe.needsResolve(src.url, src.isTorrent, src.isM3u8, src.isMpd)
-            if (needsProbe) {
+            if (needsProbe && !fastStartOn) {
                 probeAndPlay(index)
                 return
+            }
+            // Fast start (CloudStream-style): ExoPlayer follows redirects and
+            // sniffs the container itself, so hand it the first link now. If
+            // it really is a wrapper page, the player's own error path walks
+            // to the next server; the probe would only have delayed the
+            // working one behind it.
+            if (needsProbe) {
+                com.hikari.app.data.Logs.log(
+                    "Player",
+                    "fast start: handing \"${src.name}\" to ExoPlayer without a probe",
+                )
             }
             playDirectInner(index)
         } catch (t: Throwable) {

@@ -5280,6 +5280,7 @@ private fun PlaybackStartCard(app: HikariApp) {
     var askServer by remember { mutableStateOf(false) }
     var failoverAsk by remember { mutableStateOf(true) }
     var scopeAsk by remember { mutableStateOf(false) }
+    var fastStart by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
         waitServers = app.store.playWaitServers()
@@ -5287,6 +5288,7 @@ private fun PlaybackStartCard(app: HikariApp) {
         askServer = app.store.askServerOnPlay()
         failoverAsk = app.store.failoverAskOnFailure()
         scopeAsk = app.store.playScopeAsk()
+        fastStart = app.store.fastStart()
     }
 
     fun persist(wait: Boolean) {
@@ -5396,6 +5398,37 @@ private fun PlaybackStartCard(app: HikariApp) {
                 tr("Fewer found? Playback starts anyway"),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        Spacer(Modifier.height(14.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    tr("Instant playback"),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    if (fastStart) {
+                        tr("On — hand the first link to the player without pre-checks")
+                    } else {
+                        tr("Off — probe servers before the first frame")
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = fastStart,
+                onCheckedChange = {
+                    fastStart = it
+                    scope.launch { runCatching { app.store.setFastStart(it) } }
+                },
+                modifier = Modifier.tvToggle(fastStart) {
+                    fastStart = it
+                    scope.launch { runCatching { app.store.setFastStart(it) } }
+                },
             )
         }
 
