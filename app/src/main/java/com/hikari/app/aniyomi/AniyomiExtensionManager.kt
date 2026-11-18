@@ -289,6 +289,11 @@ object AniyomiExtensionManager {
             "Aniyomi",
             "The official Aniyomi extension repo",
         ),
+        Triple(
+            "https://raw.githubusercontent.com/yuzono/anime-repo/repo/index.json",
+            "Yūzōnō",
+            "Community anime extensions (Yūzōnō / Mihon-style index)",
+        ),
     )
 
     // ---- Index files (which file a repo's extension list actually lives in) ----

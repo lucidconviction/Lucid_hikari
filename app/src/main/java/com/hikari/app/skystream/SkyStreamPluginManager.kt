@@ -135,9 +135,9 @@ object SkyStreamPluginManager {
             "The official SkyStream plugin repo (Akash's providers)",
         ),
         Triple(
-            "https://raw.githubusercontent.com/rougegz/SkystreamPlugins/main/repo.json",
-            "Rougegz SkyStream",
-            "Community SkyStream plugins",
+            "https://raw.githubusercontent.com/akashdh11/sky-universe/main/mega_repo.json",
+            "SkyStream Universe Repository",
+            "The SkyStream universe mega-repo",
         ),
     )
 
