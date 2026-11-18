@@ -308,6 +308,38 @@ object AdBlocker {
             .substringBefore('^').substringBefore('/').substringBefore('?')
             .substringBefore('#').trim().trimEnd('.').lowercase()
 
+    /**
+     * Hosts that serve a site's OWN media and player code, and that ad lists
+     * routinely name because an ad SUBDOMAIN lives under the same registrable
+     * domain.
+     *
+     * Dailymotion is the worked example: `dmcdn.net` is in StevenBlack and
+     * AdGuard, and it serves `static1.dmcdn.net` (the site's JS/CSS) and
+     * `vod3.cf.dmcdn.net` (the video itself). Blocking by host therefore took
+     * the whole site down — the reported "Dailymotion does the same as
+     * Rumble". These domains are still subject to the URL-pattern rules, so an
+     * ad path on one of them is still blocked; only the blunt host rule is
+     * lifted.
+     */
+    private val ALWAYS_ALLOWED_SUFFIXES = listOf(
+        "dmcdn.net",
+        "googlevideo.com", "ytimg.com", "ggpht.com",
+        "fbcdn.net", "twimg.com", "cdninstagram.com",
+        "akamaihd.net", "akamaized.net", "edgesuite.net", "llnwd.net",
+        "cloudfront.net", "fastly.net", "azureedge.net", "b-cdn.net",
+        "jsdelivr.net", "unpkg.com", "cdnjs.cloudflare.com",
+        "mux.com", "jwplayer.com", "jwplatform.com", "vimeocdn.com",
+        "cloudflarestream.com", "vidyoda.com",
+    )
+
+    /** True when [host] is (a subdomain of) a player/CDN domain that must never
+     *  be blocked by a host list. */
+    fun isAlwaysAllowedHost(host: String): Boolean {
+        val h = host.trim().trimEnd('.').lowercase()
+        if (h.isBlank()) return false
+        return ALWAYS_ALLOWED_SUFFIXES.any { h == it || h.endsWith(".$it") }
+    }
+
     // ------------------------------------------------ URL-pattern blocking
     //
     // The uBO-style half a hosts file cannot do. Hosts only match whole

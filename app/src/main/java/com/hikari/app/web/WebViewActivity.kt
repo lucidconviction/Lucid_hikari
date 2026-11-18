@@ -6,6 +6,14 @@ import android.app.DownloadManager
 import android.widget.Button
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.drawable.GradientDrawable
+import android.text.InputType
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
+import android.widget.ImageView
+import android.widget.ScrollView
 import android.graphics.Color
 import android.net.Uri
 import android.os.Build
@@ -37,6 +45,7 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import com.google.android.material.bottomsheet.BottomSheetDialog
 import androidx.activity.OnBackPressedCallback
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -91,6 +100,15 @@ class WebViewActivity : ComponentActivity() {
     private lateinit var webView: WebView
     private lateinit var progressBar: ProgressBar
     private lateinit var videoChip: TextView
+    private lateinit var urlField: EditText
+    private lateinit var backButton: TextView
+    private lateinit var forwardButton: TextView
+    /** `og:image` (or the first large image) of the page, for the media sheet's
+     *  preview — the PlayBridge-style "what am I about to play" card. */
+    @Volatile
+    private var pagePreviewUrl: String? = null
+    @Volatile
+    private var pagePreviewTitle: String = ""
     private lateinit var rootView: LinearLayout
     private var contentFrame: FrameLayout? = null
     // Main-frame load failure panel. A blank black page with no explanation was
@@ -866,16 +884,20 @@ class WebViewActivity : ComponentActivity() {
             max = 100
         }
 
+        // The media badge lives IN the toolbar, not as a floating pill over the
+        // page: its job is to say "this page has N playable sources" and open
+        // the list, not to cover the site's own controls.
         videoChip = TextView(this).apply {
-            text = I18n.t("\u25B6 Play video")
+            text = "\u25B6 0"
             visibility = View.GONE
-            setBackgroundColor(0xFF3D5AFE.toInt())
+            setBackgroundColor(0xFF2A3A6A.toInt())
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            textSize = 14f
-            setPadding(dp(18), dp(10), dp(18), dp(10))
+            textSize = 12f
+            setPadding(dp(10), dp(5), dp(10), dp(5))
             isClickable = true
-            setOnClickListener { playVideo() }
+            contentDescription = I18n.t("Videos on this page")
+            setOnClickListener { showMediaSheet() }
         }
 
         // A TELEVISION BOX MAY HAVE NO WEBVIEW AT ALL. The WebView is part of
@@ -914,61 +936,79 @@ class WebViewActivity : ComponentActivity() {
             .filter { it.isNotBlank() }
             .toSet()
 
-        // Top margin bar — gives the webview room at the top so the site's own
-        // header / search bar is not covered. Houses the menu (⋯) and tabs pill
-        // as fixed controls in the margin.
-        val TOP_BAR_HEIGHT = dp(48)
+        // ---- Browser chrome -------------------------------------------------
+        //
+        // A real address bar in the PlayBridge mould: back / forward, the URL
+        // (tap to edit, spaces become a search), reload, the media badge that
+        // opens the source list, and the ⋯ menu. Tabs moved into the menu; a
+        // "Tabs" pill next to a URL field was two permanent buttons for one
+        // occasional action.
+        val TOP_BAR_HEIGHT = dp(52)
         val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 TOP_BAR_HEIGHT,
             )
-            gravity = Gravity.CENTER_VERTICAL or Gravity.END
-            setBackgroundColor(0xAA000000.toInt())
-            setPadding(dp(8), 0, dp(8), 0)
-
-            // Tab-count pill — left side of the bar. Tapping it opens the tab
-            // grid dialog so the user can switch between or close open tabs.
-            val tabPill = TextView(this@WebViewActivity).apply {
-                text = "Tabs"
-                textSize = 12f
-                setTextColor(Color.WHITE)
-                gravity = Gravity.CENTER
-                setBackgroundColor(0x661A1A1A.toInt())
-                setPadding(dp(12), dp(4), dp(12), dp(4))
-                contentDescription = I18n.t("Open tabs")
-                isClickable = true
-                setOnClickListener { showTabGrid() }
-            }
-            addView(tabPill)
-
-            // Small floating ⋯ pill — the only always-visible control. Tapping
-            // it opens a small menu (Back/Forward/Reload/Player).
-            val togglePill = TextView(this@WebViewActivity).apply {
-                text = "\u22EE"
-                textSize = 20f
-                setTextColor(Color.WHITE)
-                gravity = Gravity.CENTER
-                setBackgroundColor(0x661A1A1A.toInt())
-                setPadding(dp(12), dp(2), dp(12), dp(6))
-                contentDescription = I18n.t("Browser menu")
-                isClickable = true
-                setOnClickListener { showMenu(it) }
-            }
-            addView(togglePill)
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(0xF00B0E16.toInt())
+            setPadding(dp(2), 0, dp(2), 0)
         }
+
+        fun barButton(glyph: String, desc: String, onClick: (View) -> Unit): TextView =
+            TextView(this@WebViewActivity).apply {
+                text = glyph
+                textSize = 19f
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+                setPadding(dp(10), dp(6), dp(10), dp(6))
+                contentDescription = desc
+                isClickable = true
+                setOnClickListener { v -> onClick(v) }
+            }
+
+        backButton = barButton("\u2039", I18n.t("Back")) { if (webView.canGoBack()) webView.goBack() }
+        forwardButton = barButton("\u203A", I18n.t("Forward")) { if (webView.canGoForward()) webView.goForward() }
+        val reloadButton = barButton("\u27F3", I18n.t("Reload")) { webView.reload() }
+        val menuButton = barButton("\u22EE", I18n.t("Browser menu")) { showMenu(it) }
+
+        urlField = EditText(this).apply {
+            setSingleLine(true)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            imeOptions = EditorInfo.IME_ACTION_GO
+            setTextColor(Color.WHITE)
+            setHintTextColor(0xFF8A93AE.toInt())
+            hint = I18n.t("Search or enter address")
+            textSize = 13f
+            includeFontPadding = false
+            background = GradientDrawable().apply {
+                cornerRadius = dp(20).toFloat()
+                setColor(0x22FFFFFF)
+                setStroke(dp(1), 0x33FFFFFF)
+            }
+            setPadding(dp(14), dp(7), dp(14), dp(7))
+            setOnFocusChangeListener { _, hasFocus -> if (hasFocus) selectAll() }
+            setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == EditorInfo.IME_ACTION_GO) {
+                    loadFromAddressBar(text.toString())
+                    clearFocus()
+                    hideKeyboard()
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+
+        topBar.addView(backButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        topBar.addView(forwardButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        topBar.addView(urlField, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        topBar.addView(videoChip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(4) })
+        topBar.addView(reloadButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        topBar.addView(menuButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
         val content = FrameLayout(this).apply {
             addView(webView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-            addView(
-                videoChip,
-                FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-                ).apply { bottomMargin = dp(28) }
-            )
             val panel = LinearLayout(this@WebViewActivity).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
@@ -1377,7 +1417,8 @@ class WebViewActivity : ComponentActivity() {
                     if (AdBlocker.matches(host, whitelistDomains)) {
                         return null
                     }
-                    val firstParty = currentPageHost()?.let { isSameSite(host, it) } == true
+                    val firstParty = currentPageHost()?.let { isSameSite(host, it) } == true ||
+                        AdBlocker.isAlwaysAllowedHost(host)
                     if (!firstParty && AdBlocker.matches(host, blockedDomains)) {
                         dbg("ad-host " + host + " main=" + request.isForMainFrame)
                         // NEVER block actual media — blocklists routinely contain
@@ -1493,6 +1534,17 @@ class WebViewActivity : ComponentActivity() {
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 dbg("start " + url)
+                syncToolbar(url)
+                // A full navigation starts a new page: sources detected on the
+                // previous one are not this page's. SPA route changes do not
+                // fire onPageStarted, so a client-side page keeps its list.
+                if (url != null && !url.startsWith("about:")) {
+                    detectedVideos.clear()
+                    videoScores.clear()
+                    videoChip.visibility = View.GONE
+                    pagePreviewUrl = null
+                    pagePreviewTitle = ""
+                }
                 pageUrl = url
                 pageHostCache = runCatching { url?.let { java.net.URI(it).host?.lowercase() } }.getOrNull()
                 loadFailed = false
@@ -1551,6 +1603,8 @@ class WebViewActivity : ComponentActivity() {
                         runCatching { view?.evaluateJavascript(js, null) }
                     }
                 }
+                syncToolbar(url)
+                loadPagePreview(view)
                 view?.evaluateJavascript(AD_CLEAN_JS, null)
                 view?.evaluateJavascript(PROMO_CLEAN_JS, null)
                 if (!autoCloseWhenCloudflarePassed && !addonConfig) {
@@ -2445,9 +2499,33 @@ class WebViewActivity : ComponentActivity() {
         }.getOrNull()
     }
 
-    /** Same host or one being a subdomain of the other (registrable-domain-ish). */
-    private fun isSameSite(host: String, current: String): Boolean =
-        host == current || host.endsWith("." + current) || current.endsWith("." + host)
+    /**
+     * Same SITE, not merely a subdomain chain.
+     *
+     * `www.dailymotion.com` and `static.neon-ssr.dailymotion.com` are the same
+     * site even though neither is a suffix of the other — the earlier
+     * "a.b is a subdomain of a" test called them different, so the site's own
+     * static host was treated as a third party and could be ad-blocked. The
+     * comparison is now on the registrable domain (eTLD+1, with the common
+     * two-level suffixes handled).
+     */
+    private fun isSameSite(host: String, current: String): Boolean {
+        val h = host.trim().trimEnd('.').lowercase()
+        val c = current.trim().trimEnd('.').lowercase()
+        if (h.isBlank() || c.isBlank()) return false
+        if (h == c || h.endsWith("." + c) || c.endsWith("." + h)) return true
+        return registrableDomain(h) == registrableDomain(c)
+    }
+
+    private fun registrableDomain(host: String): String {
+        val parts = host.split('.').filter { it.isNotBlank() }
+        if (parts.size <= 2) return parts.joinToString(".")
+        val tld = parts.last()
+        val sld = parts[parts.size - 2]
+        val twoLevel = tld.length == 2 &&
+            sld in setOf("co", "com", "net", "org", "gov", "ac", "edu", "ne", "or", "go")
+        return parts.takeLast(if (twoLevel) 3 else 2).joinToString(".")
+    }
 
     /** Cloudflare's own challenge infrastructure — the scripts, iframes and
      *  /cdn-cgi/ endpoints that mint the cf_clearance cookie. These must NEVER
@@ -2731,14 +2809,18 @@ class WebViewActivity : ComponentActivity() {
         if (detectedVideos.contains(url)) return
         // An ad that happens to be served as video is still an ad.
         if (isAdVideoCandidate(url)) return
+        // A fragment of a stream is not a stream. HLS/DASH players fetch
+        // `init.mp4`, `.m4s` and audio renditions while the manifest is already
+        // in the list, so offering them as separate "videos" makes the sheet a
+        // pile of unusable rows (and can win the sort as a bare MP4).
+        if (isStreamFragment(url)) return
         Thread {
             val score = probeVideoScore(url)
             if (score > 0) {
                 runOnUiThread {
                     if (detectedVideos.add(url)) {
                         videoScores[url] = score
-                        videoChip.text = "\u25B6 ${detectedVideos.size} video" +
-                            if (detectedVideos.size > 1) "s" else ""
+                        videoChip.text = "\u25B6 " + detectedVideos.size
                         videoChip.visibility = View.VISIBLE
                     }
                 }
@@ -2878,6 +2960,22 @@ class WebViewActivity : ComponentActivity() {
         )
     }
 
+    /**
+     * True for the pieces a manifest hands the player: initialization
+     * segments, .m4s fragments, transport-stream chunks and demuxed audio.
+     * These are only playable as part of their parent playlist.
+     */
+    private fun isStreamFragment(url: String): Boolean {
+        val path = url.substringBefore('?').substringBefore('#').lowercase()
+        if (path.contains(".m3u8") || path.contains(".mpd")) return false
+        return path.endsWith("/init.mp4") ||
+            path.contains("/init.") ||
+            path.endsWith(".m4s") || path.endsWith(".cmfv") || path.endsWith(".cmfa") ||
+            path.endsWith(".ts") ||
+            path.contains("aac_") || path.contains("_audio_") || path.contains("/audio/") ||
+            path.contains("h264_sd/") || path.contains("h264_hq/") || path.contains("h264_hd/")
+    }
+
     /** True when [url] is a host/pattern the ad lists already call an ad. */
     private fun isAdVideoCandidate(url: String): Boolean {
         val host = runCatching { java.net.URI(url).host }.getOrNull().orEmpty()
@@ -2887,6 +2985,9 @@ class WebViewActivity : ComponentActivity() {
         // lists carry that domain (Rumble is in three of them, for its ad
         // subresources — treating that as "every video is an ad" left the chip
         // empty on every Rumble page).
+        if (AdBlocker.isAlwaysAllowedHost(host)) {
+            return AdBlocker.matchesPatternUrl(url, page)
+        }
         if (page != null && isSameSite(host, page)) {
             return AdBlocker.matchesPatternUrl(url, page)
         }
@@ -2901,6 +3002,203 @@ class WebViewActivity : ComponentActivity() {
             ((b[4] == 'f'.code.toByte() && b[5] == 't'.code.toByte() && b[6] == 'y'.code.toByte() && b[7] == 'p'.code.toByte()) ||
                 (b[4] == 'm'.code.toByte() && b[5] == 'o'.code.toByte() && b[6] == 'o'.code.toByte() && b[7] == 'v'.code.toByte()) ||
                 (b[4] == 'm'.code.toByte() && b[5] == 'd'.code.toByte() && b[6] == 'a'.code.toByte() && b[7] == 't'.code.toByte()))
+    }
+
+    // ---- Browser chrome helpers -----------------------------------------
+
+    /** `https://www.example.com/a` → `example.com/a` for the address field. */
+    private fun stripScheme(url: String): String =
+        url.removePrefix("https://").removePrefix("http://").removePrefix("www.")
+
+    private fun hideKeyboard() {
+        runCatching {
+            (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)
+                ?.hideSoftInputFromWindow(urlField.windowToken, 0)
+        }
+    }
+
+    /** Keeps the address field and the back/forward affordances in step with
+     *  the page. Never overwrites what the user is typing. */
+    private fun syncToolbar(url: String?) {
+        runCatching {
+            if (!url.isNullOrBlank() && !url.startsWith("about:")) {
+                if (!urlField.hasFocus()) {
+                    urlField.setText(stripScheme(url))
+                    urlField.setSelection(urlField.text.length)
+                }
+            }
+            backButton.alpha = if (webView.canGoBack()) 1f else 0.3f
+            forwardButton.alpha = if (webView.canGoForward()) 1f else 0.3f
+        }
+    }
+
+    /** A typed address: a real URL loads, anything else is a search. */
+    private fun loadFromAddressBar(raw: String) {
+        val t = raw.trim()
+        if (t.isBlank()) return
+        val target = when {
+            t.contains("://") -> t
+            t.contains('.') && !t.contains(' ') -> "https://" + t
+            else -> "https://www.google.com/search?q=" + Uri.encode(t)
+        }
+        runCatching { webView.loadUrl(target) }
+    }
+
+    /**
+     * The page's preview card (`og:image` + title), the PlayBridge idea of
+     * showing WHAT is about to be played instead of a bare URL. Fetched once
+     * per page; a page without OpenGraph falls back to its <title>.
+     */
+    private fun loadPagePreview(view: WebView?) {
+        view ?: return
+        view.evaluateJavascript(
+            """(function(){try{
+                 var m=document.querySelector('meta[property="og:image"],meta[name="og:image"],meta[name="twitter:image"]');
+                 var t=document.querySelector('meta[property="og:title"],meta[name="twitter:title"]');
+                 return JSON.stringify({i:m?m.content:'',t:t?t.content:(document.title||'')});
+               }catch(e){return '{}';}})();""",
+        ) { res ->
+            runCatching {
+                val raw = org.json.JSONTokener(res).nextValue() as? String ?: return@runCatching
+                val o = org.json.JSONObject(raw)
+                pagePreviewUrl = o.optString("i").takeIf { it.startsWith("http") }
+                pagePreviewTitle = o.optString("t")
+            }
+        }
+    }
+
+    /** Detected sources in the order the player will use them. */
+    private fun sortedDetected(): List<String> {
+        val page = currentPageHost().orEmpty()
+        fun same(u: String): Boolean {
+            val h = runCatching { java.net.URI(u).host }.getOrNull()?.lowercase() ?: return false
+            if (page.isBlank()) return false
+            return h == page || h.endsWith(".$page") || page.endsWith(".$h")
+        }
+        return detectedVideos.toList().sortedWith(
+            compareByDescending<String> { if (same(it)) 1 else 0 }
+                .thenByDescending { videoScores[it] ?: 0 },
+        )
+    }
+
+    private fun mediaTypeLabel(url: String): String = when (videoScores[url] ?: 0) {
+        120 -> "HLS \u00B7 adaptive"
+        110 -> "DASH"
+        60 -> "HLS"
+        40 -> if (url.contains(".mp4", true)) "MP4" else I18n.t("Video")
+        else -> I18n.t("Video")
+    }
+
+    /**
+     * The source list, modelled on PlayBridge's cast sheet: a preview of the
+     * page, one tap for "play the best", and a row per source with its type,
+     * host and a play button. This is the "finding video" surface — the badge
+     * only says how many, this says which.
+     */
+    private fun showMediaSheet() {
+        val list = sortedDetected()
+        if (list.isEmpty()) {
+            // Nothing sniffed yet: fall back to the page scan.
+            playVideo()
+            return
+        }
+        val dialog = BottomSheetDialog(this)
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(14), dp(20), dp(22))
+            setBackgroundColor(0xFF10131C.toInt())
+        }
+
+        val preview = pagePreviewUrl
+        if (preview != null) {
+            val image = ImageView(this).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                setBackgroundColor(0xFF1B2030.toInt())
+            }
+            root.addView(
+                image,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(150),
+                ).apply { bottomMargin = dp(12) },
+            )
+            Thread {
+                val bmp = runCatching {
+                    Http.get(preview).use { r ->
+                        BitmapFactory.decodeStream(r.body?.byteStream())
+                    }
+                }.getOrNull()
+                if (bmp != null) runOnUiThread { image.setImageBitmap(bmp) }
+            }.start()
+        }
+
+        root.addView(
+            TextView(this).apply {
+                text = pagePreviewTitle.ifBlank { pageTitle }
+                textSize = 16f
+                setTextColor(Color.WHITE)
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            },
+        )
+        root.addView(
+            TextView(this).apply {
+                text = I18n.t("Tap a source to play it in Hikari")
+                textSize = 12f
+                setTextColor(0xFF9AA3C0.toInt())
+                setPadding(0, dp(4), 0, dp(12))
+            },
+        )
+        root.addView(
+            TextView(this).apply {
+                text = I18n.t("\u25B6 Play best")
+                textSize = 15f
+                gravity = Gravity.CENTER
+                setTextColor(Color.WHITE)
+                setBackgroundColor(0xFF3D5AFE.toInt())
+                setPadding(0, dp(12), 0, dp(12))
+                isClickable = true
+                setOnClickListener { dialog.dismiss(); playVideo() }
+            },
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(10) },
+        )
+
+        for (u in list) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(2), dp(10), dp(2), dp(10))
+                isClickable = true
+                setOnClickListener {
+                    dialog.dismiss()
+                    launchPlayer(listOf(u), pageUrl ?: webView.url, preferred = setOf(u))
+                }
+            }
+            row.addView(
+                TextView(this).apply {
+                    text = mediaTypeLabel(u) + "  \u00B7  " + urlHost(u)
+                    textSize = 14f
+                    setTextColor(Color.WHITE)
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                },
+            )
+            row.addView(
+                TextView(this).apply {
+                    text = u
+                    textSize = 11f
+                    setTextColor(0xFF7C86A2.toInt())
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                },
+            )
+            root.addView(row)
+        }
+
+        dialog.setContentView(ScrollView(this).apply { addView(root) })
+        dialog.show()
     }
 
     private fun playVideo() {
@@ -2975,28 +3273,39 @@ class WebViewActivity : ComponentActivity() {
         val cookie = runCatching {
             unique.firstNotNullOfOrNull { CookieManager.getInstance().getCookie(it) }
         }.getOrNull()
+        // The credentials the PAGE used. A CDN that handed the WebView its
+        // media rejects a request missing any of these, and for HLS it checks
+        // the child playlist and every segment, not just the first URL — which
+        // is why they are handed to the loopback proxy (StreamProxy) rather
+        // than only to the first request.
+        val headerMap = buildMap {
+            put("User-Agent", (application as HikariApp).effectiveWebViewUa())
+            referer?.takeIf { it.isNotBlank() }?.let { put("Referer", it) }
+            if (!cookie.isNullOrBlank()) put("Cookie", cookie)
+            referer?.let { ref ->
+                runCatching { java.net.URI(ref) }.getOrNull()
+                    ?.let { u -> "${u.scheme}://${u.host}" }
+                    ?.let { put("Origin", it) }
+            }
+        }
         val sources = JSONArray()
         unique.forEach { u ->
-            val headers = JSONObject()
-            if (!referer.isNullOrBlank()) headers.put("Referer", referer)
-            // The SAME user agent the page used. A CDN that handed the WebView
-            // its media often rejects a request that arrives with a different
-            // UA (the ExoPlayer one), which is the "it plays in the browser but
-            // not in the player" failure.
-            headers.put("User-Agent", (application as HikariApp).effectiveWebViewUa())
-            // An `Origin` matching the page is required by some CDNs' CORS
-            // checks for media fetched from a different host.
-            referer?.let { ref ->
-                runCatching { java.net.URI(ref) }
-                    .getOrNull()
-                    ?.let { u -> "${u.scheme}://${u.host}" }
-                    ?.let { headers.put("Origin", it) }
+            // DASH is left direct: its MPD points at relative segment
+            // templates the player resolves itself, which the proxy would have
+            // to parse and rewrite. HLS is rewritten, so it goes through.
+            val proxied = if (u.contains(".mpd", true)) {
+                null
+            } else {
+                runCatching { com.hikari.app.player.StreamProxy.register(u, headerMap) }.getOrNull()
             }
-            if (!cookie.isNullOrBlank()) headers.put("Cookie", cookie)
+            val headers = JSONObject()
+            // A proxied source needs no headers of its own (the proxy adds the
+            // page's); a direct one still does.
+            if (proxied == null) headerMap.forEach { (k, v) -> headers.put(k, v) }
             sources.put(
                 JSONObject()
                     .put("name", "Web · ${urlHost(u)}")
-                    .put("url", u)
+                    .put("url", proxied ?: u)
                     .put("headers", headers)
                     .put("isM3u8", u.contains(".m3u8", true))
                     .put("isMpd", u.contains(".mpd", true))

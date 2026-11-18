@@ -226,6 +226,7 @@ import java.io.File
 import com.hikari.app.ui.theme.HikariAccent
 import com.hikari.app.ui.theme.HikariThemeMode
 import com.hikari.app.ui.theme.inkOn
+import com.hikari.app.web.UserscriptImport
 import com.hikari.app.web.UserscriptManager
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
@@ -8207,6 +8208,11 @@ private fun UserscriptsCard(app: HikariApp) {
     var editing by remember { mutableStateOf<Userscript?>(null) }
     var adding by remember { mutableStateOf(false) }
     var draft by remember { mutableStateOf("") }
+    // Import from a URL (.user.js or a Greasy Fork page). The fetched source
+    // lands in the editor, so it is reviewed before it is saved.
+    var importUrl by remember { mutableStateOf("") }
+    var importing by remember { mutableStateOf(false) }
+    var importError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         scripts = runCatching { app.store.userscripts() }.getOrDefault(emptyList())
@@ -8274,7 +8280,12 @@ private fun UserscriptsCard(app: HikariApp) {
             }
         }
         OutlinedButton(
-            onClick = { draft = ""; adding = true },
+            onClick = {
+                draft = ""
+                importUrl = ""
+                importError = null
+                adding = true
+            },
             shape = GlassShape,
         ) {
             Icon(Icons.Filled.Add, contentDescription = null)
@@ -8294,6 +8305,44 @@ private fun UserscriptsCard(app: HikariApp) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    Spacer(Modifier.height(10.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = importUrl,
+                            onValueChange = { importUrl = it; importError = null },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall,
+                            shape = GlassShape,
+                            placeholder = { Text(tr("Import from URL (.user.js / Greasy Fork)")) },
+                        )
+                        TextButton(
+                            enabled = importUrl.isNotBlank() && !importing,
+                            onClick = {
+                                importing = true
+                                importError = null
+                                scope.launch {
+                                    runCatching {
+                                        UserscriptImport.fetch(importUrl.trim())
+                                    }.onSuccess { code ->
+                                        draft = code
+                                        importUrl = ""
+                                    }.onFailure { e ->
+                                        importError = e.message ?: "Could not import that script"
+                                    }
+                                    importing = false
+                                }
+                            },
+                        ) { Text(if (importing) tr("Importing…") else tr("Import")) }
+                    }
+                    if (importError != null) {
+                        Text(
+                            importError.orEmpty(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
                     Spacer(Modifier.height(10.dp))
                     OutlinedTextField(
                         value = draft,
