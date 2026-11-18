@@ -1,3 +1,31 @@
+## 0.15.4
+
+**18 November 2026**
+
+### Trackers you can read, and that update when you do
+
+- **The Upcoming calendar works.** Simkl has no per-user `/calendar` endpoint — it answers `404 url_failed`, which is why the section stayed empty. Hikari now joins the public Simkl CDN files (`anime`, `movie_release`) to your own synced lists, and takes TV airings from `/tv/airing` a day at a time. The full TV file is tens of megabytes and was what took My Stuff down on a phone.
+- **Air times are 12-hour** (`10:30 PM`, not `22:30`), and a day can hold as many shows as it has: Fri 20 Nov shows three, and Sun 22 Nov shows Dexter and The Simpsons at the same 8:00 PM.
+- **A calendar instead of a list.** Each date is one card with its weekday, an airing count, a clock column and hairline separators. Long titles wrap instead of being cut.
+- **Every Simkl category**: Watching, Plan to Watch, Completed, On Hold and Dropped under the source header, beside Movies, TV Shows, Anime and Manga. The cross-tracker Series row sits below the sources, not above them.
+- **“Mark as watching” writes the tracker.** It used to send a watch event, which marked the episode *seen* on Simkl and friends. It now sets the list status — Simkl `/sync/add-to-list`, AniList `CURRENT`, MAL `watching`, Kitsu `current`, Shikimori `watching` — which is also what puts the title’s future episodes on Upcoming. Trakt has no watching status, so it gets its watchlist and the note says so.
+- **Trakt**: ratings shelves added; the calendar asks for `extended=full,images` and reads `images.poster.full` (Trakt has no top-level poster field).
+- **No more crash from My Stuff** — two calendar rows sharing a key threw `IllegalArgumentException` and closed the app. Keys are positional now, and duplicate airings are merged before they reach the UI.
+- Duplicate airings from two trackers become one row labelled with both sources.
+
+### Sports, in the same language as My Stuff
+
+- The Sports hub no longer has its own headline and underlined tab row. It opens with **pill buttons** — the same capsule, height, accent fill and icon as My Stuff’s section buttons.
+- Six sections are a 2×3 grid, so no label is ever cut mid-word; refresh and settings are small icons above instead of squeezing the pills.
+
+### Catalogue and browser
+
+- **Streaming services are icons only**, with no titles, in the order VyseTV uses; duplicate brands are removed, and thumbnails come from a 24-hour memory + disk cache so returning Home does not reload them.
+- **Catalogue pages say what they are** — “Netflix / Movies & series” — and **swipe left/right** changes All / Movies / Series / Anime. Movie and TV discover queries now run in parallel, so the grid fills sooner.
+- **Tapping play shows “Loading trailer…”** until the player opens.
+- The browser keeps **16dp** of air between the toolbar and the page.
+- **Tablet rail**: the tab strip is centred vertically instead of starting under the status bar.
+
 ## 0.15.3
 
 **18 November 2026**
