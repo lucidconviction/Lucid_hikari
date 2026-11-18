@@ -214,16 +214,6 @@ fun TrackerMyStuffScreen(nav: NavHostController, embedded: Boolean = false) {
             }
         }
 
-        if (series.isNotEmpty()) {
-            item(key = "tracker-series") {
-                TrackerShelfRow(
-                    title = tr("Series"),
-                    items = series,
-                    onOpen = openItem,
-                )
-            }
-        }
-
         if (supported.isEmpty()) {
             item(key = "tracker-connect") {
                 GlassCard {
@@ -320,6 +310,18 @@ fun TrackerMyStuffScreen(nav: NavHostController, embedded: Boolean = false) {
                         },
                     )
                 }
+            }
+        }
+        // The cross-tracker Series row comes AFTER the sources: each tracker's
+        // own categories stay grouped under its name, which is the order that
+        // reads as "Simkl → its lists" rather than a nameless row on top.
+        if (series.isNotEmpty()) {
+            item(key = "tracker-series") {
+                TrackerShelfRow(
+                    title = tr("Series"),
+                    items = series,
+                    onOpen = openItem,
+                )
             }
         }
     }

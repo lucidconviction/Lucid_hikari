@@ -56,51 +56,93 @@ object TrackerCalendarRepository {
 
     // ---- Simkl -----------------------------------------------------------
 
+    /**
+     * Simkl's own calendar is the CDN-hosted public one
+     * (`data.simkl.in/calendar/v2/{tv,anime,movie_release}.json`) joined with
+     * the user's synced ids — a per-user `/calendar` API does not exist (it
+     * answers 404), which is why the previous attempt showed nothing. The
+     * public files cover yesterday + 33 days, so a 14-day window is just a
+     * filter, and no user token is needed for them.
+     */
     private suspend fun simkl(app: HikariApp, account: TrackerAccount, days: Int): List<Entry> {
         val client = app.store.trackerClients().firstOrNull { it.kind == TrackerKind.SIMKL }
             ?: TrackerClient(TrackerKind.SIMKL)
         if (!client.ready || account.token.isBlank()) return emptyList()
-        val headers = mapOf(
+        val auth = mapOf(
             "simkl-api-key" to client.id,
             "Authorization" to "Bearer ${account.token}",
-            "Content-Type" to "application/json",
         )
-        val from = dayString(0)
-        val out = ArrayList<Entry>()
-        for (type in listOf("shows", "movies")) {
-            val url = "https://api.simkl.com/calendar/$type/$from/$days" +
-                "?client_id=${client.id}&extended=full"
-            val body = runCatching {
-                Http.get(url, headers).use { r ->
-                    if (!r.isSuccessful) null else r.body?.string()
-                }
-            }.getOrNull() ?: continue
-            val arr = runCatching { JSONArray(body) }.getOrNull() ?: continue
+        val body = runCatching {
+            Http.get(
+                "https://api.simkl.com/sync/all-items/?extended=full" +
+                    "&client_id=${client.id}&app-name=Hikari&app-version=1.0",
+                auth,
+            ).use { r -> if (r.isSuccessful) r.body?.string() else null }
+        }.getOrNull() ?: return emptyList()
+        val sync = runCatching { JSONObject(body) }.getOrNull() ?: return emptyList()
+
+        fun idsOf(arrayKey: String): Set<Int> {
+            val arr = sync.optJSONArray(arrayKey) ?: return emptySet()
+            val out = HashSet<Int>(arr.length())
             for (i in 0 until arr.length()) {
-                val o = arr.optJSONObject(i) ?: continue
-                val date = o.optString("date").ifBlank {
-                    o.optString("releasedate").ifBlank { o.optString("release_date") }
-                }
-                val at = parseDate(date) ?: continue
-                val episode = o.optJSONObject("episode")
-                val show = o.optJSONObject("show") ?: o.optJSONObject("movie")
-                val title = show?.optString("title")?.trim().orEmpty()
+                val row = arr.optJSONObject(i) ?: continue
+                val media = row.optJSONObject("show") ?: row.optJSONObject("movie") ?: row
+                val id = media.optJSONObject("ids")?.optInt("simkl", 0) ?: 0
+                if (id > 0) out += id
+            }
+            return out
+        }
+        val shows = idsOf("shows") + idsOf("anime")
+        val movies = idsOf("movies")
+
+        val now = System.currentTimeMillis()
+        val limit = now + days * 24L * 60L * 60L * 1000L
+        val out = ArrayList<Entry>()
+        val files = listOf(
+            Triple("tv", "shows", false),
+            Triple("anime", "anime", false),
+            Triple("movie_release", "movies", true),
+        )
+        for ((file, _, isMovie) in files) {
+            if (isMovie && movies.isEmpty()) continue
+            if (!isMovie && shows.isEmpty()) continue
+            val url = "https://data.simkl.in/calendar/v2/$file.json" +
+                "?client_id=${client.id}&app-name=Hikari&app-version=1.0"
+            val json = runCatching { Http.getStringQuiet(url) }.getOrNull() ?: continue
+            val root = runCatching { JSONObject(json) }.getOrNull() ?: continue
+            val calendar = root.optJSONArray("calendar") ?: continue
+            val metadata = root.optJSONObject("metadata")
+            for (i in 0 until calendar.length()) {
+                val o = calendar.optJSONObject(i) ?: continue
+                val simklId = o.optInt("simkl_id", 0)
+                if (simklId <= 0) continue
+                if (if (isMovie) simklId !in movies else simklId !in shows) continue
+                val at = parseDate(o.optString("date")) ?: continue
+                if (at < now - 24L * 60L * 60L * 1000L || at > limit) continue
+                val meta = metadata?.optJSONObject(simklId.toString()) ?: continue
+                val title = meta.optString("title").trim()
                 if (title.isBlank()) continue
-                val season = episode?.optInt("season", 0) ?: 0
+                val episode = o.optJSONObject("episode")
+                val season = episode?.optInt("season", -1) ?: -1
                 val number = episode?.optInt("episode", 0) ?: 0
                 val epTitle = episode?.optString("title").orEmpty().trim()
-                val subtitle = if (episode != null) {
-                    "S${season}E$number" + if (epTitle.isNotBlank()) " · $epTitle" else ""
-                } else {
-                    "Film"
+                val subtitle = when {
+                    episode == null -> "Film"
+                    season > 0 -> "S${season}E$number" + if (epTitle.isNotBlank()) " · $epTitle" else ""
+                    else -> "E$number" + if (epTitle.isNotBlank()) " · $epTitle" else ""
                 }
+                val posterPath = meta.optString("poster").takeIf { it.isNotBlank() }
+                val poster = posterPath?.let {
+                    "https://wsrv.nl/?url=https://simkl.in/posters/" + it + "_m.webp&q=90"
+                }
+                val tmdb = meta.optJSONObject("ids")?.optString("tmdb").orEmpty()
                 out += entry(
                     at = at,
                     title = title,
                     subtitle = subtitle,
-                    poster = show?.optString("poster")?.takeIf { it.startsWith("http") },
-                    tmdbId = show?.optJSONObject("ids")?.optString("tmdb").orEmpty(),
-                    isSeries = episode != null,
+                    poster = poster,
+                    tmdbId = tmdb,
+                    isSeries = !isMovie,
                     tracker = "Simkl",
                 )
             }
