@@ -211,7 +211,16 @@ fun TrackerMyStuffScreen(nav: NavHostController, embedded: Boolean = false) {
                 entries.forEachIndexed { index, entry ->
                     item(key = "calendar-$day-$index") {
                         TrackerCalendarRow(entry) {
-                            entry.item?.let(openItem)
+                            // Not every airing carries a TMDB id (Simkl's
+                            // /tv/airing sends none), so a row without one
+                            // searches for its title instead of doing nothing
+                            // when tapped.
+                            val target = entry.item
+                            if (target != null) {
+                                openItem(target)
+                            } else {
+                                Routes.safeNavigate(nav, Routes.searchQuery(entry.title))
+                            }
                         }
                     }
                 }
