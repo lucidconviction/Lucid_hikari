@@ -225,6 +225,29 @@ class WebViewActivity : ComponentActivity() {
      * [allowBlockedRedirect]). Cleared on every new page ([onPageStarted]), so
      * the offer can never point at a link from a page the user has left.
      */
+    /**
+     * When the user last put a finger on the page.
+     *
+     * WebView credits a real tap to `request.hasGesture()` / `onCreateWindow`'s
+     * `isUserGesture` only when the navigation comes straight from the touch
+     * handler. Streaming sites almost never do that: the tap runs a script,
+     * which sets `location.href` from a cross-origin iframe or calls
+     * `window.open` a tick later — and both arrive with the gesture flag
+     * FALSE. Treating that as an automatic redirect is what made a tapped
+     * episode do nothing ("secondary screens don't load") and a tapped player
+     * popup get dropped.
+     *
+     * "A finger was here in the last couple of seconds" is the reliable
+     * signal. It only ever RELAXES the redirect/popup gates — the ad host and
+     * ad pattern checks still run first, and a redirect with no touch behind
+     * it stays cancelled exactly as before.
+     */
+    @Volatile
+    private var lastUserTouchAt = 0L
+
+    private fun recentUserGesture(): Boolean =
+        android.os.SystemClock.uptimeMillis() - lastUserTouchAt < 2_500L
+
     @Volatile
     private var lastBlockedRedirectUrl: String? = null
     @Volatile
@@ -1285,12 +1308,16 @@ class WebViewActivity : ComponentActivity() {
                             // (see askRedirectPermission), not a bare toast and
                             // a trip to the ⋯ menu. Automatic redirects keep the
                             // silent block — they are never the user's tap.
-                            if (request.hasGesture()) {
-                                askRedirectPermission(request.url.toString(), host)
-                            } else {
-                                showBlockedToast(blockedRedirectToast(request.url))
-                                rememberBlockedRedirect(request.url.toString())
+                            if (request.hasGesture() || recentUserGesture()) {
+                                // A tapped link: the user asked for this page, so
+                                // it loads. Only AUTOMATIC redirects are
+                                // cancelled — an ad hijack has no finger behind
+                                // it, and the ad host/pattern gates above and
+                                // below still apply.
+                                return false
                             }
+                            showBlockedToast(blockedRedirectToast(request.url))
+                            rememberBlockedRedirect(request.url.toString())
                             return true
                         }
                     }
@@ -1390,12 +1417,14 @@ class WebViewActivity : ComponentActivity() {
                             // Same tap-choice as the override gate above: a
                             // user-gesture navigation asks inline, an
                             // automatic one is dropped silently.
-                            if (request.hasGesture()) {
-                                askRedirectPermission(u, host)
-                            } else {
-                                showBlockedToast(blockedRedirectToast(request.url))
-                                rememberBlockedRedirect(u)
+                            if (request.hasGesture() || recentUserGesture()) {
+                                // Same rule as the override gate: a finger on
+                                // the page means the navigation is the user's,
+                                // not an ad hijack's.
+                                return null
                             }
+                            showBlockedToast(blockedRedirectToast(request.url))
+                            rememberBlockedRedirect(u)
                             return WebResourceResponse(
                                 "text/plain", "utf-8", ByteArrayInputStream(ByteArray(0))
                             )
@@ -1593,7 +1622,7 @@ class WebViewActivity : ComponentActivity() {
                 // page sat on "Waiting for Google..." forever with the popup
                 // dropped. Same-site/video gates below still apply to
                 // everything that is not a config page.
-                if (popupProtection && !isUserGesture && !addonConfig) {
+                if (popupProtection && !isUserGesture && !recentUserGesture() && !addonConfig) {
                     showBlockedToast("Blocked popup")
                     return false
                 }
@@ -1707,7 +1736,14 @@ class WebViewActivity : ComponentActivity() {
                                 if (host == null || cur == null ||
                                     (host != cur && !AdBlocker.matches(host, whitelistDomains) && !isSameSite(host, cur))
                                 ) {
-                                    if (isPopupHostAllowed(host)) {
+                                    // A popup opened by the user's own tap is the
+                                    // player (Kwik, Dood, Streamtape…) or a
+                                    // sign-in hand-off — load it. The dialog was
+                                    // an extra step that often never appeared
+                                    // because the gesture flag had already been
+                                    // lost. Automatic popunders still hit the
+                                    // !recentUserGesture() gate above.
+                                    if (isPopupHostAllowed(host) || recentUserGesture()) {
                                         allowOnce(url)
                                         runOnUiThread { webView.loadUrl(url) }
                                     } else {
@@ -2205,6 +2241,15 @@ class WebViewActivity : ComponentActivity() {
         upEv.recycle()
     }
 
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN ||
+            ev.actionMasked == android.view.MotionEvent.ACTION_UP
+        ) {
+            lastUserTouchAt = android.os.SystemClock.uptimeMillis()
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         if (mouseMode && event.action == android.view.KeyEvent.ACTION_DOWN) {
             when (event.keyCode) {
@@ -2333,6 +2378,10 @@ class WebViewActivity : ComponentActivity() {
         // anyway: it is one page shown solely to pass the check.
         if (autoCloseWhenCloudflarePassed) return
         view?.evaluateJavascript(ELEMENT_BLOCK_JS, null)
+        // In-page ad overlays (see INTERSTITIAL_KILL_JS). Separate from the
+        // element blocker because it has nothing to do with the user's saved
+        // selectors: it is the "the ad is drawn by the site itself" case.
+        view?.evaluateJavascript(INTERSTITIAL_KILL_JS, null)
         val arr = JSONArray().apply { blockedSelectors.forEach { put(it) } }
         view?.evaluateJavascript(
             "window.__hikariBlocks=" + arr.toString() +
@@ -2622,6 +2671,11 @@ class WebViewActivity : ComponentActivity() {
         // Verification view never offers video.
         if (autoCloseWhenCloudflarePassed) return
         if (detectedVideos.contains(url)) return
+        // An ad that happens to be served as video is still an ad. The click
+        // that opens a streaming episode routinely fires a short ad clip from
+        // a popunder host, and offering it as "video 1" is how the player
+        // opened on an advert instead of the episode.
+        if (isAdVideoCandidate(url)) return
         Thread {
             val isVideo = isRealVideo(url)
             if (isVideo) {
@@ -2680,6 +2734,14 @@ class WebViewActivity : ComponentActivity() {
         }
     }
 
+    /** True when [url] is a host/pattern the ad lists already call an ad. */
+    private fun isAdVideoCandidate(url: String): Boolean {
+        val host = runCatching { java.net.URI(url).host }.getOrNull().orEmpty()
+        if (host.isBlank()) return true
+        if (AdBlocker.matches(host, blockedDomains)) return true
+        return AdBlocker.matchesPatternUrl(url, currentPageHost())
+    }
+
     private fun looksLikeMp4(b: ByteArray): Boolean {
         if (b.size < 12) return false
         // MP4 boxes start with a size then "ftyp" / "moov" / "mdat" / "styp"
@@ -2691,17 +2753,18 @@ class WebViewActivity : ComponentActivity() {
 
     private fun playVideo() {
         val ref = pageUrl ?: webView.url
-        if (detectedVideos.isEmpty()) {
-            webView.evaluateJavascript(VIDEO_SCAN_JS) { res ->
-                val urls = extractUrls(res)
-                if (urls.isEmpty()) {
-                    Toast.makeText(this, I18n.t("No video found on this page"), Toast.LENGTH_SHORT).show()
-                } else {
-                    launchPlayer(urls, ref)
-                }
+        // The page's own <video> element is the strongest signal there is: it
+        // is the source the site itself is playing. Network sniffing also sees
+        // the ad clip a click fires, and that is how "server 1" used to be an
+        // advert. DOM sources go first, sniffed ones follow as fallbacks.
+        webView.evaluateJavascript(VIDEO_SCAN_JS) { res ->
+            val dom = extractUrls(res)
+            val all = (dom + detectedVideos.toList()).distinct()
+            if (all.isEmpty()) {
+                Toast.makeText(this, I18n.t("No video found on this page"), Toast.LENGTH_SHORT).show()
+            } else {
+                launchPlayer(all, ref, preferred = dom.toSet())
             }
-        } else {
-            launchPlayer(detectedVideos.toList(), ref)
         }
     }
 
@@ -2716,8 +2779,48 @@ class WebViewActivity : ComponentActivity() {
         }.getOrDefault(emptyList())
     }
 
-    private fun launchPlayer(urls: List<String>, referer: String?) {
-        val unique = urls.distinct().filter { it.startsWith("http") }
+    private fun launchPlayer(
+        urls: List<String>,
+        referer: String?,
+        /** Sources that came from the page's own <video> element — always
+         *  ordered before anything that was merely sniffed off the wire. */
+        preferred: Set<String> = emptySet(),
+    ) {
+        // Manifests first: a page usually exposes the HLS/DASH master and the
+        // individual segments it is currently fetching. The master is the one
+        // the player can adapt from (and seek in); a segment URL pins one
+        // quality and often expires. The player lists the rest as alternates.
+        val pageHost = runCatching { java.net.URI(referer.orEmpty()).host }
+            .getOrNull().orEmpty().lowercase()
+        fun sameSiteAsPage(u: String): Boolean {
+            val h = runCatching { java.net.URI(u).host }.getOrNull()?.lowercase() ?: return false
+            if (pageHost.isBlank()) return false
+            return h == pageHost || h.endsWith(".$pageHost") || pageHost.endsWith(".$h")
+        }
+        val unique = urls.distinct()
+            .filter { it.startsWith("http") }
+            // Drop anything the ad lists recognise outright — the "2 videos"
+            // chip must never count an advert as a source.
+            .filterNot { isAdVideoCandidate(it) }
+            .sortedWith(
+                // The episode's own CDN first: it is normally served from the
+                // site's domain or a subdomain of it, while an advert comes from
+                // an unrelated host. Manifests before fragments after that.
+                compareBy<String>(
+                    // 1. What the page's player is actually using.
+                    { if (it in preferred) 0 else 1 },
+                    // 2. Its own CDN before an unrelated host.
+                    { if (sameSiteAsPage(it)) 0 else 1 },
+                    // 3. A manifest before a fragment.
+                    {
+                        when {
+                            it.contains(".m3u8", true) -> 0
+                            it.contains(".mpd", true) -> 1
+                            else -> 2
+                        }
+                    },
+                )
+            )
         if (unique.isEmpty()) {
             Toast.makeText(this, I18n.t("No playable video found"), Toast.LENGTH_SHORT).show()
             return
@@ -2729,7 +2832,19 @@ class WebViewActivity : ComponentActivity() {
         unique.forEach { u ->
             val headers = JSONObject()
             if (!referer.isNullOrBlank()) headers.put("Referer", referer)
-            headers.put("User-Agent", Http.UA)
+            // The SAME user agent the page used. A CDN that handed the WebView
+            // its media often rejects a request that arrives with a different
+            // UA (the ExoPlayer one), which is the "it plays in the browser but
+            // not in the player" failure.
+            headers.put("User-Agent", (application as HikariApp).effectiveWebViewUa())
+            // An `Origin` matching the page is required by some CDNs' CORS
+            // checks for media fetched from a different host.
+            referer?.let { ref ->
+                runCatching { java.net.URI(ref) }
+                    .getOrNull()
+                    ?.let { u -> "${u.scheme}://${u.host}" }
+                    ?.let { headers.put("Origin", it) }
+            }
             if (!cookie.isNullOrBlank()) headers.put("Cookie", cookie)
             sources.put(
                 JSONObject()
@@ -3413,6 +3528,58 @@ class WebViewActivity : ComponentActivity() {
          * (rotating GIF banners, SPA sliders) recreate containers with the same
          * selectors, which is what made blocked elements "come back".
          */
+        /**
+         * Hides full-screen AD UIs that live INSIDE the page.
+         *
+         * The request blocker can stop the ad's network traffic, but a site is
+         * free to draw its own "click to watch" interstitial over the content
+         * with a plain div: nothing to block, and it sits on top of the page
+         * until dismissed. Animepahe's episode link is exactly this — the
+         * player never appears because an illustration + "Watch!" panel covers
+         * the page.
+         *
+         * The rule is deliberately narrow: an element must be positioned over
+         * at least half the viewport, sit above z-index 40, carry an ad-like
+         * id/class (or wrap a known ad frame), and must NOT contain a
+         * `<video>`/`<audio>` — so a player, a cookie banner with a neutral
+         * name, or a site's own dialog is never touched. Anything hidden comes
+         * back on reload, which makes a false positive a refresh away.
+         */
+        private val INTERSTITIAL_KILL_JS = """
+            (function(){
+              if(window.__hkInterstitialInit)return;
+              window.__hkInterstitialInit=true;
+              var AD=/(^|[-_ ])(ads?|advert(isement)?|sponsor(ed)?|promo(ted)?|popup|popunder|interstitial|overlay-ad|ad-overlay|adbox|ad-slot|adunit)([-_ ]|${'$'})/i;
+              function kill(el){
+                try{
+                  if(!el||el.__hkKilled)return;
+                  var cs=getComputedStyle(el);
+                  if(!cs)return;
+                  if(cs.position!=='fixed'&&cs.position!=='absolute')return;
+                  var r=el.getBoundingClientRect();
+                  var vw=innerWidth||1, vh=innerHeight||1;
+                  if(r.width<=0||r.height<=0)return;
+                  if(r.width*r.height < vw*vh*0.5)return;
+                  var z=parseInt(cs.zIndex||'0',10)||0;
+                  if(z<40)return;
+                  if(el.querySelector('video,audio'))return;
+                  var sig=(el.id||'')+' '+(typeof el.className==='string'?el.className:'');
+                  var adFrame=el.querySelector('iframe[src*="doubleclick"],iframe[src*="googlesyndication"],iframe[src*="adservice"],iframe[src*="adsystem"],a[href*=".cyou"],a[href*=".cfd"]');
+                  if(!AD.test(sig)&&!adFrame)return;
+                  el.style.setProperty('display','none','important');
+                  el.__hkKilled=1;
+                }catch(e){}
+              }
+              function scan(){
+                var els=document.querySelectorAll('div,section,aside,ins');
+                for(var i=0;i<els.length;i++)kill(els[i]);
+              }
+              scan();
+              try{new MutationObserver(scan).observe(document.documentElement,{childList:true,subtree:true});}catch(e){}
+              setInterval(scan,2000);
+            })();
+        """
+
         private val ELEMENT_BLOCK_JS = """
             (function(){
               if(window.__hikariBlockerInit)return;
