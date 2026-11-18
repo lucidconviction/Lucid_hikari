@@ -24,6 +24,9 @@ class ChannelSurfController(
     var currentIndex by mutableStateOf(channels.indexOfFirst { it.url == channelId }.coerceAtLeast(0))
         private set
 
+    /** The channel we were on before the last switch, for the remote's 0 key. */
+    private var lastIndex: Int = currentIndex
+
     val total get() = channels.size
 
     /**
@@ -55,8 +58,13 @@ class ChannelSurfController(
 
     suspend fun prev(): IptvChannel? = switch(step(-1))
 
+    /** The remote's 0 key: return to the channel we were on before this one. */
+    suspend fun last(): IptvChannel? = switch(lastIndex)
+
     suspend fun switch(index: Int): IptvChannel? {
         if (index < 0 || index >= total) return null
+        if (index == currentIndex) return channels.getOrNull(index)
+        lastIndex = currentIndex
         currentIndex = index
         val ch = channels[index]
         onChannelChanged(ch)

@@ -759,6 +759,11 @@ class PlayerActivity : ComponentActivity() {
     var channelSurfController: com.hikari.app.player.ChannelSurfController? = null
         private set
 
+    /** Remote number entry for Live TV: digits buffer for a moment, then tune. */
+    private var channelNumberBuffer = ""
+    private var channelNumberView: TextView? = null
+    private var channelNumberCommit: Runnable? = null
+
     /** True once [playSource] has actually chosen a server this session. Until
      *  then nothing may be drawn as "already selected": `currentIndex` starts
      *  at its 0 default, so a plain `index == currentIndex` check painted the
@@ -2557,6 +2562,20 @@ class PlayerActivity : ComponentActivity() {
         lifecycleScope.launch {
             (applicationContext as HikariApp).store.fastStartFlow().collect { on ->
                 fastStartOn = on
+            }
+        }
+        lifecycleScope.launch {
+            (applicationContext as HikariApp).store.defaultVideoHeightFlow().collect { height ->
+                defaultVideoHeight = height
+                defaultTracksAppliedFor = null
+                player?.currentTracks?.let { applyDefaultTracks(it) }
+            }
+        }
+        lifecycleScope.launch {
+            (applicationContext as HikariApp).store.defaultAudioLanguageFlow().collect { language ->
+                defaultAudioLanguage = language
+                defaultTracksAppliedFor = null
+                player?.currentTracks?.let { applyDefaultTracks(it) }
             }
         }
         lifecycleScope.launch {
@@ -4466,6 +4485,7 @@ class PlayerActivity : ComponentActivity() {
 
     /** True when the key was handled here — see [dispatchKeyEvent]. */
     private fun handleTvKey(code: Int): Boolean {
+        if (handleChannelNumberKey(code)) return true
         val p = player
         return when (code) {
             android.view.KeyEvent.KEYCODE_DPAD_CENTER,
@@ -5993,6 +6013,11 @@ class PlayerActivity : ComponentActivity() {
     /** CloudStream-style start: hand the first source to ExoPlayer now and let
      *  its own error path fail over, instead of probing before the first frame. */
     @Volatile private var fastStartOn = true
+    /** Starting quality/audio preferences (0 / blank = Auto). */
+    @Volatile private var defaultVideoHeight = 0
+    @Volatile private var defaultAudioLanguage = ""
+    /** The source URL whose default tracks have already been applied. */
+    private var defaultTracksAppliedFor: String? = null
     /** True while the corner preview is covering the screen during the main
      *  player's handoff preparation (see [promotePreviewFullscreen]). */
     private var previewPromoted = false
@@ -8385,6 +8410,107 @@ class PlayerActivity : ComponentActivity() {
      * [channelSurfController]. Called on fresh launch AND on [onNewIntent]
      * so the Channels button always reflects the list the stream was chosen from.
      */
+    /**
+     * Remote number entry for Live TV: 1–9 start a channel number, 0 with no
+     * buffer returns to the previous channel, OK commits at once, Back cancels.
+     * Only active when a playlist controller exists; VOD and phones are
+     * untouched.
+     */
+    private fun handleChannelNumberKey(code: Int): Boolean {
+        val ctrl = channelSurfController ?: return false
+        if (code in android.view.KeyEvent.KEYCODE_0..android.view.KeyEvent.KEYCODE_9) {
+            val digit = code - android.view.KeyEvent.KEYCODE_0
+            if (channelNumberBuffer.isEmpty() && digit == 0) {
+                lifecycleScope.launch { ctrl.last() }
+                return true
+            }
+            if (channelNumberBuffer.length >= 4) channelNumberBuffer = ""
+            channelNumberBuffer += digit
+            showChannelNumberOverlay(
+                I18n.t("Channel %s").replace("%s", channelNumberBuffer)
+            )
+            scheduleChannelNumberCommit()
+            return true
+        }
+        if (channelNumberBuffer.isEmpty()) return false
+        return when (code) {
+            android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+            android.view.KeyEvent.KEYCODE_ENTER,
+            android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                commitChannelNumber()
+                true
+            }
+            android.view.KeyEvent.KEYCODE_BACK -> {
+                clearChannelNumber()
+                true
+            }
+            else -> false
+        }
+    }
+
+    private fun scheduleChannelNumberCommit() {
+        channelNumberCommit?.let { bufferingWatchdog.removeCallbacks(it) }
+        val task = Runnable { commitChannelNumber() }
+        channelNumberCommit = task
+        bufferingWatchdog.postDelayed(task, 1_500L)
+    }
+
+    private fun commitChannelNumber() {
+        val ctrl = channelSurfController ?: return clearChannelNumber()
+        val number = channelNumberBuffer.toIntOrNull()
+        clearChannelNumber()
+        if (number == null || number < 1 || number > ctrl.total) {
+            Toast.makeText(
+                this,
+                I18n.t("No channel %s").replace("%s", number?.toString() ?: ""),
+                Toast.LENGTH_SHORT,
+            ).show()
+            return
+        }
+        lifecycleScope.launch { ctrl.switch(number - 1) }
+    }
+
+    private fun clearChannelNumber() {
+        channelNumberCommit?.let { bufferingWatchdog.removeCallbacks(it) }
+        channelNumberCommit = null
+        channelNumberBuffer = ""
+        channelNumberView?.visibility = View.GONE
+    }
+
+    private fun showChannelNumberOverlay(label: String) {
+        val density = resources.displayMetrics.density
+        val view = channelNumberView ?: run {
+            val root = findViewById<ViewGroup>(android.R.id.content) ?: return
+            val tv = TextView(this).apply {
+                setTextColor(0xFFFFFFFF.toInt())
+                textSize = 26f
+                gravity = Gravity.CENTER
+                setPadding(
+                    (18 * density).toInt(), (10 * density).toInt(),
+                    (18 * density).toInt(), (10 * density).toInt(),
+                )
+                background = GradientDrawable().apply {
+                    setColor(0xE6000000.toInt())
+                    cornerRadius = 14f * density
+                }
+            }
+            root.addView(
+                tv,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply {
+                    gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                    topMargin = (56 * density).toInt()
+                },
+            )
+            channelNumberView = tv
+            tv
+        }
+        view.text = label
+        view.visibility = View.VISIBLE
+    }
+
     private fun refreshChannelSurfController(intent: android.content.Intent) {
         val surfChannelsJson = intent.getStringExtra("channelSurfChannels")
         if (surfChannelsJson.isNullOrBlank()) {
@@ -13940,6 +14066,7 @@ class PlayerActivity : ComponentActivity() {
         userRotated = false
         userPickedSubs = false
         currentIndex = index
+        defaultTracksAppliedFor = null
         // A new attempt: the cover is about to describe THIS server, so the
         // previous line (and whatever the search was saying) is dropped.
         coverPlaybackLine = null
@@ -17311,6 +17438,9 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
             applyYouTubeQuality(tracks)
             applyVideoEnhance()
             updateMetaBadge(tracks)
+            // Apply the viewer's starting quality/language once per source,
+            // before the sticky user picks re-assert themselves.
+            applyDefaultTracks(tracks)
             // Re-assert the booster gain after a track change (cheap and
             // idempotent — the stage itself survives in the sink).
             applyVolumeBoost()
@@ -19099,8 +19229,89 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
      *  chosen subtitle stopped having any effect and a second audio track never
      *  switched. Never fights a pick that is already in effect, so it is safe
      *  to call on every track change. */
-    private fun applyStickyPicks(type: Int): Boolean {
-        val p = player ?: return false
+    /**
+     * Applies the Settings "Default quality" and "Default audio language" once
+     * per source. Auto (0 / blank) leaves the stream's own adaptive choices
+     * alone; a remembered audio pick always wins over the default.
+     */
+    private fun applyDefaultTracks(tracks: Tracks) {
+        if (intent.getBooleanExtra("ytPlayback", false)) return
+        val p = player ?: return
+        if (tracks.groups.isEmpty()) return
+        val key = sources.getOrNull(currentIndex)?.url ?: return
+        if (defaultTracksAppliedFor == key) return
+        if (defaultVideoHeight <= 0 && defaultAudioLanguage.isBlank()) {
+            defaultTracksAppliedFor = key
+            return
+        }
+        val builder = p.trackSelectionParameters.buildUpon()
+        var changed = false
+        if (defaultVideoHeight > 0) {
+            val choices = ArrayList<Pair<Tracks.Group, Int>>()
+            val rows = ArrayList<DefaultPlayback.VideoTrack>()
+            for (group in tracks.groups) {
+                if (group.type != C.TRACK_TYPE_VIDEO) continue
+                for (i in 0 until group.length) {
+                    val f = runCatching { group.getTrackFormat(i) }.getOrNull() ?: continue
+                    if (f.height <= 0) continue
+                    rows.add(
+                        DefaultPlayback.VideoTrack(
+                            index = choices.size,
+                            height = f.height,
+                            bitrate = (if (f.averageBitrate > 0) f.averageBitrate else f.bitrate).toLong(),
+                        )
+                    )
+                    choices.add(group to i)
+                }
+            }
+            val picked = DefaultPlayback.chooseVideoIndex(rows, defaultVideoHeight)
+            if (picked != null) {
+                val (group, trackIndex) = choices[picked]
+                builder.clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+                builder.setOverrideForType(
+                    TrackSelectionOverride(group.mediaTrackGroup, ImmutableList.of(trackIndex))
+                )
+                changed = true
+            }
+        }
+        if (defaultAudioLanguage.isNotBlank() && pickAudio == null) {
+            val choices = ArrayList<Pair<Tracks.Group, Int>>()
+            val rows = ArrayList<DefaultPlayback.AudioTrack>()
+            for (group in tracks.groups) {
+                if (group.type != C.TRACK_TYPE_AUDIO) continue
+                for (i in 0 until group.length) {
+                    val f = runCatching { group.getTrackFormat(i) }.getOrNull() ?: continue
+                    rows.add(
+                        DefaultPlayback.AudioTrack(
+                            index = choices.size,
+                            language = f.language,
+                            label = f.label,
+                        )
+                    )
+                    choices.add(group to i)
+                }
+            }
+            val picked = DefaultPlayback.chooseAudioIndex(rows, defaultAudioLanguage)
+            if (picked != null) {
+                val (group, trackIndex) = choices[picked]
+                val format = runCatching { group.getTrackFormat(trackIndex) }.getOrNull()
+                builder.setOverrideForType(
+                    TrackSelectionOverride(group.mediaTrackGroup, ImmutableList.of(trackIndex))
+                )
+                pickAudio = TrackPick(
+                    C.TRACK_TYPE_AUDIO,
+                    format?.language,
+                    format?.label,
+                    trackIndex,
+                )
+                changed = true
+            }
+        }
+        if (changed) p.trackSelectionParameters = builder.build()
+        defaultTracksAppliedFor = key
+    }
+
+    private fun applyStickyPicks(type: Int): Boolean {        val p = player ?: return false
         val pick = if (type == C.TRACK_TYPE_TEXT) pickText else pickAudio
         if (pick == null) return false
         if (type == C.TRACK_TYPE_TEXT && textOff) return false

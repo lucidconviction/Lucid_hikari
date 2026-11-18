@@ -894,6 +894,7 @@ fun SettingsScreen(nav: NavHostController) {
                     // lives here — it is a decision about SERVERS — and only here:
                     // the same card used to show up in the Player folder too.
                     item { SettingsCard { PlaybackStartCard(app) } }
+                    item { SettingsCard { DefaultTracksCard(app) } }
                     item { SettingsCard { NextPreviewCard(app) } }
                     // F5 — auto-rotate player with phone orientation
                     item { SettingsCard { AutoRotateCard(app) } }
@@ -5526,6 +5527,143 @@ private fun PlaybackStartCard(app: HikariApp) {
                 },
             )
         }
+    }
+}
+
+/**
+ * Settings → Playback & Servers → Default tracks.
+ *
+ * A title with a multi-language audio manifest otherwise starts on whichever
+ * track the provider put first, and a 4K source can start at 4K on a device
+ * that cannot decode it. These two preferences are applied once per source,
+ * before the stream's adaptive choice; a manual pick in the player still wins.
+ */
+@Composable
+private fun DefaultTracksCard(app: HikariApp) {
+    val scope = rememberCoroutineScope()
+    var height by remember { mutableStateOf(0) }
+    var audio by remember { mutableStateOf("") }
+    var qualityOpen by remember { mutableStateOf(false) }
+    var audioOpen by remember { mutableStateOf(false) }
+
+    val languages = remember {
+        listOf(
+            "" to "Auto",
+            "en" to "English",
+            "hi" to "Hindi",
+            "ta" to "Tamil",
+            "te" to "Telugu",
+            "ml" to "Malayalam",
+            "kn" to "Kannada",
+            "bn" to "Bengali",
+            "mr" to "Marathi",
+            "pa" to "Punjabi",
+            "es" to "Spanish",
+            "fr" to "French",
+            "de" to "German",
+            "it" to "Italian",
+            "pt" to "Portuguese",
+            "ru" to "Russian",
+            "ar" to "Arabic",
+            "tr" to "Turkish",
+            "ja" to "Japanese",
+            "ko" to "Korean",
+            "zh" to "Chinese",
+            "id" to "Indonesian",
+            "th" to "Thai",
+            "vi" to "Vietnamese",
+        )
+    }
+
+    LaunchedEffect(Unit) {
+        height = app.store.defaultVideoHeight()
+        audio = app.store.defaultAudioLanguage()
+    }
+
+    val qualityLabel = if (height <= 0) tr("Auto") else "${height}p"
+    val audioLabel = languages.firstOrNull { it.first == audio }?.second ?: audio.ifBlank { tr("Auto") }
+
+    SettingsSection(
+        id = "player.default_tracks",
+        icon = Icons.Filled.Tune,
+        title = tr("Default tracks"),
+        summary = qualityLabel + " \u00B7 " + audioLabel,
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickable { qualityOpen = true }
+                .padding(vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(tr("Video quality"), style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    tr("The starting rendition; Auto follows the stream"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(qualityLabel, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+        }
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickable { audioOpen = true }
+                .padding(vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(tr("Audio language"), style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    tr("Prefer this language when the stream carries it"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(audioLabel, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+        }
+    }
+
+    if (qualityOpen) {
+        val choices = listOf(
+            0 to tr("Auto"),
+            2160 to "2160p",
+            1440 to "1440p",
+            1080 to "1080p",
+            720 to "720p",
+            480 to "480p",
+            360 to "360p",
+        )
+        ChoiceDialog(
+            title = tr("Default video quality"),
+            items = choices.map { (h, name) ->
+                ChoiceItem(h.toString(), name, if (h <= 0) tr("Follow the stream") else tr("Start at this height"))
+            },
+            selectedKey = height.toString(),
+            onPick = { key ->
+                qualityOpen = false
+                val picked = key.toIntOrNull() ?: 0
+                height = picked
+                scope.launch { runCatching { app.store.setDefaultVideoHeight(picked) } }
+            },
+            onDismiss = { qualityOpen = false },
+        )
+    }
+    if (audioOpen) {
+        ChoiceDialog(
+            title = tr("Default audio language"),
+            items = languages.map { (code, name) ->
+                ChoiceItem(code, name, if (code.isBlank()) tr("Follow the stream") else name)
+            },
+            selectedKey = audio,
+            onPick = { key ->
+                audioOpen = false
+                audio = key
+                scope.launch { runCatching { app.store.setDefaultAudioLanguage(key) } }
+            },
+            onDismiss = { audioOpen = false },
+        )
     }
 }
 

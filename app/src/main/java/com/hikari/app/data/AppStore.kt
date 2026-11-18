@@ -418,6 +418,10 @@ class AppStore(private val ctx: Context) {
         /** Hand the first source straight to ExoPlayer instead of probing /
          *  waiting for a "healthy" one (ON by default; CloudStream-style). */
         val PLAYER_FAST_START = booleanPreferencesKey("playerFastStart")
+        /** Preferred starting video height; 0 = Auto. */
+        val PLAYER_DEFAULT_HEIGHT = intPreferencesKey("playerDefaultVideoHeight")
+        /** Preferred audio language (ISO code); blank = Auto. */
+        val PLAYER_DEFAULT_AUDIO = stringPreferencesKey("playerDefaultAudioLanguage")
         /** Auto-advance to the next IPTV stream in the playlist when the current
          *  one ends (ON by default; the player's Auto-Next pill toggles it). */
         val PLAYER_AUTO_NEXT = booleanPreferencesKey("playerAutoNext")
@@ -3941,6 +3945,28 @@ fun searchExceptionOnFlow(): Flow<Boolean> =
 
     suspend fun setFastStart(on: Boolean) {
         write("PLAYER_FAST_START") { it[K.PLAYER_FAST_START] = on }
+    }
+
+    /** Preferred starting video height (0 = Auto). */
+    fun defaultVideoHeightFlow(): Flow<Int> =
+        store.data.map { it[K.PLAYER_DEFAULT_HEIGHT] ?: 0 }
+            .distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    suspend fun defaultVideoHeight(): Int = defaultVideoHeightFlow().first()
+
+    suspend fun setDefaultVideoHeight(height: Int) {
+        write("PLAYER_DEFAULT_HEIGHT") { it[K.PLAYER_DEFAULT_HEIGHT] = height.coerceAtLeast(0) }
+    }
+
+    /** Preferred audio language code (blank = Auto). */
+    fun defaultAudioLanguageFlow(): Flow<String> =
+        store.data.map { it[K.PLAYER_DEFAULT_AUDIO] ?: "" }
+            .distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    suspend fun defaultAudioLanguage(): String = defaultAudioLanguageFlow().first()
+
+    suspend fun setDefaultAudioLanguage(language: String) {
+        write("PLAYER_DEFAULT_AUDIO") { it[K.PLAYER_DEFAULT_AUDIO] = language.trim() }
     }
 
     /** Whether the player advances to the next IPTV stream in the playlist
