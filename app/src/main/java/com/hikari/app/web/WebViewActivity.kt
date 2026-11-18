@@ -1065,9 +1065,26 @@ class WebViewActivity : ComponentActivity() {
             setBackgroundColor(Color.BLACK)
             addView(progressBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(4)))
             addView(topBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, TOP_BAR_HEIGHT))
-            addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+            // A little air between the chrome and the page: sites open with a
+            // header banner pressed right against the URL bar otherwise, and a
+            // fixed site header reads as part of Hikari's own toolbar.
+            addView(
+                content,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
+                    topMargin = dp(8)
+                },
+            )
         }
         setContentView(rootView)
+        // When the system bars are showing (the user swiped them back, or the
+        // device ignores the immersive request), reserve their height at the
+        // top instead of letting the status bar draw over the address field.
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(rootView) { v, insets ->
+            val top = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars()).top
+            if (v.paddingTop != top) v.setPadding(0, top, 0, 0)
+            insets
+        }
+        androidx.core.view.ViewCompat.requestApplyInsets(rootView)
         contentFrame = rootView.getChildAt(2) as? FrameLayout
         mouseMode = com.hikari.app.tv.MouseMode.enabled
         desktopMode = getSharedPreferences("webview_prefs", MODE_PRIVATE)
