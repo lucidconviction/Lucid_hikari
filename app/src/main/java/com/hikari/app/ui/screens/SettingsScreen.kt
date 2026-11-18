@@ -3669,19 +3669,15 @@ private fun SettingsSlider(
             color = MaterialTheme.colorScheme.primary,
         )
     }
-    Slider(
+    com.hikari.app.ui.effects.FloatingSlider(
         value = value,
         onValueChange = onValueChange,
         onValueChangeFinished = onValueChangeFinished,
         valueRange = valueRange,
         steps = steps,
-        colors = SliderDefaults.colors(
-            thumbColor = MaterialTheme.colorScheme.primary,
-            activeTrackColor = MaterialTheme.colorScheme.primary,
-            inactiveTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f),
-            activeTickColor = Color.Transparent,
-            inactiveTickColor = Color.Transparent,
-        ),
+        // The caller already recomputes its formatted text on every change, so
+        // the bubble rides the drag with the same string the row shows.
+        label = { valueText },
         // A remote has no drag, so the slider takes the D-pad: left/right step
         // it by one of its OWN steps (the same number the thumb snaps to), and
         // the change is finished on every press so the setting is really

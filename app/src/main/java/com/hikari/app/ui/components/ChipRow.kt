@@ -7,6 +7,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -24,6 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -32,6 +34,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.hikari.app.ui.effects.cardPress
 import com.hikari.app.ui.theme.HikariMotion
 import com.hikari.app.ui.theme.HikariRadii
 import com.hikari.app.ui.theme.HikariSpacing
@@ -81,7 +84,9 @@ fun HikariChip(
         animationSpec = spec,
         label = "hikariChipForeground",
     )
-    val shape = RoundedCornerShape(HikariRadii.chip)
+    val shape = RoundedCornerShape(HikariRadii.pill)
+    val interactions = remember { MutableInteractionSource() }
+    val indication = androidx.compose.foundation.LocalIndication.current
 
     Row(
         modifier = modifier
@@ -93,7 +98,14 @@ fun HikariChip(
                 color = if (selected) Color.Transparent else MaterialTheme.colorScheme.outline.copy(alpha = 0.22f),
                 shape = shape,
             )
-            .clickable(enabled = enabled, role = Role.Tab, onClick = onClick)
+            .then(if (enabled) Modifier.cardPress(interactions, pressedScale = 0.96f) else Modifier)
+            .clickable(
+                interactionSource = interactions,
+                indication = indication,
+                enabled = enabled,
+                role = Role.Tab,
+                onClick = onClick,
+            )
             .padding(horizontal = HikariSpacing.m, vertical = HikariSpacing.xs + 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
