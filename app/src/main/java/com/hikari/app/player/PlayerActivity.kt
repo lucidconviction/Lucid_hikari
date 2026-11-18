@@ -18213,6 +18213,29 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
         // little weight behind the title and the status line.
         loadingScrim?.alpha = if (artShown) 1f else 0.35f
 
+        // The player's stream-discovery cover is deliberately a flat black
+        // screen: no backdrop, scrim, poster, glow, aura ring, sheen or frame.
+        // The title, episode line and status stay, so it still reads as
+        // "working" rather than a dead app.
+        backdropVisible = false
+        artShown = false
+        banner.setBackgroundColor(android.graphics.Color.BLACK)
+        loadingBackdrop?.apply {
+            setImageDrawable(null)
+            visibility = View.GONE
+            scaleX = 1f
+            scaleY = 1f
+        }
+        loadingScrim?.visibility = View.GONE
+        loadingGlow?.visibility = View.GONE
+        loadingCardPoster?.apply {
+            setImageDrawable(null)
+            visibility = View.GONE
+        }
+        loadingEffectRing?.visibility = View.GONE
+        loadingEffectSheen?.visibility = View.GONE
+        loadingEffectFrame?.visibility = View.GONE
+
         stopBannerAnimators()
         // The name breathes in and out, exactly like Nuvio/Stremio's title card.
         // MINIMAL (the quietest style) deliberately does not move at all.

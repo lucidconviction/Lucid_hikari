@@ -1,3 +1,11 @@
+## 0.13.5
+
+**18 November 2026**
+
+### A black stream-discovery screen
+
+- **The player’s loading / stream-discovery cover is now a flat black screen.** The backdrop, scrim, poster card, glow, aura ring, sheen and frame are gone; the title, episode line and status text stay readable so it still looks like work in progress rather than a dead app.
+
 ## 0.13.4
 
 **17 November 2026**
