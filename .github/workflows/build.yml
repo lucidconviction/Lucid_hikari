@@ -86,6 +86,12 @@ jobs:
       - name: Build APKs (debug + release)
         env:
           GIT_SHA: ${{ github.sha }}
+          # R8 on the release APK needs more than the default 4 GB. GitHub's
+          # standard runner has 16 GB, and the build runs with --no-daemon, so
+          # this is the heap the shrinker actually gets — the 0.15.0 run died
+          # with "OutOfMemoryError: Java heap space" inside R8 after ten
+          # minutes otherwise.
+          GRADLE_OPTS: "-Xmx6144m -XX:MaxMetaspaceSize=1536m"
           SIGNING_STORE_PATH: ${{ env.SIGNING_STORE_PATH }}
           SIGNING_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.ALIAS }}
