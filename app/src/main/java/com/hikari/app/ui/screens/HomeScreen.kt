@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Favorite
@@ -122,6 +123,7 @@ import com.hikari.app.data.Collection
 import com.hikari.app.data.CollectionFolder
 import com.hikari.app.data.ContentRepository
 import com.hikari.app.data.CoverKinds
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import com.hikari.app.data.MediaItem
 import com.hikari.app.data.MediaType
@@ -152,6 +154,7 @@ import com.hikari.app.ui.ProviderFlags
 import com.hikari.app.ui.ProviderPacks
 import com.hikari.app.ui.rememberVisibleItems
 import com.hikari.app.ui.components.ContinueWatchingRow
+import com.hikari.app.ui.components.HikariSectionHeader
 import com.hikari.app.ui.components.EmptyState
 import com.hikari.app.ui.components.GlassDialog
 import com.hikari.app.ui.components.GlassSearchField
@@ -1203,6 +1206,18 @@ fun HomeScreen(nav: NavHostController) {
                         maxEntries = 6,
                     )
                 }
+            }
+            // Streaming services: one tile per installed extension/addon,
+            // directly under Continue Watching and always present (the VyseTV
+            // row). It is the shortest path from "open Hikari" to "that site",
+            // which the header chip's dropdown cannot be on a phone.
+            item(key = "streaming-services") {
+                StreamingServicesRow(
+                    providers = activeProviders,
+                    selected = selected,
+                    onPick = { id -> vm.selectProvider(if (selected == id) null else id) },
+                    onAdd = { Routes.navigateTab(nav, Routes.EXTENSIONS) },
+                )
             }
             // Genres sit after Resume, not between the hero and the first
             // shelf: a viewer with something in progress wants that first, and
@@ -4306,6 +4321,141 @@ private fun DonationBanner(onDonate: () -> Unit) {
                         color = accent,
                         maxLines = 1,
                     )
+                }
+            }
+        }
+    }
+}
+
+
+/**
+ * "Streaming services" — the VyseTV row, with the app's extensions in place of
+ * its TMDB platforms.
+ *
+ * One tile per installed extension (a multi-source extension is ONE tile, via
+ * [ProviderPacks.rows]), so the row reads as a list of services rather than a
+ * list of internal source ids. Tapping a tile narrows Home to that provider;
+ * tapping the selected tile returns to All. It is deliberately never hidden:
+ * with nothing installed it becomes the "add extensions" entry point, which is
+ * exactly when a new user needs it.
+ */
+@Composable
+private fun StreamingServicesRow(
+    providers: List<ContentProvider>,
+    selected: String?,
+    onPick: (String) -> Unit,
+    onAdd: () -> Unit,
+) {
+    val packs = remember(providers) { ProviderPacks.rows(providers) }
+    val tv = TvMode.current()
+    val tile = if (tv) 96.dp else 72.dp
+
+    Column(Modifier.padding(top = if (tv) 20.dp else 16.dp)) {
+        HikariSectionHeader(
+            title = tr("Streaming services"),
+            subtitle = if (packs.isEmpty()) null
+            else if (packs.size == 1) tr("1 extension") else packs.size.toString() + " " + tr("extensions"),
+        )
+        if (packs.isEmpty()) {
+            Row(
+                Modifier
+                    .padding(horizontal = 16.dp)
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                    .border(
+                        1.dp,
+                        MaterialTheme.colorScheme.outline.copy(alpha = 0.18f),
+                        RoundedCornerShape(16.dp),
+                    )
+                    .clickable(onClick = onAdd)
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Filled.Extension,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.width(12.dp))
+                Column {
+                    Text(
+                        tr("Add extensions"),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        tr("Your installed addons appear here, one tile each"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            return@Column
+        }
+
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            items(packs, key = { it.key }) { pack ->
+                val id = pack.primary.config.id
+                val isOn = selected == id
+                Column(
+                    Modifier
+                        .width(tile + 16.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .clickable { onPick(id) }
+                        .padding(vertical = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Box(
+                        Modifier
+                            .size(tile)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .border(
+                                width = if (isOn) 2.dp else 1.dp,
+                                color = if (isOn) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.outline.copy(alpha = 0.18f),
+                                shape = RoundedCornerShape(18.dp),
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        val icon = pack.primary.config.iconUrl
+                        if (!icon.isNullOrBlank()) {
+                            AsyncImage(
+                                model = icon,
+                                contentDescription = pack.label,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        } else {
+                            Text(
+                                pack.label.take(1).uppercase(),
+                                style = MaterialTheme.typography.headlineMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        pack.label,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (isOn) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
+                    )
+                    if (pack.isPack) {
+                        Text(
+                            pack.members.size.toString() + " " + tr("sources"),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                        )
+                    }
                 }
             }
         }
