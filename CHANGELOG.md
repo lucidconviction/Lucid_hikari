@@ -1,3 +1,17 @@
+## 0.14.0
+
+**18 November 2026**
+
+### Safer episode switches, default tracks, and Live TV number tuning
+
+- **Episode switches cannot replay the previous episode’s link.** When the new episode returns the same server list, Hikari forces the chooser and explains why instead of auto-playing a stale URL.
+- **The in-player server chooser keeps working when you tap the row that is already playing.** It now says “Already playing this server” and keeps the list open instead of closing as a no-op; the selected row is also correct across episode changes.
+- **Poster slots never fall back to a backdrop**: a placeholder is shown until real poster art exists.
+- **Home keeps your provider pick while the install list is still loading**, instead of resetting to All on a partial first emission.
+- **Default tracks**: Settings → Playback & Servers → Default tracks lets you choose a starting video height and audio language. Auto leaves the stream adaptive; a manual pick in the player still wins.
+- **Live TV number tuning**: type a channel number and it tunes after a moment (or OK); 0 returns to the previous channel. This only applies to IPTV playback.
+- Dependency upgrades are deliberately not part of this release; they remain separate, tested changes.
+
 ## 0.13.5
 
 **18 November 2026**

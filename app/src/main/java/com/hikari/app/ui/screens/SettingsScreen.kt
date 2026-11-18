@@ -5589,40 +5589,19 @@ private fun DefaultTracksCard(app: HikariApp) {
         title = tr("Default tracks"),
         summary = qualityLabel + " \u00B7 " + audioLabel,
     ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clickable { qualityOpen = true }
-                .padding(vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(tr("Video quality"), style = MaterialTheme.typography.bodyMedium)
-                Text(
-                    tr("The starting rendition; Auto follows the stream"),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Text(qualityLabel, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
-        }
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clickable { audioOpen = true }
-                .padding(vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(tr("Audio language"), style = MaterialTheme.typography.bodyMedium)
-                Text(
-                    tr("Prefer this language when the stream carries it"),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Text(audioLabel, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
-        }
+        ChoiceRow(
+            value = qualityLabel,
+            supporting = tr("Video quality \u2014 the starting rendition; Auto follows the stream"),
+            leadingIcon = Icons.Filled.Tune,
+            onClick = { qualityOpen = true },
+        )
+        Spacer(Modifier.height(10.dp))
+        ChoiceRow(
+            value = audioLabel,
+            supporting = tr("Audio language \u2014 prefer this language when the stream carries it"),
+            leadingIcon = Icons.Filled.Tune,
+            onClick = { audioOpen = true },
+        )
     }
 
     if (qualityOpen) {
