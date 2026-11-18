@@ -46,8 +46,10 @@ jobs:
     runs-on: ubuntu-latest
     # A build that stalls (a Maven download that never lands) used to sit on
     # the runner for half an hour with no output. The per-attempt timeout in
-    # the build step handles the common case; this is the backstop.
-    timeout-minutes: 60
+    # the build step handles the common case; this is the backstop. The release
+    # R8/lint pass can take over an hour on a slow runner, and a release build
+    # opts out of the debug APK, so give both enough room.
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
 
@@ -105,9 +107,16 @@ jobs:
           # errors were in gradle-build.log, and the step never printed them.
           set +e
           code=1
+          # A main release only ships the signed release APKs. Building the
+          # debug APK as well doubles the Kotlin work and was what pushed a
+          # release run past the old 60-minute job cap.
+          TASKS="assembleDebug assembleRelease"
+          if [ "${{ github.event.inputs.release }}" = "true" ]; then
+            TASKS="assembleRelease"
+          fi
           for attempt in 1 2 3 4 5; do
-            echo "==== Gradle build attempt $attempt/5 ===="
-            timeout 1500 gradle assembleDebug assembleRelease --no-daemon --stacktrace \
+            echo "==== Gradle build attempt $attempt/5 ($TASKS) ===="
+            timeout 5400 gradle $TASKS --no-daemon --stacktrace \
               -Dorg.gradle.internal.http.connectionTimeout=30000 \
               -Dorg.gradle.internal.http.socketTimeout=60000 > gradle-build.log 2>&1
             code=$?
