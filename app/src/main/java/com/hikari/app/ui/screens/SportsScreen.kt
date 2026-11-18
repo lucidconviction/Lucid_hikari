@@ -60,6 +60,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -206,43 +207,71 @@ fun SportsScreen(nav: androidx.navigation.NavHostController) {
 
     Column(modifier = Modifier.fillMaxSize()) {
         // ---- header
+        //
+        // The hub now opens the way My Stuff does: pill buttons directly under
+        // the status bar, no page headline competing with them. The pills are
+        // the same shape, height and colours as My Stuff's section buttons, so
+        // moving between the two pages does not look like moving between two
+        // apps.
+        //
+        // Six sections do not fit one phone row at a readable size, so they are
+        // a 2x3 grid of equal pills rather than a scrolling strip: a strip that
+        // ends mid-pill ("L…" beside the pinned refresh) reads as a rendering
+        // fault, and a label cut in half is worse than a second row.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 16.dp, end = 8.dp, top = 8.dp),
+                .padding(start = 16.dp, end = 8.dp, top = 6.dp),
+            horizontalArrangement = Arrangement.End,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Sports", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
             if (loading || matching) {
-                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.width(8.dp))
+                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(6.dp))
             }
-            IconButton(onClick = {
-                SportsRepository.refreshNow()
-                SportsRepository.ensureChannels(context, force = true)
-                scope.launch { SportsAddons.load(providers, force = true) }
-            }) {
-                Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
+            IconButton(
+                onClick = {
+                    SportsRepository.refreshNow()
+                    SportsRepository.ensureChannels(context, force = true)
+                    scope.launch { SportsAddons.load(providers, force = true) }
+                },
+                modifier = Modifier.size(32.dp),
+            ) {
+                Icon(
+                    Icons.Filled.Refresh,
+                    contentDescription = "Refresh",
+                    modifier = Modifier.size(18.dp),
+                )
             }
-            IconButton(onClick = { showSettings = true }) {
-                Icon(Icons.Filled.Tune, contentDescription = "Sports settings")
-            }
-        }
-        ScrollableTabRow(
-            selectedTabIndex = tab,
-            containerColor = Color.Transparent,
-            edgePadding = 12.dp,
-            divider = {},
-        ) {
-            SportsTab.entries.forEachIndexed { index, t ->
-                Tab(
-                    selected = tab == index,
-                    onClick = { tab = index },
-                    text = { Text(t.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    icon = { Icon(t.icon, contentDescription = null) },
+            IconButton(onClick = { showSettings = true }, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    Icons.Filled.Tune,
+                    contentDescription = "Sports settings",
+                    modifier = Modifier.size(18.dp),
                 )
             }
         }
+        SportsTab.entries.chunked(3).forEach { row ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                row.forEach { t ->
+                    val index = SportsTab.entries.indexOf(t)
+                    SportsTabPill(
+                        tab = t,
+                        selected = tab == index,
+                        modifier = Modifier.weight(1f),
+                    ) { tab = index }
+                }
+                // A short final row keeps the same cell width as the full ones
+                // instead of letting two pills stretch to phone width.
+                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+        Spacer(Modifier.height(2.dp))
         problem?.let {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
@@ -326,6 +355,52 @@ fun SportsScreen(nav: androidx.navigation.NavHostController) {
             onDismiss = { showSettings = false },
             onUpdate = { block -> scope.launch { SportsRepository.updateSettings(block) } },
         )
+    }
+}
+
+/**
+ * One section button of the Sports strip, in My Stuff's language: a 38dp
+ * capsule, the accent fill when selected, the icon and the label side by side.
+ *
+ * (My Stuff's strip divides the width equally because it has four buttons;
+ * Sports has six, so this one scrolls at its natural size instead of shrinking
+ * labels past readability.)
+ */
+@Composable
+private fun SportsTabPill(
+    tab: SportsTab,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val fg = if (selected) MaterialTheme.colorScheme.onPrimary
+    else MaterialTheme.colorScheme.onSurfaceVariant
+    Surface(
+        onClick = onClick,
+        modifier = modifier.height(38.dp),
+        shape = RoundedCornerShape(50),
+        color = if (selected) MaterialTheme.colorScheme.primary
+        else MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 6.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(tab.icon, contentDescription = null, tint = fg, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(
+                tab.title,
+                // labelMedium, not labelLarge: three pills share the phone's
+                // width, and "All Events" must not need an ellipsis.
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                color = fg,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Clip,
+            )
+        }
     }
 }
 
