@@ -1,6 +1,8 @@
 package com.hikari.app.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -40,6 +42,13 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.hikari.app.HikariApp
 import com.hikari.app.data.TrackerKind
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
+import com.hikari.app.data.MediaType
+import com.hikari.app.data.TrackerCalendarRepository
 import com.hikari.app.data.TrackerLibraryRepository
 import com.hikari.app.i18n.tr
 import com.hikari.app.ui.components.GlassCard
@@ -82,6 +91,7 @@ fun TrackerMyStuffScreen(nav: NavHostController, embedded: Boolean = false) {
         mutableStateOf<Map<String, List<TrackerLibraryRepository.Shelf>>>(emptyMap())
     }
     var errors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var calendar by remember { mutableStateOf<List<TrackerCalendarRepository.Entry>>(emptyList()) }
 
     // Keyed on the connected identities, not on the list instance: the flow
     // re-emits the same accounts on unrelated writes, and reloading ten HTTP
@@ -108,6 +118,31 @@ fun TrackerMyStuffScreen(nav: NavHostController, embedded: Boolean = false) {
         shelves = loaded
         errors = failed
         loading = false
+        calendar = runCatching { TrackerCalendarRepository.load(app) }
+            .getOrDefault(emptyList())
+    }
+
+    val openItem: (com.hikari.app.data.MediaItem) -> Unit = { item ->
+        if (item.rawType == "manga") {
+            Routes.safeNavigate(nav, Routes.mangaSearch(item.title))
+        } else {
+            Routes.safeNavigate(
+                nav,
+                Routes.detail(
+                    providerId = item.providerId,
+                    type = item.type,
+                    mediaId = item.id,
+                    title = item.title,
+                    posterUrl = item.posterUrl,
+                    rawType = item.rawType,
+                ),
+            )
+        }
+    }
+    val series = remember(shelves) {
+        shelves.values.flatten().flatMap { it.items }
+            .filter { it.type == MediaType.SERIES }
+            .distinctBy { it.uniqueId }
     }
 
     LazyColumn(
@@ -149,6 +184,43 @@ fun TrackerMyStuffScreen(nav: NavHostController, embedded: Boolean = false) {
                         )
                     }
                 }
+            }
+        }
+
+        if (calendar.isNotEmpty()) {
+            item(key = "calendar-header") {
+                Text(
+                    tr("Upcoming"),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            calendar.groupBy { it.day }.forEach { (day, entries) ->
+                item(key = "calendar-day-" + day) {
+                    Text(
+                        day,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+                entries.forEach { entry ->
+                    item(key = "calendar-" + entry.atMillis + "-" + entry.title) {
+                        TrackerCalendarRow(entry) {
+                            entry.item?.let(openItem)
+                        }
+                    }
+                }
+            }
+        }
+
+        if (series.isNotEmpty()) {
+            item(key = "tracker-series") {
+                TrackerShelfRow(
+                    title = tr("Series"),
+                    items = series,
+                    onOpen = openItem,
+                )
             }
         }
 
@@ -294,6 +366,68 @@ private fun TrackerSectionHeader(
                 style = MaterialTheme.typography.labelSmall,
                 color = if (error != null) MaterialTheme.colorScheme.error
                 else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun TrackerCalendarRow(
+    entry: TrackerCalendarRepository.Entry,
+    onClick: () -> Unit,
+) {
+    val clickable = entry.item != null
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .then(if (clickable) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .size(width = 38.dp, height = 54.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            val poster = entry.poster
+            if (!poster.isNullOrBlank()) {
+                AsyncImage(
+                    model = poster,
+                    contentDescription = entry.title,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+        Spacer(Modifier.size(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                entry.title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                entry.subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Column(horizontalAlignment = Alignment.End) {
+            Text(
+                entry.time,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                entry.tracker,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
