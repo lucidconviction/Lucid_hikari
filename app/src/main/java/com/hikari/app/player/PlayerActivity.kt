@@ -766,6 +766,29 @@ class PlayerActivity : ComponentActivity() {
      *  then treated a tap on that row as a no-op, closing the chooser without
      *  playing anything. */
     private var playbackCommitted = false
+    /** The server and episode playback was actually committed to. Lets a tap
+     *  on an already-playing row explain itself instead of closing the chooser
+     *  as a no-op. */
+    private var committedServerKey = ""
+    private var committedEpisodeKey = ""
+
+    private fun committedKeyFor(ep: Episode?): String =
+        (ep?.id?.takeIf { it.isNotBlank() } ?: "") + "|" + (ep?.season ?: 0) + "|" + (ep?.number ?: 0)
+
+    private fun shouldPlayTap(i: Int): Boolean {
+        if (!playbackCommitted) return true
+        val src = sources.getOrNull(i) ?: return false
+        if (committedServerKey.isNotBlank() && src.identityKey() != committedServerKey) return true
+        return committedKeyFor(liveEpisode) != committedEpisodeKey
+    }
+
+    private fun isSelectedRow(i: Int): Boolean {
+        if (!playbackCommitted || i != currentIndex) return false
+        val src = sources.getOrNull(i) ?: return false
+        if (committedServerKey.isNotBlank() && src.identityKey() != committedServerKey) return false
+        if (committedEpisodeKey.isNotBlank() && committedKeyFor(liveEpisode) != committedEpisodeKey) return false
+        return true
+    }
 
     /**
      * What the loading cover says while playback is COMMITTED — a server has
@@ -5918,6 +5941,11 @@ class PlayerActivity : ComponentActivity() {
     /** In-player episode switches, newest wins: a slow search for an earlier
      *  pick must never overwrite a later one (see [switchToEpisode]). */
     private var episodeSwitchGen = 0
+    /** Every URL the episode we just left could play, so an identical list on
+     *  the next episode cannot auto-play the previous episode's link. */
+    private var lastEpisodeUrls: Set<String> = emptySet()
+    /** Shown above the episode chooser when the new list is the old list. */
+    private var sameLinksNote: String? = null
     /** The next episode's origin servers, fetched while the current one is
      *  still playing. Signed URLs rotate, so entries age out quickly. */
     private data class EpisodePrefetch(val episodeId: String, val at: Long, val streams: List<StreamSource>)
@@ -9043,6 +9071,12 @@ class PlayerActivity : ComponentActivity() {
         startAtMs: Long = 0L,
     ) {
         if (playerSources.isEmpty()) return
+        // The previous episode's server is no longer the committed one: until
+        // this list is picked from, no row may look "now playing".
+        playbackCommitted = false
+        committedServerKey = ""
+        committedEpisodeKey = ""
+        pickedByUser = false
         // Same as the detail page's search: the server names are the only
         // quality data the app gets, and the poster's quality badge reads it
         // back (see [com.hikari.app.data.TitleQuality]).
@@ -9072,7 +9106,26 @@ class PlayerActivity : ComponentActivity() {
         // row (same provider + same name, else the same URL), it starts at
         // once instead of dropping to an unrelated mirror.
         val prev = sources.getOrNull(currentIndex)
+        val oldUrlSet = sources.map { it.url }.toSet()
+        val newUrlSet = playerSources.map { it.url }.toSet()
+        val sameLinks = newUrlSet.isNotEmpty() && (
+            (newUrlSet - oldUrlSet).isEmpty() ||
+                (lastEpisodeUrls.isNotEmpty() && (newUrlSet - lastEpisodeUrls).isEmpty())
+            )
+        sameLinksNote = if (sameLinks) {
+            "Same links as the previous episode \u2014 pick a server, or try All extensions."
+        } else {
+            null
+        }
+        if (sameLinks) {
+            com.hikari.app.data.Logs.log(
+                "Player",
+                "same links as previous episode for S${ep.season}E${ep.number} " +
+                    "(${playerSources.size} server(s)) \u2014 forcing chooser, not auto-playing",
+            )
+        }
         sources = playerSources
+        lastEpisodeUrls = oldUrlSet
         notifySourcesChanged()
         currentIndex = prev?.let { p ->
             val key = p.identityKey().takeIf { it.isNotBlank() && it != "u" }
@@ -9089,7 +9142,7 @@ class PlayerActivity : ComponentActivity() {
         // "Don't play directly" applies to an in-player episode switch too:
         // this is a brand-new server list, so it gets its own chooser
         // instead of auto-starting on the first server.
-        if (fromAutoplay || !shouldAskServer()) {
+        if (!sameLinks && (fromAutoplay || !shouldAskServer())) {
             playSource(currentIndex)
         } else {
             startChooserShown = false
@@ -10022,7 +10075,7 @@ class PlayerActivity : ComponentActivity() {
             },
         // Only mark a row as current once playback has actually been committed
         // to a server — see [playbackCommitted].
-        selected = playbackCommitted && index == currentIndex,
+        selected = isSelectedRow(index),
         // Server names run long ("Provider (Repo) · Plugin · 1080p") and they are
         // what the user is choosing between, so the row's capsule fits TWO lines
         // of it instead of cutting the name off — the box grows with the name.
@@ -10276,7 +10329,7 @@ class PlayerActivity : ComponentActivity() {
         // the selected one, so a selection change rebuilds two rows instead of
         // repainting stale rings (or tearing the list down).
         fun rowKey(i: Int): String =
-            itemKey(i) + "\u0002" + (if (playbackCommitted && i == currentIndex) "1" else "0")
+            itemKey(i) + "\u0002" + (if (isSelectedRow(i)) "1" else "0")
 
         // What the list holds right now (headings + rows, in order) and the
         // selection those rows were drawn with.
@@ -10389,19 +10442,32 @@ class PlayerActivity : ComponentActivity() {
                     val src = sources[i]
                     val v = serverRefRow(
                         src = src,
-                        selected = playbackCommitted && i == currentIndex,
+                        selected = isSelectedRow(i),
                         onPlay = {
-                            startChoicePending = false
-                            serverPickActed = true
-                            dialog.dismiss()
                             if (forDownload) {
+                                startChoicePending = false
+                                serverPickActed = true
                                 currentIndex = i
                                 pickedByUser = true
+                                dialog.dismiss()
                                 showDownloadDialog()
-                            } else if (i != currentIndex || !playbackCommitted) {
+                            } else if (shouldPlayTap(i)) {
+                                startChoicePending = false
+                                serverPickActed = true
                                 noSubsRetry = false
+                                com.hikari.app.data.Logs.log(
+                                    "Player",
+                                    "chooser tap server ${i + 1}/${sources.size} \"${sources.getOrNull(i)?.name ?: "?"}\"",
+                                )
+                                dialog.dismiss()
                                 playSource(i)
                                 pickedByUser = true
+                            } else {
+                                android.widget.Toast.makeText(
+                                    this@PlayerActivity,
+                                    I18n.t("Already playing this server."),
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
                             }
                         },
                         onDownload = {
@@ -10698,7 +10764,7 @@ class PlayerActivity : ComponentActivity() {
             var contentHash = 0
             for (s in sources) contentHash = contentHash * 31 + s.identityKey().hashCode()
             val paintSig = sources.size.toString() + "|" + contentHash + "|" + chip + "|" +
-                currentIndex + "|" + playbackCommitted
+                currentIndex + "|" + playbackCommitted + "|" + committedServerKey + "|" + committedEpisodeKey
             if (paintSig == lastPaintSig && builtSig.isNotEmpty() && list.childCount > 0) return
             lastPaintSig = paintSig
             rebuildList()
@@ -10912,6 +10978,8 @@ class PlayerActivity : ComponentActivity() {
             val who = originProviderName.takeIf { it.isNotBlank() }
             if (who != null) "Searching $who \u2014 servers appear as they are found."
             else "Searching your providers \u2014 servers appear as they are found."
+        } else if (!playbackCommitted && !sameLinksNote.isNullOrBlank()) {
+            sameLinksNote!!
         } else if (playbackCommitted) {
             // Re-opened mid-playback (the Source pill, or "Choose another
             // server" after a failure): this is a CONTINUATION of the list the
@@ -13883,6 +13951,8 @@ class PlayerActivity : ComponentActivity() {
         // From here on the chooser may show this row as the current one.
         playbackCommitted = true
         val src = sources[index]
+        committedServerKey = src.identityKey()
+        committedEpisodeKey = committedKeyFor(liveEpisode)
         // Persisting here would remember a source that has NOT proven itself —
         // a signed link that turns out to be expired, or a URL/host whose right
         // header set we haven't found yet, would then be "the last working

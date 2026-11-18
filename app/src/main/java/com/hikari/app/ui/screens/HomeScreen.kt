@@ -238,6 +238,12 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {    private val m
     }
 
     private var loadJob: kotlinx.coroutines.Job? = null
+    /** The installed list streams in piece by piece at launch. A pick missing
+     *  from one early emission is not proof it is gone — wiping the store
+     *  there reset Home to All on every reopen. Commit a drop only when the
+     *  miss repeats, or once boot has settled. */
+    private val bootAtMs = android.os.SystemClock.elapsedRealtime()
+    private var lastMissingPick: Set<String> = emptySet()
 
     /** The collection the current feed was built from — lets the collections
      *  store (edited in Settings) invalidate exactly the affected feed. */
@@ -329,8 +335,22 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {    private val m
                         isCollectionKey(key) || ps.any { it.config.enabled && it.config.id == key }
                     }
                     if (valid != sel) {
-                        applySelection(valid)
-                        viewModelScope.launch { store.setHomeProviders(valid.toSet()) }
+                        val nowMs = android.os.SystemClock.elapsedRealtime()
+                        val missing = sel - valid
+                        val repeated = missing.isNotEmpty() && missing.all { it in lastMissingPick }
+                        lastMissingPick = missing.toSet()
+                        if (repeated || nowMs - bootAtMs > 20_000L) {
+                            com.hikari.app.data.Logs.log(
+                                "Home",
+                                "dropping pick(s) no longer installed: " +
+                                    missing.joinToString(","),
+                            )
+                            applySelection(valid)
+                            viewModelScope.launch { store.setHomeProviders(valid.toSet()) }
+                            lastMissingPick = emptySet()
+                        }
+                    } else {
+                        lastMissingPick = emptySet()
                     }
                 }
                 loadInternal()

@@ -7941,13 +7941,29 @@ private fun Hero(
                     .background(MaterialTheme.colorScheme.background.copy(alpha = 0.42f))
             )
             PosterArt(
-                model = posterModel ?: image.first,
+                model = posterModel,
                 contentDescription = meta?.title,
                 style = rememberPosterStyle(),
                 modifier = Modifier
                     .fillMaxHeight(0.86f)
                     .aspectRatio(2f / 3f),
             )
+            if (posterModel == null) {
+                Box(
+                    Modifier
+                        .fillMaxHeight(0.86f)
+                        .aspectRatio(2f / 3f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        meta?.title?.take(1)?.uppercase().orEmpty(),
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             IconButton(onClick = onBack, modifier = Modifier.align(Alignment.TopStart).padding(4.dp)) {
                 Icon(
                     Icons.AutoMirrored.Filled.ArrowBack,
@@ -7990,16 +8006,35 @@ private fun Hero(
             )
             // The poster stands at the left, inset from the band's top and bottom
             // so the pair reads as "the artwork, and the poster you know".
-            PosterArt(
-                model = posterModel ?: image.first,
-                contentDescription = null,
-                style = rememberPosterStyle(),
-                modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .padding(start = 16.dp)
-                    .fillMaxHeight(0.78f)
-                    .aspectRatio(2f / 3f),
-            )
+            if (posterModel != null) {
+                PosterArt(
+                    model = posterModel,
+                    contentDescription = null,
+                    style = rememberPosterStyle(),
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(start = 16.dp)
+                        .fillMaxHeight(0.78f)
+                        .aspectRatio(2f / 3f),
+                )
+            } else {
+                Box(
+                    Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(start = 16.dp)
+                        .fillMaxHeight(0.78f)
+                        .aspectRatio(2f / 3f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        meta?.title?.take(1)?.uppercase().orEmpty(),
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             IconButton(onClick = onBack, modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)) {
                 Icon(
                     Icons.AutoMirrored.Filled.ArrowBack,
