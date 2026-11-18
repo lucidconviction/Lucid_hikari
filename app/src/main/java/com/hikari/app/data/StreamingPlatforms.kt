@@ -30,7 +30,7 @@ object StreamingPlatforms {
     private val FEATURED_IDS = listOf(
         8, 337, 9, 1899, 15, 350, 2303, 283, 386, 43, 34, 526, 520, 1768, 73, 300,
         207, 538, 257, 2383, 299, 457, 430, 99, 151, 87, 258, 11, 191, 212, 192,
-        188, 2, 10, 3, 7,
+        3, 7,
     )
 
     /** Offline / first-launch names, in [FEATURED_IDS] order. */
@@ -40,9 +40,30 @@ object StreamingPlatforms {
         "Discovery+", "ESPN+", "Tubi", "Pluto TV", "Roku Channel", "Plex",
         "fuboTV", "Philo", "Sling TV", "ViX", "HiDive", "Shudder", "BritBox",
         "Acorn TV", "Criterion Channel", "MUBI", "Kanopy", "Hoopla", "YouTube",
-        "YouTube Premium", "Apple TV Store", "Amazon Video", "Google Play Movies",
-        "Fandango at Home",
+        "Google Play Movies", "Fandango at Home",
     )
+
+    @Volatile
+    private var cached: List<Platform>? = null
+    @Volatile
+    private var cachedAt: Long = 0L
+    private const val DAY_MS = 24L * 60L * 60L * 1000L
+
+    /**
+     * The catalogue as already known: memory, then disk, then the offline
+     * names. Home calls this for its FIRST frame, so returning to Home never
+     * shows a row that has to be fetched (or its artwork re-resolved) again.
+     */
+    fun cachedOrFallback(): List<Platform> {
+        cached?.let { return it }
+        val disk = loadDisk()
+        if (!disk.isNullOrEmpty()) {
+            cached = disk
+            cachedAt = System.currentTimeMillis()
+            return disk
+        }
+        return fallback()
+    }
 
     /** The row before the catalogue has loaded (and if TMDB cannot answer). */
     fun fallback(): List<Platform> =
@@ -57,7 +78,10 @@ object StreamingPlatforms {
      * are fetched and merged — the same thing VyseTV does. A service whose
      * logo is missing still appears: the row draws its initial.
      */
-    suspend fun catalogue(region: String = "US"): List<Platform> {
+    suspend fun catalogue(region: String = "US", force: Boolean = false): List<Platform> {
+        cached?.let {
+            if (!force && System.currentTimeMillis() - cachedAt < DAY_MS) return it
+        }
         val byId = HashMap<Int, Platform>()
         for (segment in listOf("movie", "tv")) {
             val data = runCatching {
@@ -73,8 +97,63 @@ object StreamingPlatforms {
                 byId.putIfAbsent(id, Platform(id, displayName(raw), logo))
             }
         }
+        // One tile per BRAND: TMDB keeps separate ids for variants of the same
+        // service ("Amazon Video" beside "Prime Video", "Apple TV Store" beside
+        // "Apple TV"), and a second Netflix-shaped tile for the same company
+        // reads as a duplicate.
+        val seen = HashSet<String>()
         val out = FEATURED_IDS.mapNotNull { byId[it] }
-        return out.ifEmpty { fallback() }
+            .filter { seen.add(brandKey(it.name)) }
+        val result = out.ifEmpty { fallback() }
+        cached = result
+        cachedAt = System.currentTimeMillis()
+        saveDisk(result)
+        return result
+    }
+
+    private fun brandKey(name: String): String = name
+        .lowercase()
+        .replace("premium", "")
+        .replace("store", "")
+        .replace("with ads", "")
+        .replace("amazon", "")
+        .replace("the ", "")
+        .replace(Regex("[^a-z0-9+]"), "")
+
+    private fun prefs() = runCatching {
+        (com.hikari.app.HikariApp.instance.getSharedPreferences("streaming_platforms", 0))
+    }.getOrNull()
+
+    private fun loadDisk(): List<Platform>? {
+        val raw = prefs()?.getString("catalogue", null) ?: return null
+        return runCatching {
+            val arr = org.json.JSONArray(raw)
+            val out = ArrayList<Platform>(arr.length())
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val id = o.optInt("id", 0)
+                val name = o.optString("name")
+                if (id > 0 && name.isNotBlank()) {
+                    out += Platform(id, name, o.optString("logo").takeIf { it.isNotBlank() })
+                }
+            }
+            out.takeIf { it.isNotEmpty() }
+        }.getOrNull()
+    }
+
+    private fun saveDisk(list: List<Platform>) {
+        runCatching {
+            val arr = org.json.JSONArray()
+            for (p in list) {
+                arr.put(
+                    org.json.JSONObject()
+                        .put("id", p.id)
+                        .put("name", p.name)
+                        .put("logo", p.logoPath.orEmpty()),
+                )
+            }
+            prefs()?.edit()?.putString("catalogue", arr.toString())?.apply()
+        }
     }
 
     /** TMDB's catalogue names, shortened to what a tile can show. */

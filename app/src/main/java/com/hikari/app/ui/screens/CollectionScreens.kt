@@ -45,6 +45,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -4963,6 +4964,9 @@ fun TmdbGridScreen(
         PageHeader(
             title = name,
             subtitle = when {
+                // A platform catalogue is headed by the service itself, so the
+                // caption is just the kind of title ("Netflix / Movies & series").
+                spec != null && spec.providers.isNotBlank() -> TmdbSources.detail(spec)
                 spec != null -> "TMDB · " + TmdbSources.detail(spec)
                 preset != null -> "TMDB · " + preset.detail
                 else -> "TMDB"
@@ -5052,7 +5056,34 @@ fun TmdbGridScreen(
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = TvUi.gridMinFor(84)),
                 state = gridState,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    // Swipe left/right = next/previous kind chip. A short drag
+                    // (a tap, a shaky finger) is ignored so the filter cannot
+                    // change by accident.
+                    .pointerInput(kindKey) {
+                        var total = 0f
+                        val threshold = 72.dp.toPx()
+                        detectHorizontalDragGestures(
+                            onDragStart = { total = 0f },
+                            onDragEnd = {
+                                if (kotlin.math.abs(total) >= threshold) {
+                                    val index = KIND_CHIPS
+                                        .indexOfFirst { it.first == kindKey }
+                                        .coerceAtLeast(0)
+                                    val size = KIND_CHIPS.size
+                                    val next = if (total < 0) {
+                                        (index + 1) % size
+                                    } else {
+                                        (index - 1 + size) % size
+                                    }
+                                    kindKey = KIND_CHIPS[next].first
+                                }
+                                total = 0f
+                            },
+                            onDragCancel = { total = 0f },
+                        ) { _, amount -> total += amount }
+                    },
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),

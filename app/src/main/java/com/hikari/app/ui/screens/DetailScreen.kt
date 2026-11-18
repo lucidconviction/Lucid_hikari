@@ -2401,6 +2401,9 @@ fun DetailScreen(
     // is tapped; the dialog plays it in-app via an embedded iframe instead of
     // handing off to the YouTube app.
     var activeTrailerKey by remember { mutableStateOf<Pair<String, String>?>(null) }
+    // True while the SmartTube engine resolves the trailer; the tap used to
+    // leave the screen unchanged for seconds.
+    var trailerLoading by remember { mutableStateOf(false) }
 
     var playerLaunched by remember { mutableStateOf(false) }
     // Resets the once-only launch guard the moment the player activity returns
@@ -6955,6 +6958,8 @@ fun DetailScreen(
     // YouTube video instead of overwriting the title's resume position.
     activeTrailerKey?.let { (ytKey, ytTitle) ->
         LaunchedEffect(ytKey) {
+            trailerLoading = true
+            try {
             val source = YouTubePlayables.resolveWithEngine(ytKey).firstOrNull()
             if (source != null && !playerLaunched) {
                 playerLaunched = true
@@ -6977,7 +6982,25 @@ fun DetailScreen(
                     android.widget.Toast.LENGTH_SHORT,
                 ).show()
             }
-            activeTrailerKey = null
+            } finally {
+                trailerLoading = false
+                activeTrailerKey = null
+            }
+        }
+    }
+    if (trailerLoading) {
+        androidx.compose.ui.window.Dialog(onDismissRequest = {}) {
+            Row(
+                Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(horizontal = 20.dp, vertical = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(12.dp))
+                Text(tr("Loading trailer…"), style = MaterialTheme.typography.bodyMedium)
+            }
         }
     }
 }
