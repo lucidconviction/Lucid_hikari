@@ -8832,11 +8832,19 @@ private fun percentOf(value: String): Int =
 private fun RatingBadge(r: TitleRating, onClick: () -> Unit) {
     val tint = ratingTint(r)
     val shape = RoundedCornerShape(9.dp)
+    // Quiet surface, coloured MARK: five brand-coloured pills in a row turned
+    // the metadata block into the loudest thing on the page. The identity still
+    // reads from the wordmark/tomato, while the numbers sit in the same ink as
+    // the rest of the metadata.
     Row(
         modifier = Modifier
             .clip(shape)
-            .background(tint.copy(alpha = 0.16f))
-            .border(1.dp, tint.copy(alpha = 0.40f), shape)
+            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
+            .border(
+                1.dp,
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f),
+                shape,
+            )
             .clickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -8845,7 +8853,7 @@ private fun RatingBadge(r: TitleRating, onClick: () -> Unit) {
         RatingMark(r.source, tint)
         Text(
             r.value,
-            color = tint,
+            color = MaterialTheme.colorScheme.onSurface,
             fontSize = 12.5.sp,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
