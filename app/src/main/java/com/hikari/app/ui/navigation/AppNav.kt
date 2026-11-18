@@ -165,6 +165,8 @@ import com.hikari.app.tv.TvMode
 import com.hikari.app.tv.TvMouseCursorOverlay
 import com.hikari.app.tv.TvNavRail
 import com.hikari.app.tv.TvUi
+import com.hikari.app.ui.layout.DeviceClass
+import com.hikari.app.ui.layout.rememberLayoutTokens
 import androidx.compose.runtime.collectAsState
 
 object Routes {
@@ -1225,6 +1227,11 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
     // padded in from the screen edges (see TvUi), and the focus ring every
     // clickable inherits from MainActivity's TvFocusProvider.
     val isTv = TvMode.current()
+    // The three-way layout: phone (bottom bar), tablet (tall left rail) and
+    // television (the existing rail, unchanged). Read once here so the root,
+    // the content inset and every screen's nav decision agree.
+    val layout = rememberLayoutTokens()
+    val isTablet = layout.device == DeviceClass.TABLET
     // The gap kept clear of the screen's edges on a television ("overscan" —
     // see TvUi.DEFAULT_OVERSCAN_DP for why televisions need one at all).
     val overscanFlow = remember { app.store.tvOverscanFlow() }
@@ -1612,7 +1619,11 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
                         // reported band of empty screen beside the detail page on
                         // a television.
                         .then(
-                            if (isTv && showBar) Modifier.padding(start = TvUi.railWidth()) else Modifier
+                            if (showBar && layout.device.hasRail) {
+                                Modifier.padding(start = layout.navInset)
+                            } else {
+                                Modifier
+                            }
                         )
                 ) {
             composable(Routes.HOME) { HomeScreen(nav) }
@@ -1886,7 +1897,7 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
         // comment on the Scaffold). It is the last child of the Box, so it sits
         // on top of every screen, and it is transparent wherever the pill is not
         // — nothing around it is painted.
-        if (showBar && !isTv && (tabRoute != Routes.MULTI_VIEW || mvBarVisible)) {
+        if (showBar && !isTv && !isTablet && (tabRoute != Routes.MULTI_VIEW || mvBarVisible)) {
             AppBottomBar(
                 currentRoute = tabRoute,
                 hidden = visibleTabs,
@@ -1895,6 +1906,17 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
                 showLabels = showTabLabels,
                 onNavigate = { route -> Routes.navigateTab(nav, route) },
                 modifier = Modifier.align(Alignment.BottomCenter),
+            )
+        }
+        // A tablet gets a tall, labelled rail down the left edge. Same tabs and
+        // same hidden set as the taskbar, so the two layouts can never disagree
+        // about which pages exist (see TabletNavRail).
+        if (showBar && isTablet && (tabRoute != Routes.MULTI_VIEW || mvBarVisible)) {
+            com.hikari.app.ui.layout.TabletNavRail(
+                currentRoute = tabRoute,
+                hidden = visibleTabs,
+                onNavigate = { route -> Routes.navigateTab(nav, route) },
+                modifier = Modifier.align(Alignment.CenterStart),
             )
         }
         // On a television the tabs live in a rail down the left edge instead
