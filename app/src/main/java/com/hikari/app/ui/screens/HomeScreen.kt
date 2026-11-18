@@ -144,6 +144,7 @@ import com.hikari.app.tv.TvProviderCard
 import com.hikari.app.tv.TvProviderIcon
 import com.hikari.app.tv.TvSelectProviderDialog
 import com.hikari.app.tv.TvUi
+import com.hikari.app.ui.layout.rememberLayoutTokens
 import com.hikari.app.ui.Artwork
 import com.hikari.app.ui.FlagIcon
 import com.hikari.app.ui.PosterLoader
@@ -3996,7 +3997,7 @@ private fun HomeSearchOverlay(
                             }
                             LazyVerticalGrid(
                                 state = browseGridState,
-                                columns = GridCells.Adaptive(minSize = TvUi.gridMinFor(96)),
+                                columns = GridCells.Adaptive(minSize = rememberLayoutTokens().gridMin),
                                 modifier = Modifier.fillMaxSize(),
                                 contentPadding = PaddingValues(
                                     start = 10.dp,
@@ -4034,7 +4035,7 @@ private fun HomeSearchOverlay(
                     // give their own lists.
                     val unique = rememberVisibleItems(combinedResults)
                     LazyVerticalGrid(
-                        columns = GridCells.Adaptive(minSize = TvUi.gridMinFor(96)),
+                        columns = GridCells.Adaptive(minSize = rememberLayoutTokens().gridMin),
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(
                             start = 10.dp,

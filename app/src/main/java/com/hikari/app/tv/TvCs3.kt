@@ -96,10 +96,10 @@ object Cs3 {
     val Edge: Color = Color.White.copy(alpha = 0.14f)
 
     /** The corner language: 8dp cards/posters, 12dp buttons, 20dp panels. */
-    val CornerCard = 8.dp
-    val CornerButton = 12.dp
-    val CornerPanel = 20.dp
-    val CornerPill = 24.dp
+    val CornerCard = 12.dp
+    val CornerButton = 16.dp
+    val CornerPanel = 24.dp
+    val CornerPill = 28.dp
 
     /** 2:3 posters and 16:9 stills, same as the reference. */
     const val PosterAspect: Float = 2f / 3f

@@ -437,6 +437,18 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
+            // Motion & effects (Settings → Appearance & Theme). Blank follows
+            // the device default: Full on a touch device, Subtle on a
+            // television. Effects read this through LocalMotionLevel, so a
+            // change applies live without restarting playback or the app.
+            val motionLevelFlow = remember { store.motionLevelFlow() }
+            val motionLevelKey by motionLevelFlow.collectAsState(initial = "")
+            val motionLevel = if (motionLevelKey.isBlank()) {
+                com.hikari.app.ui.effects.MotionLevel.defaultFor(TvMode.isTv)
+            } else {
+                com.hikari.app.ui.effects.MotionLevel.fromKey(motionLevelKey)
+            }
+
             CompositionLocalProvider(
                 LocalConfiguration provides localizedConfig,
                 LocalLayoutDirection provides
@@ -445,6 +457,9 @@ class MainActivity : AppCompatActivity() {
                 // One switch, every explanation line in the app (Settings → App
                 // Layout → "Explanations") — see LocalHideHelp.
                 com.hikari.app.ui.components.LocalHideHelp provides hideHelp,
+                // Off / Subtle / Full, resolved against this device. Every
+                // effect in ui/effects reads it (see MotionLevel).
+                com.hikari.app.ui.effects.LocalMotionLevel provides motionLevel,
             ) {
             HikariTheme(
                 mode = themeMode,

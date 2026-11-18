@@ -52,9 +52,9 @@ object TvDesktop {
     val GlassEdge: Color = Color.White.copy(alpha = 0.14f)
 
     /** The 8dp corner language (cards, thumbs, chips). */
-    val CornerCard: Dp = 8.dp
-    val CornerLarge: Dp = 12.dp
-    val CornerPill: Dp = 24.dp
+    val CornerCard: Dp = 12.dp
+    val CornerLarge: Dp = 16.dp
+    val CornerPill: Dp = 28.dp
 
     /** The spacing scale. */
     val SpaceXS: Dp = 8.dp

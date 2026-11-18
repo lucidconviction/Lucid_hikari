@@ -61,19 +61,23 @@ fun rememberGlassTokens(): GlassTokens {
     return remember(dark) {
         if (dark) {
             GlassTokens(
-                fillTop = Color.White.copy(alpha = 0.11f),
-                fillBottom = Color.White.copy(alpha = 0.038f),
-                border = Color.White.copy(alpha = 0.14f),
+                // The refresh's rule: separate by fill and spacing, not by an
+                // outline. The hairline is still here (without it a translucent
+                // card on a near-black page turns into a muddy rectangle), but
+                // it whispers instead of drawing a box.
+                fillTop = Color.White.copy(alpha = 0.085f),
+                fillBottom = Color.White.copy(alpha = 0.028f),
+                border = Color.White.copy(alpha = 0.09f),
                 dark = true,
-                highlight = Color.White.copy(alpha = 0.22f),
+                highlight = Color.White.copy(alpha = 0.16f),
             )
         } else {
             GlassTokens(
                 fillTop = Color.White,
                 fillBottom = Color.White,
-                border = Color.Black.copy(alpha = 0.08f),
+                border = Color.Black.copy(alpha = 0.06f),
                 dark = false,
-                highlight = Color.Black.copy(alpha = 0.05f),
+                highlight = Color.Black.copy(alpha = 0.04f),
             )
         }
     }
@@ -94,8 +98,8 @@ fun Modifier.glassSheen(tokens: GlassTokens): Modifier =
         drawRect(
             brush = Brush.linearGradient(
                 colors = listOf(
-                    Color.White.copy(alpha = 0.085f),
-                    Color.White.copy(alpha = 0.018f),
+                    Color.White.copy(alpha = 0.05f),
+                    Color.White.copy(alpha = 0.008f),
                     Color.Transparent,
                 ),
                 start = Offset(0f, 0f),
@@ -103,7 +107,7 @@ fun Modifier.glassSheen(tokens: GlassTokens): Modifier =
             ),
         )
         drawLine(
-            color = tokens.highlight.copy(alpha = 0.55f),
+            color = tokens.highlight.copy(alpha = 0.40f),
             start = Offset(0f, 0.5f),
             end = Offset(size.width, 0.5f),
             strokeWidth = 1f,

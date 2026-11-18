@@ -36,8 +36,15 @@ object HikariSpacing {
     /** Above a major page block. */
     val xxl = 32.dp
 
+    /** The largest rhythm step: hero breathing room on a television. */
+    val xxxl = 48.dp
+
     /** Horizontal page padding: phone. Tablets/TV add their own inset. */
     val page = 16.dp
+
+    /** Horizontal page padding on a tablet — the wider gutter the left rail
+     *  leaves room for. */
+    val pageTablet = 32.dp
 }
 
 /**
@@ -59,4 +66,7 @@ object HikariRadii {
 
     /** Full dialogs. */
     val dialog = 22.dp
+
+    /** Pills: taskbar tabs, filter chips, the "View Details" button. */
+    val pill = 28.dp
 }

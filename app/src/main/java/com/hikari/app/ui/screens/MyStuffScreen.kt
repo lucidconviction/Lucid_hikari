@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -90,6 +91,7 @@ object MyStuff {
     const val LIBRARY = com.hikari.app.data.MyStuffSection.LIBRARY
     const val HISTORY = com.hikari.app.data.MyStuffSection.HISTORY
     const val DOWNLOADS = com.hikari.app.data.MyStuffSection.DOWNLOADS
+    const val TRACKERS = com.hikari.app.data.MyStuffSection.TRACKERS
 
     /** The sections, in the order the strip draws them. */
     val ALL = com.hikari.app.data.MyStuffSection.ALL
@@ -124,9 +126,11 @@ fun MyStuffScreen(nav: NavHostController, initial: String = MyStuff.LIBRARY) {
     val libraryFlow = remember { app.store.myStuffSectionFlow(MyStuff.LIBRARY) }
     val historyFlow = remember { app.store.myStuffSectionFlow(MyStuff.HISTORY) }
     val downloadsFlow = remember { app.store.myStuffSectionFlow(MyStuff.DOWNLOADS) }
+    val trackersFlow = remember { app.store.myStuffSectionFlow(MyStuff.TRACKERS) }
     val libraryOn by libraryFlow.collectAsState(initial = true)
     val historyOn by historyFlow.collectAsState(initial = true)
     val downloadsOn by downloadsFlow.collectAsState(initial = true)
+    val trackersOn by trackersFlow.collectAsState(initial = true)
     // ---- My Stuff lock ------------------------------------------------------
     //
     // The whole tab (library, history, downloads — every route renders this
@@ -150,6 +154,7 @@ fun MyStuffScreen(nav: NavHostController, initial: String = MyStuff.LIBRARY) {
         when (section) {
             MyStuff.HISTORY -> historyOn
             MyStuff.DOWNLOADS -> downloadsOn
+            MyStuff.TRACKERS -> trackersOn
             else -> libraryOn
         }
     }
@@ -256,6 +261,7 @@ private fun MyStuffPage(nav: NavHostController, name: String?) {
     when (name) {
         MyStuff.HISTORY -> HistoryScreen(nav, embedded = true)
         MyStuff.DOWNLOADS -> DownloadsScreen(nav, embedded = true)
+        MyStuff.TRACKERS -> TrackerMyStuffScreen(nav, embedded = true)
         else -> LibraryScreen(nav, embedded = true)
     }
 }
@@ -376,11 +382,13 @@ private fun MyStuffStrip(sections: List<String>, current: String, onPick: (Strin
                 label = when (section) {
                     MyStuff.HISTORY -> tr("History")
                     MyStuff.DOWNLOADS -> tr("Downloads")
+                    MyStuff.TRACKERS -> tr("Trackers")
                     else -> tr("Library")
                 },
                 icon = when (section) {
                     MyStuff.HISTORY -> Icons.Filled.History
                     MyStuff.DOWNLOADS -> Icons.Filled.Download
+                    MyStuff.TRACKERS -> Icons.Filled.Sync
                     else -> Icons.Filled.Favorite
                 },
                 selected = current == section,

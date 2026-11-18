@@ -2058,6 +2058,12 @@ fun DetailScreen(
     val detailHeroFlow = remember { detailApp.store.detailHeroStyleFlow() }
     val detailHeroStyle by detailHeroFlow.collectAsState(initial = DetailHeroStyles.WIDE)
     val isTvLayout = com.hikari.app.tv.TvMode.current()
+    // A tablet reads a detail page as a centred column, not a
+    // 1000dp-wide stretch of text and buttons. The television keeps
+    // its own layout below (isTvLayout).
+    val isTabletLayout =
+        com.hikari.app.ui.layout.rememberDeviceClass() ==
+            com.hikari.app.ui.layout.DeviceClass.TABLET
     val tvDetailBigFlow = remember { detailApp.store.tvDetailBigFlow() }
     val tvDetailBig by tvDetailBigFlow.collectAsState(initial = isTvLayout)
     // Full-bleed detail art (Settings → TV & Remote, off by default): the
@@ -5266,7 +5272,20 @@ fun DetailScreen(
                 }
             }
             else -> {
-                LazyColumn(state = detailList, modifier = Modifier.fillMaxSize()) {
+                LazyColumn(
+                    state = detailList,
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .then(
+                            if (isTabletLayout) {
+                                Modifier
+                                    .widthIn(max = 760.dp)
+                                    .align(Alignment.CenterHorizontally)
+                            } else {
+                                Modifier.fillMaxWidth()
+                            }
+                        ),
+                ) {
                     // The header art is the page's FIRST item, so it scrolls up
                     // and away as the page is read — see the header note above
                     // for what the wordmark drawn over it does while it does.
@@ -8832,11 +8851,19 @@ private fun percentOf(value: String): Int =
 private fun RatingBadge(r: TitleRating, onClick: () -> Unit) {
     val tint = ratingTint(r)
     val shape = RoundedCornerShape(9.dp)
+    // Quiet surface, coloured MARK: five brand-coloured pills in a row turned
+    // the metadata block into the loudest thing on the page. The identity still
+    // reads from the wordmark/tomato, while the numbers sit in the same ink as
+    // the rest of the metadata.
     Row(
         modifier = Modifier
             .clip(shape)
-            .background(tint.copy(alpha = 0.16f))
-            .border(1.dp, tint.copy(alpha = 0.40f), shape)
+            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
+            .border(
+                1.dp,
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f),
+                shape,
+            )
             .clickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -8845,7 +8872,7 @@ private fun RatingBadge(r: TitleRating, onClick: () -> Unit) {
         RatingMark(r.source, tint)
         Text(
             r.value,
-            color = tint,
+            color = MaterialTheme.colorScheme.onSurface,
             fontSize = 12.5.sp,
             fontWeight = FontWeight.Bold,
             maxLines = 1,

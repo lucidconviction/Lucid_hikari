@@ -102,7 +102,11 @@ import com.hikari.app.tv.TvUi
 import com.hikari.app.tv.tvFocusGlow
 import com.hikari.app.ui.theme.glassSheen
 import com.hikari.app.ui.theme.rememberGlassTokens
+import com.hikari.app.ui.effects.cardPress
+import com.hikari.app.ui.effects.cardSheen
+import com.hikari.app.ui.effects.rememberShelfSnap
 import com.hikari.app.ui.theme.HikariMotion
+import com.hikari.app.ui.theme.HikariType
 import com.hikari.app.ui.theme.rememberAnimationsEnabled
 import com.hikari.app.ui.shape
 import kotlinx.coroutines.delay
@@ -237,6 +241,10 @@ fun MediaRow(
         }
         LazyRow(
             state = rowState,
+            // A shelf comes to rest on a card edge instead of half a poster.
+            // Snapping is positioning, not decoration, so it survives the
+            // Motion & effects switch being Off (see rememberShelfSnap).
+            flingBehavior = rememberShelfSnap(rowState),
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
@@ -394,6 +402,11 @@ fun PosterCard(
     // The sheet lives here — beside the gesture that opens it — so it works
     // over every grid that uses this card, with no change at the call sites.
     var quickLibraryItem by remember { mutableStateOf<MediaItem?>(null) }
+    // Press feedback needs the same source the clickable reports to; on a
+    // television the focus ring is the feedback and the scale is skipped.
+    val interactions = remember { MutableInteractionSource() }
+    val indication = androidx.compose.foundation.LocalIndication.current
+    val pressFeedback = !TvMode.current()
     Column(
         Modifier
             .width(cardWidth)
@@ -401,7 +414,12 @@ fun PosterCard(
             // corner curve reached down into the title and bit the first and
             // last letters off it at high corner values. The artwork applies
             // the rounding to itself (see PosterArt).
-            .clickable(onClick = onClick)
+            .then(if (pressFeedback) Modifier.cardPress(interactions) else Modifier)
+            .clickable(
+                interactionSource = interactions,
+                indication = indication,
+                onClick = onClick,
+            )
     ) {
         Box(
             Modifier
@@ -847,8 +865,8 @@ private fun HeroCarousel(
                             shape = RoundedCornerShape(50),
                             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = Color.White,
-                                contentColor = Color.Black,
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary,
                             ),
                         ) {
                             Icon(
@@ -994,8 +1012,8 @@ private fun HeroStaticCard(
                         shape = RoundedCornerShape(50),
                         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Color.White,
-                            contentColor = Color.Black,
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
                         ),
                     ) {
                         Icon(
@@ -1186,8 +1204,7 @@ private fun HeroSpotlight(
                 ) {
                     Text(
                         item.title,
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Black,
+                        style = HikariType.display,
                         color = Color.White,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
@@ -1224,8 +1241,8 @@ private fun HeroSpotlight(
                             shape = RoundedCornerShape(50),
                             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 7.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = Color.White,
-                                contentColor = Color.Black,
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary,
                             ),
                         ) {
                             Icon(
@@ -1936,7 +1953,7 @@ private fun fmtRemaining(ms: Long): String {
  * and a tall one keeps the card's own curve — so everything inside a card
  * matches the card it is inside.
  */
-val GlassCornerRadius = 26.dp
+val GlassCornerRadius = 18.dp
 val GlassShape = RoundedCornerShape(GlassCornerRadius)
 
 @Composable
@@ -1947,6 +1964,10 @@ fun GlassCard(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val glass = rememberGlassTokens()
+    // The press/sheen effects need the same interaction source the clickable
+    // uses; a second, private source would never see the press.
+    val interactions = remember { MutableInteractionSource() }
+    val indication = androidx.compose.foundation.LocalIndication.current
     // Television cards wear the desktop language — flat elevated-black with
     // 12dp corners and a hairline edge — while phones keep the glass card.
     // One branch here repaints every settings card and repo row on TV.
@@ -1976,7 +1997,25 @@ fun GlassCard(
             // translucent fill into a pane of glass (see [glassSheen]). TV
             // cards are deliberately flat, so they skip it.
             .then(if (tv) Modifier else Modifier.glassSheen(glass))
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
+            .then(
+                if (onClick != null) {
+                    Modifier
+                        // Touch only: a television already answers the remote
+                        // with the focus ring, and scaling on every OK press
+                        // fights that cue.
+                        .then(
+                            if (tv) Modifier
+                            else Modifier.cardPress(interactions).cardSheen(interactions)
+                        )
+                        .clickable(
+                            interactionSource = interactions,
+                            indication = indication,
+                            onClick = onClick,
+                        )
+                } else {
+                    Modifier
+                }
+            ),
         content = content,
     )
 }

@@ -475,7 +475,7 @@ private fun LibraryCard(
 
 
 @Composable
-private fun TrackerLibraryCard(item: MediaItem, onClick: () -> Unit) {
+internal fun TrackerLibraryCard(item: MediaItem, onClick: () -> Unit) {
     val style = rememberPosterStyle()
     val tvLib = com.hikari.app.tv.TvMode.current()
     Column(modifier = Modifier.width(if (tvLib) 280.dp else 112.dp).clickable(onClick = onClick)) {

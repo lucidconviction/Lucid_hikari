@@ -70,9 +70,11 @@ object MyStuffSection {
     const val LIBRARY = "library"
     const val HISTORY = "history"
     const val DOWNLOADS = "downloads"
+    /** Watchlists and personal lists from the signed-in trackers. */
+    const val TRACKERS = "trackers"
 
-    /** The three, in the order the strip draws them. */
-    val ALL = listOf(LIBRARY, HISTORY, DOWNLOADS)
+    /** The sections, in the order the strip draws them. */
+    val ALL = listOf(LIBRARY, HISTORY, DOWNLOADS, TRACKERS)
 }
 
 /** Unit separator: joins a provider folder's name to its ids inside the one
@@ -116,6 +118,9 @@ class AppStore(private val ctx: Context) {
     val PLAYER_ENHANCE_CUSTOMS = stringPreferencesKey("playerEnhanceCustoms")
         val UI_SCALE_ENABLED = booleanPreferencesKey("uiScaleEnabled")
         val UI_SCALE_PERCENT = intPreferencesKey("uiScalePercent")
+        /** Motion & effects: "" follows the device default (Full on touch,
+         *  Subtle on a television). See com.hikari.app.ui.effects.MotionLevel. */
+        val MOTION_LEVEL = stringPreferencesKey("motionLevel")
         val HISTORY = stringPreferencesKey("history")
         val HISTORY_PAUSED = booleanPreferencesKey("historyPaused")
         val HIDE_CONTINUE = booleanPreferencesKey("hideContinue")
@@ -538,6 +543,11 @@ class AppStore(private val ctx: Context) {
         val MYSTUFF_LIBRARY = booleanPreferencesKey("mystuffLibrary")
         val MYSTUFF_HISTORY = booleanPreferencesKey("mystuffHistory")
         val MYSTUFF_DOWNLOADS = booleanPreferencesKey("mystuffDownloads")
+        /** The Trackers section of My Stuff (Settings → Taskbar buttons →
+         *  My Stuff). On by default: a signed-in tracker with a watchlist is
+         *  exactly the kind of "my stuff" the page exists for, and a user with
+         *  no tracker sees a short connect prompt rather than an empty page. */
+        val MYSTUFF_TRACKERS = booleanPreferencesKey("mystuffTrackers")
         /** Shape of the tiles on the IPTV tab's playlist/group grids (see
          *  [TileShapes]: poster / square / wide). */
         val IPTV_SHAPE = stringPreferencesKey("iptvTileShape")
@@ -3599,6 +3609,7 @@ fun searchExceptionOnFlow(): Flow<Boolean> =
     private fun keyForSection(section: String): Preferences.Key<Boolean> = when (section) {
         MyStuffSection.HISTORY -> K.MYSTUFF_HISTORY
         MyStuffSection.DOWNLOADS -> K.MYSTUFF_DOWNLOADS
+        MyStuffSection.TRACKERS -> K.MYSTUFF_TRACKERS
         else -> K.MYSTUFF_LIBRARY
     }
 
@@ -4176,6 +4187,26 @@ fun searchExceptionOnFlow(): Flow<Boolean> =
         // Mirror into the synchronous cache so View-based screens (player,
         // WebView) and the next cold start pick the change up immediately.
         runCatching { UiScale.sync(ctx, enabled, uiScale()) }
+    }
+
+    // ---- Motion & effects (Settings → Appearance & Theme) ----
+
+    /**
+     * The motion level key, or blank for "whatever this device should do".
+     *
+     * The blank default is deliberate: a television should be Subtle and a
+     * phone Full, and one stored value cannot express both without pinning a
+     * device the user never chose. The UI resolves blank through
+     * [com.hikari.app.ui.effects.MotionLevel.defaultFor].
+     */
+    fun motionLevelFlow(): Flow<String> =
+        store.data.map { it[K.MOTION_LEVEL] ?: "" }
+            .distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    suspend fun motionLevel(): String = motionLevelFlow().first()
+
+    suspend fun setMotionLevel(key: String) {
+        write("MOTION_LEVEL") { it[K.MOTION_LEVEL] = key.trim().lowercase() }
     }
 
     /** The in-app scale (0.7f–1.3f) used while [uiScaleEnabledFlow] is on.
