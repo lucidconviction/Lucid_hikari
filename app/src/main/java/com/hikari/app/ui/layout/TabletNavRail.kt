@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -69,7 +70,12 @@ fun TabletNavRail(
     }
     val state = rememberLazyListState()
 
-    LazyColumn(
+    // A LazyColumn's `verticalArrangement` does not reliably centre a short
+    // list inside a tall rail, so the centring is explicit: the space above the
+    // strip is measured from the viewport and the estimated row height, and
+    // becomes content padding. When the tabs do not fit, the padding is zero
+    // and the rail scrolls exactly as before.
+    androidx.compose.foundation.layout.BoxWithConstraints(
         modifier
             .width(TabletRailWidth)
             .fillMaxHeight()
@@ -87,18 +93,29 @@ fun TabletNavRail(
                     end = Offset(size.width - 0.5f, size.height),
                     strokeWidth = 1f,
                 )
-            }
-            .padding(vertical = HikariSpacing.s),
-        state = state,
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(HikariSpacing.xxs),
+            },
     ) {
-        items(tabs, key = { it.route }) { tab ->
-            TabletRailItem(
-                tab = tab,
-                selected = tab.route == currentRoute,
-                onClick = { onNavigate(tab.route) },
-            )
+        // icon (22) + gap (3) + label (11) + item padding (16) + spacing (2).
+        val rowHeight = 54.dp
+        val strip = rowHeight * tabs.size
+        val top = ((maxHeight - strip) / 2).coerceAtLeast(0.dp)
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            state = state,
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(HikariSpacing.xxs),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                top = top,
+                bottom = top,
+            ),
+        ) {
+            items(tabs, key = { it.route }) { tab ->
+                TabletRailItem(
+                    tab = tab,
+                    selected = tab.route == currentRoute,
+                    onClick = { onNavigate(tab.route) },
+                )
+            }
         }
     }
 }
