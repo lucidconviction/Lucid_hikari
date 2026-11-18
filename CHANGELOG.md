@@ -1,3 +1,14 @@
+## 0.15.3
+
+**18 November 2026**
+
+### Streaming services on Home
+
+- **A persistent “Streaming services” row sits directly under Continue Watching**, modelled on VyseTV. It carries the same 36 services in the same order — Netflix, Disney+, Prime Video, Max, Hulu, Apple TV+, Paramount+, Crunchyroll, Peacock, Starz, MGM+, AMC+, Discovery+, ESPN+, Tubi, Pluto TV, Roku Channel, Plex, fuboTV, Philo, Sling TV, ViX, HiDive, Shudder, BritBox, Acorn TV, Criterion Channel, MUBI, Kanopy, Hoopla, YouTube, YouTube Premium, Apple TV Store, Amazon Video, Google Play Movies and Fandango at Home.
+- **Real brand logos**, read from TMDB's watch-provider catalogue (movie and TV merged), with a curated offline fallback so the row is never empty.
+- **Tapping a service opens its catalogue** — a paged TMDB discover grid filtered to that platform — so “what is on Netflix” is one tap from Home.
+- The row is always visible, including on an install with no extensions.
+
 ## 0.15.2
 
 **18 November 2026**
