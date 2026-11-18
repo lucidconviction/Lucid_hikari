@@ -104,6 +104,7 @@ import com.hikari.app.ui.theme.glassSheen
 import com.hikari.app.ui.theme.rememberGlassTokens
 import com.hikari.app.ui.effects.cardPress
 import com.hikari.app.ui.effects.cardSheen
+import com.hikari.app.ui.effects.rememberShelfSnap
 import com.hikari.app.ui.theme.HikariMotion
 import com.hikari.app.ui.theme.rememberAnimationsEnabled
 import com.hikari.app.ui.shape
@@ -239,6 +240,10 @@ fun MediaRow(
         }
         LazyRow(
             state = rowState,
+            // A shelf comes to rest on a card edge instead of half a poster.
+            // Snapping is positioning, not decoration, so it survives the
+            // Motion & effects switch being Off (see rememberShelfSnap).
+            flingBehavior = rememberShelfSnap(rowState),
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
@@ -396,6 +401,11 @@ fun PosterCard(
     // The sheet lives here — beside the gesture that opens it — so it works
     // over every grid that uses this card, with no change at the call sites.
     var quickLibraryItem by remember { mutableStateOf<MediaItem?>(null) }
+    // Press feedback needs the same source the clickable reports to; on a
+    // television the focus ring is the feedback and the scale is skipped.
+    val interactions = remember { MutableInteractionSource() }
+    val indication = androidx.compose.foundation.LocalIndication.current
+    val pressFeedback = !TvMode.current()
     Column(
         Modifier
             .width(cardWidth)
@@ -403,7 +413,12 @@ fun PosterCard(
             // corner curve reached down into the title and bit the first and
             // last letters off it at high corner values. The artwork applies
             // the rounding to itself (see PosterArt).
-            .clickable(onClick = onClick)
+            .then(if (pressFeedback) Modifier.cardPress(interactions) else Modifier)
+            .clickable(
+                interactionSource = interactions,
+                indication = indication,
+                onClick = onClick,
+            )
     ) {
         Box(
             Modifier
