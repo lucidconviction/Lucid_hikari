@@ -1,5 +1,7 @@
 <resources>
     <color name="hikari_bg">#0B0E1A</color>
+    <!-- The opening splash is pure black, whatever the app theme is. -->
+    <color name="splash_black">#FF000000</color>
     <color name="ic_launcher_background">#0B0E1A</color>
 
     <!-- Player accent: the cyan → violet gradient used by every player control

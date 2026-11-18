@@ -13,10 +13,15 @@
          and a Material theme also defines `bottomSheetDialogTheme` so the sheet
          comes up dark to match Hikari instead of Material's light fallback. -->
     <style name="Theme.Hikari" parent="Theme.MaterialComponents.NoActionBar">
-        <item name="windowSplashScreenBackground">@color/hikari_bg</item>
-        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <!-- The system splash is a black frame with no icon: the branded splash
+             (name + loading animation, see ui/BootSplash.kt) draws over the app
+             immediately afterwards, so the hand-off is black -> black. -->
+        <item name="windowSplashScreenBackground">@color/splash_black</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_blank</item>
+        <item name="android:windowSplashScreenBackground">@color/splash_black</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_blank</item>
         <item name="postSplashScreenTheme">@style/Theme.Hikari.App</item>
-        <item name="android:windowBackground">@color/hikari_bg</item>
+        <item name="android:windowBackground">@color/splash_black</item>
         <item name="android:colorBackground">@color/hikari_bg</item>
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowActionBar">false</item>

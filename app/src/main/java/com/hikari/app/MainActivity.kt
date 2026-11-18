@@ -486,6 +486,10 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             }
+        // The branded opening screen: black, "Lucid Conviction Build" and the
+        // accent loader. Added after setContent so the content root exists; it
+        // fades itself out (see BootSplash).
+        com.hikari.app.ui.BootSplash.show(this)
         }
 
     /**
