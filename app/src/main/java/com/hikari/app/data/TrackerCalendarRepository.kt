@@ -56,7 +56,25 @@ object TrackerCalendarRepository {
         accounts.firstOrNull { it.kind == TrackerKind.TRAKT }?.let { acc ->
             out += runCatching { trakt(app, acc, days) }.getOrDefault(emptyList())
         }
-        out.sortedBy { it.atMillis }
+        // The same episode is often on both services. Merge those into ONE row
+        // (both tracker names, first artwork/id wins) so a two-tracker account
+        // does not read the calendar twice. Different episodes of one show stay
+        // separate because the subtitle is part of the key.
+        val merged = LinkedHashMap<String, Entry>()
+        for (e in out.sortedBy { it.atMillis }) {
+            val key = e.day + "|" + e.title.trim().lowercase(Locale.ROOT) + "|" + e.subtitle
+            val prev = merged[key]
+            merged[key] = if (prev == null) {
+                e
+            } else {
+                prev.copy(
+                    tracker = (prev.tracker.split(" · ") + e.tracker).distinct().joinToString(" · "),
+                    poster = prev.poster ?: e.poster,
+                    item = prev.item ?: e.item,
+                )
+            }
+        }
+        merged.values.toList()
     }
 
     // ---- Simkl -----------------------------------------------------------

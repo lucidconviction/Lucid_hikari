@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -21,6 +22,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -195,32 +197,23 @@ fun TrackerMyStuffScreen(nav: NavHostController, embedded: Boolean = false) {
                     fontWeight = FontWeight.Bold,
                 )
             }
+            // One card per day, instead of a day label followed by loose rows.
+            // A day is the unit a calendar is read in: the card holds its own
+            // clock column, its own separators and a count, so several shows
+            // airing on the same date read as one group rather than as a list
+            // that happens to pass through a heading.
             calendar.groupBy { it.day }.forEach { (day, entries) ->
-                item(key = "calendar-day-" + day) {
-                    Text(
-                        day,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
-                }
-                // The key is positional, not derived from the entry: a show
-                // can air twice in a day (or arrive from two sources with the
-                // same title), and a duplicated LazyColumn key is a hard crash,
-                // not a visual glitch. Day + index is unique by construction.
-                entries.forEachIndexed { index, entry ->
-                    item(key = "calendar-$day-$index") {
-                        TrackerCalendarRow(entry) {
-                            // Not every airing carries a TMDB id (Simkl's
-                            // /tv/airing sends none), so a row without one
-                            // searches for its title instead of doing nothing
-                            // when tapped.
-                            val target = entry.item
-                            if (target != null) {
-                                openItem(target)
-                            } else {
-                                Routes.safeNavigate(nav, Routes.searchQuery(entry.title))
-                            }
+                item(key = "calendar-day-$day") {
+                    CalendarDayCard(day = day, entries = entries) { entry ->
+                        // Not every airing carries a TMDB id (Simkl's
+                        // /tv/airing sends none), so a row without one
+                        // searches for its title instead of doing nothing
+                        // when tapped.
+                        val target = entry.item
+                        if (target != null) {
+                            openItem(target)
+                        } else {
+                            Routes.safeNavigate(nav, Routes.searchQuery(entry.title))
                         }
                     }
                 }
@@ -386,20 +379,101 @@ private fun TrackerSectionHeader(
     }
 }
 
+/**
+ * One day of Upcoming: a heading (with the weekday when the label is relative),
+ * a count, then the day's airings separated by hairlines. Grouping inside the
+ * card is what keeps a busy day readable — ten loose rows across four headings
+ * read as one undifferentiated list.
+ */
+@Composable
+private fun CalendarDayCard(
+    day: String,
+    entries: List<TrackerCalendarRepository.Entry>,
+    onOpen: (TrackerCalendarRepository.Entry) -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    // "Today" alone is a word, not a date: say which day it is, so the card is
+    // still a calendar when the screenshot is read tomorrow.
+    val weekday = if (day == "Today" || day == "Tomorrow") {
+        java.text.SimpleDateFormat("EEE d MMM", java.util.Locale.getDefault())
+            .format(java.util.Date(entries.first().atMillis))
+    } else {
+        ""
+    }
+    GlassCard {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    day,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                if (weekday.isNotBlank()) {
+                    Text(
+                        weekday,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.onSurfaceVariant,
+                    )
+                }
+            }
+            // Just the count, named: "3 airings". A bare number beside a day
+            // reads as a badge, not as "how busy is Friday?".
+            Text(
+                if (entries.size == 1) tr("1 airing") else "${entries.size} " + tr("airings"),
+                style = MaterialTheme.typography.labelMedium,
+                color = colors.primary,
+            )
+        }
+        HorizontalDivider(color = colors.outline.copy(alpha = 0.22f))
+        entries.forEachIndexed { index, entry ->
+            if (index > 0) {
+                HorizontalDivider(
+                    color = colors.outline.copy(alpha = 0.14f),
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp),
+                )
+            }
+            TrackerCalendarRow(entry) { onOpen(entry) }
+        }
+    }
+}
+
 @Composable
 private fun TrackerCalendarRow(
     entry: TrackerCalendarRepository.Entry,
     onClick: () -> Unit,
 ) {
-    val clickable = entry.item != null
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .then(if (clickable) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(vertical = 4.dp),
+            // Every row opens something now: a title with a TMDB id goes to its
+            // page, and one without searches for it (see the caller).
+            .clickable(onClick = onClick)
+            .padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // The clock leads the row and holds a fixed column, so times line up
+        // down the card instead of floating at the right edge of each title.
+        Column(Modifier.width(66.dp)) {
+            Text(
+                entry.time.ifBlank { "—" },
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+            )
+            Text(
+                entry.tracker,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(12.dp))
         Box(
             Modifier
                 .size(width = 38.dp, height = 54.dp)
@@ -416,13 +490,16 @@ private fun TrackerCalendarRow(
                 )
             }
         }
-        Spacer(Modifier.size(10.dp))
+        Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
                 entry.title,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
+                // Two lines: a long title ("Mike Judge's Beavis and
+                // Butt-Head") should be readable, and the row is tall enough
+                // for it because the poster sets the height.
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
@@ -431,18 +508,6 @@ private fun TrackerCalendarRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Column(horizontalAlignment = Alignment.End) {
-            Text(
-                entry.time,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                entry.tracker,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
