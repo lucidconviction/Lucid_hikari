@@ -1071,7 +1071,7 @@ class WebViewActivity : ComponentActivity() {
             addView(
                 content,
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
-                    topMargin = dp(8)
+                    topMargin = dp(16)
                 },
             )
         }

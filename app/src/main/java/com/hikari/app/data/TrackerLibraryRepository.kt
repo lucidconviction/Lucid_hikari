@@ -127,6 +127,8 @@ object TrackerLibraryRepository {
         val collectionShows: List<MediaItem>
         val favoriteMovies: List<MediaItem>
         val favoriteShows: List<MediaItem>
+        val ratedMovies: List<MediaItem>
+        val ratedShows: List<MediaItem>
         kotlinx.coroutines.coroutineScope {
             val wm = async { get("/watchlist/movies?extended=full,images&page=1&limit=250", MediaType.MOVIE) }
             val ws = async { get("/watchlist/shows?extended=full,images&page=1&limit=250", MediaType.SERIES) }
@@ -138,6 +140,8 @@ object TrackerLibraryRepository {
             val cs = async { get("/collection/shows?extended=full,images&page=1&limit=250", MediaType.SERIES) }
             val fm = async { get("/favorites/movies?extended=full,images&page=1&limit=250", MediaType.MOVIE) }
             val fs = async { get("/favorites/shows?extended=full,images&page=1&limit=250", MediaType.SERIES) }
+            val rm = async { get("/ratings/movies?extended=full,images&page=1&limit=250", MediaType.MOVIE) }
+            val rs = async { get("/ratings/shows?extended=full,images&page=1&limit=250", MediaType.SERIES) }
             movies = wm.await()
             shows = ws.await()
             watchedMovies = wmed.await()
@@ -148,6 +152,8 @@ object TrackerLibraryRepository {
             collectionShows = cs.await()
             favoriteMovies = fm.await()
             favoriteShows = fs.await()
+            ratedMovies = rm.await()
+            ratedShows = rs.await()
         }
         if (movies.isNotEmpty()) out += Shelf("trakt.watchlist.movies", "Trakt Watchlist · Movies", movies)
         if (shows.isNotEmpty()) out += Shelf("trakt.watchlist.shows", "Trakt Watchlist · Shows", shows)
@@ -166,6 +172,10 @@ object TrackerLibraryRepository {
         if (fm.isNotEmpty()) out += Shelf("trakt.favorites.movies", "Trakt Favorites · Movies", fm)
         val fs = favoriteShows.distinctBy { it.uniqueId }
         if (fs.isNotEmpty()) out += Shelf("trakt.favorites.shows", "Trakt Favorites · Shows", fs)
+        val rm = ratedMovies.distinctBy { it.uniqueId }
+        if (rm.isNotEmpty()) out += Shelf("trakt.ratings.movies", "Trakt Ratings · Movies", rm)
+        val rs = ratedShows.distinctBy { it.uniqueId }
+        if (rs.isNotEmpty()) out += Shelf("trakt.ratings.shows", "Trakt Ratings · Shows", rs)
 
         val lists = runCatching {
             Http.get("https://api.trakt.tv/users/${enc(who.first())}/lists", headers).use { response ->
@@ -230,13 +240,33 @@ object TrackerLibraryRepository {
         val root = JSONObject(response.body?.string().orEmpty())
         val out = ArrayList<Shelf>()
 
+        // The status buckets Simkl keeps, in the order a viewer thinks of them.
+        // Every list the service exposes becomes a shelf, not just one
+        // "TV Shows" pile: "what am I watching", "what is queued", "what did I
+        // finish" are three different answers and the Tracker tab is where the
+        // user reads them.
+        val statusGroups = LinkedHashMap<String, MutableList<MediaItem>>()
+        val statusOrder = listOf("watching", "plantowatch", "completed", "hold", "dropped")
+        val statusLabel = mapOf(
+            "watching" to "Watching",
+            "plantowatch" to "Plan to Watch",
+            "completed" to "Completed",
+            "hold" to "On Hold",
+            "dropped" to "Dropped",
+        )
+
         fun parse(key: String, title: String, type: MediaType, anime: Boolean = false, manga: Boolean = false) {
             val array = root.optJSONArray(key) ?: return
             val items = buildList {
                 for (i in 0 until array.length()) {
                     val row = array.optJSONObject(i) ?: continue
                     val item = row.optJSONObject("movie") ?: row.optJSONObject("show") ?: row.optJSONObject("anime") ?: row.optJSONObject("manga") ?: row
-                    simklMedia(item, type, anime, manga)?.let(::add)
+                    val media = simklMedia(item, type, anime, manga) ?: continue
+                    add(media)
+                    val status = row.optString("status").lowercase()
+                    if (status.isNotBlank() && !manga) {
+                        statusGroups.getOrPut(status) { mutableListOf() }.add(media)
+                    }
                 }
             }.distinctBy { it.uniqueId }
             if (items.isNotEmpty()) out += Shelf("simkl.$key", title, items)
@@ -245,6 +275,16 @@ object TrackerLibraryRepository {
         parse("tv_shows", "Simkl · TV Shows", MediaType.SERIES)
         parse("anime", "Simkl · Anime", MediaType.SERIES, anime = true)
         parse("manga", "Simkl · Manga", MediaType.SERIES, manga = true)
+
+        for (status in statusOrder) {
+            val items = statusGroups[status].orEmpty().distinctBy { it.uniqueId }
+            if (items.isEmpty()) continue
+            out += Shelf(
+                "simkl.status.$status",
+                "Simkl · " + (statusLabel[status] ?: status),
+                items,
+            )
+        }
         return Result.success(out)
     }
 

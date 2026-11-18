@@ -1,6 +1,7 @@
 package com.hikari.app.data
 
 import com.hikari.app.nuvio.TmdbResolver
+import kotlinx.coroutines.async
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 
@@ -338,6 +339,16 @@ object TmdbSources {
                 else -> "Movie or series"
             }
         }
+        // A platform catalogue is named by the platform in the header, so its
+        // caption is only the kind of title ("Netflix · Movies & series") —
+        // not the generic "Custom · Movies" a hand-built filter used to get.
+        if (spec.type == TmdbSourceType.DISCOVER && spec.providers.isNotBlank()) {
+            return when {
+                spec.isMovie -> "Movies"
+                spec.isTv -> "Series"
+                else -> "Movies & series"
+            }
+        }
         val kind = when (spec.type) {
             TmdbSourceType.PRESET -> "Preset"
             TmdbSourceType.TITLE -> "Title"
@@ -493,10 +504,14 @@ object TmdbSources {
                 // genre carries the id EACH namespace knows it by (see Home's
                 // genre strip) — TMDB ignores the id that belongs to the other
                 // namespace rather than erroring, verified against the live API.
-                mergeMedia(
-                    discover(spec, p, "movie", null),
-                    discover(spec, p, "tv", null),
-                )
+                kotlinx.coroutines.coroutineScope {
+                    // Two independent queries: run them together, not one after
+                    // the other. A platform catalogue's first page was waiting a
+                    // full round trip for movies before even asking for series.
+                    val movies = async { discover(spec, p, "movie", null) }
+                    val tv = async { discover(spec, p, "tv", null) }
+                    mergeMedia(movies.await(), tv.await())
+                }
             } else discover(spec, p, spec.media.ifBlank { "movie" }, null)
         }
     }

@@ -134,6 +134,71 @@ object TrackerSync {
         notes
     }
 
+    /**
+     * Reports "I am watching this" to every signed-in tracker.
+     *
+     * This is the status half of a mark, not a watch: nothing is added to the
+     * service's history and no episode count moves. It exists because marking a
+     * title as watching used to send a watch event (with a couple of seconds of
+     * progress) — which every service files as SEEN — and because the tracker's
+     * own calendar only lists titles that are on its lists, so a title marked
+     * watching only locally never appeared under Upcoming.
+     *
+     * Returns a sentence per tracker, like [pushWatched]. A service that has no
+     * watching status (or, for Simkl, a film) says so instead of silently
+     * doing nothing.
+     */
+    suspend fun pushWatching(
+        store: AppStore,
+        media: TrackerMedia,
+    ): List<String> = withContext(Dispatchers.IO) {
+        var notes: List<String> = ArrayList()
+        val accounts = runCatching { store.trackers() }.getOrDefault(emptyList())
+        if (accounts.isEmpty()) return@withContext notes
+        if (!runCatching { store.trackerSync() }.getOrDefault(true)) return@withContext notes
+        if (media.title.isBlank()) return@withContext notes
+
+        val clients = runCatching { store.trackerClients() }.getOrDefault(emptyList())
+        val matches = runCatching { store.trackerMatches() }.getOrDefault(emptyMap())
+
+        for (account in accounts) {
+            val kind = account.kind
+            val client = clients.firstOrNull { it.kind == kind } ?: TrackerClient(kind)
+            if (!client.ready) {
+                notes += "${kind.label}: the app id is missing — open Trackers and add it"
+                continue
+            }
+            val live = freshAccount(store, client, account)
+
+            // Same confidence rule as a watch: an automatic write must be right
+            // or it must not happen. The cached match is reused when it still
+            // looks like the same title.
+            val cached = matches[TrackerStore.matchKey(kind, media.title)]
+                ?.takeIf { matchScoreAny(media.title, it.title, media.year, it.year) >= TRACKER_AUTO_THRESHOLD }
+            val match = cached ?: resolve(store, client, live, media)
+            if (match == null) {
+                notes += "${kind.label}: no confident match for \"${media.title}\""
+                continue
+            }
+            TrackerApi.setWatching(client, live, match, media)
+                .onSuccess { note ->
+                    Logs.log("Tracker", "${kind.label} watching OK [\"${media.title}\"] id=${match.id} $note")
+                    notes += note
+                }
+                .onFailure { error ->
+                    Logs.log("Tracker", "${kind.label} watching FAIL [\"${media.title}\"] id=${match.id}: ${error.message}")
+                    runCatching { store.dropTrackerMatch(TrackerStore.matchKey(kind, media.title)) }
+                    notes += error.message ?: "${kind.label}: the status update failed"
+                }
+        }
+        notes = notes.distinct()
+        val summary = notes.joinToString("\n")
+        if (notes.isNotEmpty() && runCatching { store.trackerLast() }.getOrDefault("") != summary) {
+            runCatching { store.setTrackerLast(summary) }
+        }
+        notes
+    }
+
     /** The stored token, refreshed first when the service said it would expire. */
     private suspend fun freshAccount(
         store: AppStore,

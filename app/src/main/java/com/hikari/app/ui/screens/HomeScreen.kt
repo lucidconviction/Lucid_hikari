@@ -4355,7 +4355,7 @@ private fun StreamingServicesRow(
     // VyseTV's full featured set (36 services), starting from the offline
     // names so the row is populated on the first frame; the catalogue then
     // replaces them with TMDB's names and artwork.
-    var platforms by remember { mutableStateOf(com.hikari.app.data.StreamingPlatforms.fallback()) }
+    var platforms by remember { mutableStateOf(com.hikari.app.data.StreamingPlatforms.cachedOrFallback()) }
 
     LaunchedEffect(Unit) {
         platforms = runCatching { com.hikari.app.data.StreamingPlatforms.catalogue() }
@@ -4412,15 +4412,6 @@ private fun StreamingServicesRow(
                             )
                         }
                     }
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        platform.name,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Center,
-                    )
                 }
             }
         }

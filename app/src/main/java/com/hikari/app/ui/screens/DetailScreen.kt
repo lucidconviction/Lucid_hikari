@@ -2401,6 +2401,9 @@ fun DetailScreen(
     // is tapped; the dialog plays it in-app via an embedded iframe instead of
     // handing off to the YouTube app.
     var activeTrailerKey by remember { mutableStateOf<Pair<String, String>?>(null) }
+    // True while the SmartTube engine resolves the trailer; the tap used to
+    // leave the screen unchanged for seconds.
+    var trailerLoading by remember { mutableStateOf(false) }
 
     var playerLaunched by remember { mutableStateOf(false) }
     // Resets the once-only launch guard the moment the player activity returns
@@ -4486,13 +4489,22 @@ fun DetailScreen(
                 watchedAt = System.currentTimeMillis(),
             )
             app.store.addHistory(entry)
-            // The trackers (Settings → Trackers) hear about this too: "mark as
-            // watched" is exactly the fact the player reports at the end of an
-            // episode. Reporting only from the player meant marking a season
-            // watched here left the user's own list untouched, which reads as
-            // tracking being broken.
+            // The trackers (Settings → Trackers) hear about this too, but the
+            // two marks are different facts:
+            //
+            //  * "watched" is a watch event — the same one the player reports at
+            //    the end of an episode;
+            //  * "watching" is a STATUS. Sending it as a watch event (which the
+            //    old code did) told Simkl and the rest that the episode had been
+            //    seen. It now sets the list status instead, which is also what
+            //    puts the title on the tracker's calendar — and so on Upcoming.
             runCatching {
-                TrackerSync.pushWatched(app.store, TrackerSync.mediaOf(entry), entry.uniqueKey)
+                val trackerMedia = TrackerSync.mediaOf(entry)
+                if (watched) {
+                    TrackerSync.pushWatched(app.store, trackerMedia, entry.uniqueKey)
+                } else {
+                    TrackerSync.pushWatching(app.store, trackerMedia)
+                }
             }
         }
     }
@@ -4518,7 +4530,7 @@ fun DetailScreen(
                         key = "watching",
                         label = tr("Mark as watching"),
                         supporting = if (markWatching) tr("Shows in Continue watching")
-                        else tr("Puts it in Continue watching"),
+                        else tr("Puts it in Continue watching and your tracker's Watching list"),
                     )
                 )
                 add(
@@ -6955,6 +6967,8 @@ fun DetailScreen(
     // YouTube video instead of overwriting the title's resume position.
     activeTrailerKey?.let { (ytKey, ytTitle) ->
         LaunchedEffect(ytKey) {
+            trailerLoading = true
+            try {
             val source = YouTubePlayables.resolveWithEngine(ytKey).firstOrNull()
             if (source != null && !playerLaunched) {
                 playerLaunched = true
@@ -6977,7 +6991,25 @@ fun DetailScreen(
                     android.widget.Toast.LENGTH_SHORT,
                 ).show()
             }
-            activeTrailerKey = null
+            } finally {
+                trailerLoading = false
+                activeTrailerKey = null
+            }
+        }
+    }
+    if (trailerLoading) {
+        androidx.compose.ui.window.Dialog(onDismissRequest = {}) {
+            Row(
+                Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(horizontal = 20.dp, vertical = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(12.dp))
+                Text(tr("Loading trailer…"), style = MaterialTheme.typography.bodyMedium)
+            }
         }
     }
 }

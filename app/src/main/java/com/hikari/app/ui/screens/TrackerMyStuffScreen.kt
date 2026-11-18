@@ -1,6 +1,8 @@
 package com.hikari.app.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -10,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -19,6 +22,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -40,6 +44,13 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.hikari.app.HikariApp
 import com.hikari.app.data.TrackerKind
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
+import com.hikari.app.data.MediaType
+import com.hikari.app.data.TrackerCalendarRepository
 import com.hikari.app.data.TrackerLibraryRepository
 import com.hikari.app.i18n.tr
 import com.hikari.app.ui.components.GlassCard
@@ -82,6 +93,7 @@ fun TrackerMyStuffScreen(nav: NavHostController, embedded: Boolean = false) {
         mutableStateOf<Map<String, List<TrackerLibraryRepository.Shelf>>>(emptyMap())
     }
     var errors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var calendar by remember { mutableStateOf<List<TrackerCalendarRepository.Entry>>(emptyList()) }
 
     // Keyed on the connected identities, not on the list instance: the flow
     // re-emits the same accounts on unrelated writes, and reloading ten HTTP
@@ -108,6 +120,31 @@ fun TrackerMyStuffScreen(nav: NavHostController, embedded: Boolean = false) {
         shelves = loaded
         errors = failed
         loading = false
+        calendar = runCatching { TrackerCalendarRepository.load(app) }
+            .getOrDefault(emptyList())
+    }
+
+    val openItem: (com.hikari.app.data.MediaItem) -> Unit = { item ->
+        if (item.rawType == "manga") {
+            Routes.safeNavigate(nav, Routes.mangaSearch(item.title))
+        } else {
+            Routes.safeNavigate(
+                nav,
+                Routes.detail(
+                    providerId = item.providerId,
+                    type = item.type,
+                    mediaId = item.id,
+                    title = item.title,
+                    posterUrl = item.posterUrl,
+                    rawType = item.rawType,
+                ),
+            )
+        }
+    }
+    val series = remember(shelves) {
+        shelves.values.flatten().flatMap { it.items }
+            .filter { it.type == MediaType.SERIES }
+            .distinctBy { it.uniqueId }
     }
 
     LazyColumn(
@@ -147,6 +184,37 @@ fun TrackerMyStuffScreen(nav: NavHostController, embedded: Boolean = false) {
                             contentDescription = tr("Refresh"),
                             tint = MaterialTheme.colorScheme.primary,
                         )
+                    }
+                }
+            }
+        }
+
+        if (calendar.isNotEmpty()) {
+            item(key = "calendar-header") {
+                Text(
+                    tr("Upcoming"),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            // One card per day, instead of a day label followed by loose rows.
+            // A day is the unit a calendar is read in: the card holds its own
+            // clock column, its own separators and a count, so several shows
+            // airing on the same date read as one group rather than as a list
+            // that happens to pass through a heading.
+            calendar.groupBy { it.day }.forEach { (day, entries) ->
+                item(key = "calendar-day-$day") {
+                    CalendarDayCard(day = day, entries = entries) { entry ->
+                        // Not every airing carries a TMDB id (Simkl's
+                        // /tv/airing sends none), so a row without one
+                        // searches for its title instead of doing nothing
+                        // when tapped.
+                        val target = entry.item
+                        if (target != null) {
+                            openItem(target)
+                        } else {
+                            Routes.safeNavigate(nav, Routes.searchQuery(entry.title))
+                        }
                     }
                 }
             }
@@ -250,6 +318,18 @@ fun TrackerMyStuffScreen(nav: NavHostController, embedded: Boolean = false) {
                 }
             }
         }
+        // The cross-tracker Series row comes AFTER the sources: each tracker's
+        // own categories stay grouped under its name, which is the order that
+        // reads as "Simkl → its lists" rather than a nameless row on top.
+        if (series.isNotEmpty()) {
+            item(key = "tracker-series") {
+                TrackerShelfRow(
+                    title = tr("Series"),
+                    items = series,
+                    onOpen = openItem,
+                )
+            }
+        }
     }
 }
 
@@ -294,6 +374,140 @@ private fun TrackerSectionHeader(
                 style = MaterialTheme.typography.labelSmall,
                 color = if (error != null) MaterialTheme.colorScheme.error
                 else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * One day of Upcoming: a heading (with the weekday when the label is relative),
+ * a count, then the day's airings separated by hairlines. Grouping inside the
+ * card is what keeps a busy day readable — ten loose rows across four headings
+ * read as one undifferentiated list.
+ */
+@Composable
+private fun CalendarDayCard(
+    day: String,
+    entries: List<TrackerCalendarRepository.Entry>,
+    onOpen: (TrackerCalendarRepository.Entry) -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    // "Today" alone is a word, not a date: say which day it is, so the card is
+    // still a calendar when the screenshot is read tomorrow.
+    val weekday = if (day == "Today" || day == "Tomorrow") {
+        java.text.SimpleDateFormat("EEE d MMM", java.util.Locale.getDefault())
+            .format(java.util.Date(entries.first().atMillis))
+    } else {
+        ""
+    }
+    GlassCard {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    day,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                if (weekday.isNotBlank()) {
+                    Text(
+                        weekday,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.onSurfaceVariant,
+                    )
+                }
+            }
+            // Just the count, named: "3 airings". A bare number beside a day
+            // reads as a badge, not as "how busy is Friday?".
+            Text(
+                if (entries.size == 1) tr("1 airing") else "${entries.size} " + tr("airings"),
+                style = MaterialTheme.typography.labelMedium,
+                color = colors.primary,
+            )
+        }
+        HorizontalDivider(color = colors.outline.copy(alpha = 0.22f))
+        entries.forEachIndexed { index, entry ->
+            if (index > 0) {
+                HorizontalDivider(
+                    color = colors.outline.copy(alpha = 0.14f),
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp),
+                )
+            }
+            TrackerCalendarRow(entry) { onOpen(entry) }
+        }
+    }
+}
+
+@Composable
+private fun TrackerCalendarRow(
+    entry: TrackerCalendarRepository.Entry,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            // Every row opens something now: a title with a TMDB id goes to its
+            // page, and one without searches for it (see the caller).
+            .clickable(onClick = onClick)
+            .padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // The clock leads the row and holds a fixed column, so times line up
+        // down the card instead of floating at the right edge of each title.
+        Column(Modifier.width(66.dp)) {
+            Text(
+                entry.time.ifBlank { "—" },
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+            )
+            Text(
+                entry.tracker,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Box(
+            Modifier
+                .size(width = 38.dp, height = 54.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            val poster = entry.poster
+            if (!poster.isNullOrBlank()) {
+                AsyncImage(
+                    model = poster,
+                    contentDescription = entry.title,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                entry.title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                // Two lines: a long title ("Mike Judge's Beavis and
+                // Butt-Head") should be readable, and the row is tall enough
+                // for it because the poster sets the height.
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                entry.subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }
