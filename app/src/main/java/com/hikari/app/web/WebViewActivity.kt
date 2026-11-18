@@ -1596,7 +1596,9 @@ class WebViewActivity : ComponentActivity() {
                 // idempotent and is also injected on finish in case the very
                 // first document was not ready here.
                 if (!autoCloseWhenCloudflarePassed && !addonConfig) {
+                    runCatching { view?.evaluateJavascript(COMPAT_JS, null) }
                     runCatching { view?.evaluateJavascript(POPUP_GUARD_JS, null) }
+                    runCatching { view?.evaluateJavascript(SNIFFER_JS, null) }
                 }
                 // A measured, sustained video is the only thing allowed to keep
                 // the screen awake; clear the stale flag from the last page.
@@ -1624,6 +1626,9 @@ class WebViewActivity : ComponentActivity() {
                 loadPagePreview(view)
                 view?.evaluateJavascript(AD_CLEAN_JS, null)
                 view?.evaluateJavascript(PROMO_CLEAN_JS, null)
+                if (!autoCloseWhenCloudflarePassed && !addonConfig) {
+                    runCatching { view?.evaluateJavascript(SNIFFER_JS, null) }
+                }
                 if (!autoCloseWhenCloudflarePassed && !addonConfig) {
                     view?.evaluateJavascript(POPUP_GUARD_JS, null)
                 }
@@ -1706,6 +1711,57 @@ class WebViewActivity : ComponentActivity() {
         })
 
         webView.webChromeClient = object : WebChromeClient() {
+            /**
+             * Page dialogs that appear on their own.
+             *
+             * A video site fires `alert()`/`confirm()` from load scripts and
+             * from "are you still watching" timers; each one is a modal over
+             * the page that the user did not ask for, and one of them ("This
+             * page says: …") can wedge a player that only dismisses on OK. A
+             * dialog with no recent touch behind it is answered for the user;
+             * one they triggered keeps the platform dialog.
+             */
+            override fun onJsAlert(
+                view: WebView?,
+                url: String?,
+                message: String?,
+                result: android.webkit.JsResult?,
+            ): Boolean {
+                if (!recentUserGesture() || videoPlaying) {
+                    dbg("suppress-alert " + url)
+                    result?.confirm()
+                    return true
+                }
+                return false
+            }
+
+            override fun onJsConfirm(
+                view: WebView?,
+                url: String?,
+                message: String?,
+                result: android.webkit.JsResult?,
+            ): Boolean {
+                if (!recentUserGesture() || videoPlaying) {
+                    dbg("suppress-confirm " + url)
+                    result?.cancel()
+                    return true
+                }
+                return false
+            }
+
+            override fun onJsBeforeUnload(
+                view: WebView?,
+                url: String?,
+                message: String?,
+                result: android.webkit.JsResult?,
+            ): Boolean {
+                if (!recentUserGesture() || videoPlaying) {
+                    result?.confirm()
+                    return true
+                }
+                return false
+            }
+
             override fun onCloseWindow(window: WebView?) {
                 // Prevent ad scripts / popunders from closing the main WebView via window.close()
                 if (window === popupChild) {
@@ -2820,6 +2876,11 @@ class WebViewActivity : ComponentActivity() {
      */
     private val videoScores = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
+    /** Request headers the page's own fetch/XHR used for a source, keyed by
+     *  URL (reported by SNIFFER_JS). Merged into the player's hand-off so a
+     *  CDN sees exactly what its own page sent. */
+    private val sniffHeaders = java.util.concurrent.ConcurrentHashMap<String, Map<String, String>>()
+
     private fun maybeAddVideo(url: String) {
         // Verification view never offers video.
         if (autoCloseWhenCloudflarePassed) return
@@ -3310,15 +3371,20 @@ class WebViewActivity : ComponentActivity() {
             // DASH is left direct: its MPD points at relative segment
             // templates the player resolves itself, which the proxy would have
             // to parse and rewrite. HLS is rewritten, so it goes through.
+            val effectiveHeaders = HashMap<String, String>()
+            sniffHeaders[u]?.let { effectiveHeaders.putAll(it) }
+            effectiveHeaders.putAll(headerMap)
             val proxied = if (u.contains(".mpd", true)) {
                 null
             } else {
-                runCatching { com.hikari.app.player.StreamProxy.register(u, headerMap) }.getOrNull()
+                runCatching {
+                    com.hikari.app.player.StreamProxy.register(u, effectiveHeaders)
+                }.getOrNull()
             }
             val headers = JSONObject()
             // A proxied source needs no headers of its own (the proxy adds the
             // page's); a direct one still does.
-            if (proxied == null) headerMap.forEach { (k, v) -> headers.put(k, v) }
+            if (proxied == null) effectiveHeaders.forEach { (k, v) -> headers.put(k, v) }
             sources.put(
                 JSONObject()
                     .put("name", "Web · ${urlHost(u)}")
@@ -3364,6 +3430,38 @@ class WebViewActivity : ComponentActivity() {
             runCatching { block() }.onFailure {
                 android.util.Log.w("HikariBridge", "$tag failed (swallowed)", it)
             }.getOrNull()
+
+        /**
+         * A media URL the page's own JS saw (SNIFFER_JS): `{url, kind,
+         * contentType, poster, headers}`. The headers are the ones that page
+         * actually sent, which the player hand-off reuses.
+         */
+        @android.webkit.JavascriptInterface
+        fun sniff(payload: String) {
+            safe("sniff") {
+                val o = org.json.JSONObject(payload)
+                val url = o.optString("url")
+                if (!url.startsWith("http://") && !url.startsWith("https://")) return@safe
+                val headers = HashMap<String, String>()
+                o.optJSONObject("headers")?.let { h ->
+                    h.keys().forEach { key ->
+                        val v = h.optString(key)
+                        if (v.isNotBlank() && key.isNotBlank()) headers[key] = v
+                    }
+                }
+                if (headers.isNotEmpty()) sniffHeaders[url] = headers
+                val poster = o.optString("poster")
+                if (pagePreviewUrl == null && poster.startsWith("http")) pagePreviewUrl = poster
+                val contentType = o.optString("contentType").lowercase()
+                val looksMedia = VIDEO_URL_RE.containsMatchIn(url) ||
+                    contentType.contains("video/") ||
+                    contentType.contains("mpegurl") ||
+                    contentType.contains("dash")
+                if (!looksMedia) return@safe
+                if (isAdVideoCandidate(url) || isStreamFragment(url)) return@safe
+                maybeAddVideo(url)
+            }
+        }
 
         @android.webkit.JavascriptInterface
         fun stuckVideo(url: String) {
@@ -4002,6 +4100,173 @@ class WebViewActivity : ComponentActivity() {
          * selectors, which is what made blocked elements "come back".
          */
         /**
+         * Watches the page's OWN network calls (fetch / XHR), its DOM and the
+         * performance timeline, and reports every media URL to the bridge.
+         *
+         * Why it earns its keep over `shouldInterceptRequest`: an SPA can hold
+         * a stream in JavaScript (a fetch response it parses, a URL assembled
+         * at runtime) without ever issuing a request the WebView exposes as a
+         * resource, and it knows the headers it used. That is the PlayBridge /
+         * Nuvio `sniffer.js` idea, reduced to what Hikari's hand-off needs.
+         */
+        private val SNIFFER_JS = """
+            (function(){
+              if(window.__hikariSniffer)return;
+              window.__hikariSniffer=true;
+              var seen={};
+              function poster(){
+                try{
+                  var m=document.querySelector('meta[property="og:image"],meta[name="twitter:image"]');
+                  return m&&m.content?m.content:'';
+                }catch(e){return ''}
+              }
+              function report(url,kind,headers,contentType){
+                try{
+                  if(!url||typeof url!=='string'||url.indexOf('http')!==0)return;
+                  var key=kind+'|'+url;
+                  if(seen[key])return;
+                  seen[key]=true;
+                  if(window.HikariBridge&&window.HikariBridge.sniff){
+                    window.HikariBridge.sniff(JSON.stringify({
+                      url:url,kind:kind||'',contentType:contentType||'',
+                      poster:poster(),headers:headers||{}
+                    }));
+                  }
+                }catch(e){}
+              }
+              function extract(text){
+                if(!text||typeof text!=='string'||text.length>524288)return;
+                try{
+                  var cleaned=text.replace(/\\\//g,'/');
+                  var re=/https?:\/\/[^\s"'<>]+?\.(?:m3u8|mpd|mp4|webm|mkv|mov|m4v)(?:\?[^\s"'<>]*)?/gi;
+                  var m,count=0;
+                  while((m=re.exec(cleaned))&&count<25){report(m[0],'page',{},'');count++}
+                }catch(e){}
+              }
+              function scanPage(){
+                try{
+                  try{
+                    if(document.getElementsByTagName('*').length<4000){
+                      extract(document.documentElement?document.documentElement.innerHTML:'');
+                    }
+                  }catch(e){}
+                  var links=document.querySelectorAll('video source,video,a[href],link[rel="preload"]');
+                  for(var i=0;i<links.length&&i<120;i++){
+                    var el=links[i];
+                    var u=el.currentSrc||el.src||el.href||el.getAttribute('data-src')||'';
+                    if(u)report(u,'dom',{},'');
+                  }
+                  var metas=document.querySelectorAll('meta[property="og:video"],meta[property="og:video:url"],meta[name="twitter:player:stream"]');
+                  for(var j=0;j<metas.length;j++){if(metas[j].content)report(metas[j].content,'dom',{},'')}
+                  try{
+                    var entries=performance.getEntriesByType('resource')||[];
+                    for(var k=0;k<entries.length&&k<400;k++){
+                      var n=entries[k].name||'';
+                      if(/\.(m3u8|mpd|mp4|webm)(\?|${'$'})/i.test(n))report(n,'perf',{},'');
+                    }
+                  }catch(e){}
+                }catch(e){}
+              }
+              try{
+                var origFetch=window.fetch;
+                if(origFetch){
+                  window.fetch=function(input,init){
+                    var url=typeof input==='string'?input:(input&&input.url)||'';
+                    var headers={};
+                    try{
+                      if(init&&init.headers){
+                        if(init.headers.forEach)init.headers.forEach(function(v,k){headers[k]=v});
+                        else for(var k in init.headers)headers[k]=init.headers[k];
+                      }
+                    }catch(e){}
+                    report(url,'fetch',headers,'');
+                    var promise=origFetch.apply(window,arguments);
+                    try{
+                      promise.then(function(res){
+                        var ct=(res&&res.headers&&res.headers.get('content-type'))||'';
+                        report(url,'fetch',headers,ct);
+                        if(/text|json|javascript|mpegurl|dash/i.test(ct)){
+                          res.clone().text().then(extract).catch(function(){});
+                        }
+                      }).catch(function(){});
+                    }catch(e){}
+                    return promise;
+                  };
+                }
+              }catch(e){}
+              try{
+                var XHR=window.XMLHttpRequest;
+                if(XHR){
+                  var open=XHR.prototype.open,send=XHR.prototype.send,setH=XHR.prototype.setRequestHeader;
+                  XHR.prototype.open=function(method,url){this.__hkUrl=url;this.__hkHeaders={};return open.apply(this,arguments)};
+                  XHR.prototype.setRequestHeader=function(k,v){
+                    try{this.__hkHeaders=this.__hkHeaders||{};this.__hkHeaders[k]=v}catch(e){}
+                    return setH.apply(this,arguments);
+                  };
+                  XHR.prototype.send=function(body){
+                    var xhr=this;
+                    try{
+                      report(xhr.__hkUrl,'xhr',xhr.__hkHeaders||{},'');
+                      xhr.addEventListener('load',function(){
+                        try{
+                          var ct=xhr.getResponseHeader('content-type')||'';
+                          report(xhr.__hkUrl,'xhr',xhr.__hkHeaders||{},ct);
+                          if(/text|json|javascript|mpegurl|dash/i.test(ct)){
+                            var t=xhr.responseText||'';
+                            if(t.length<524288)extract(t);
+                          }
+                        }catch(e){}
+                      });
+                    }catch(e){}
+                    return send.apply(this,arguments);
+                  };
+                }
+              }catch(e){}
+              scanPage();
+              try{new MutationObserver(scanPage).observe(document.documentElement,{childList:true,subtree:true});}catch(e){}
+              setInterval(scanPage,4000);
+            })();
+        """
+
+        /**
+         * Small document-start compatibility shims.
+         *
+         * Sites' own players test `window.chrome` (and a non-empty plugin
+         * list) as "is this a real browser", and refuse to initialise the
+         * player when the object is missing. WebView does not provide
+         * `window.chrome`, so a page that plays in Chrome can sit on a black
+         * rectangle here. The shims are deliberately inert: no fingerprint
+         * spoofing, no automation flags, nothing a normal browser would not
+         * answer.
+         *
+         * Notification prompts gain the same treatment: a page may only ask
+         * while the user is actually interacting with it, which is what
+         * browsers do and what stops the "allow notifications?" card that
+         * appears the instant a video page loads.
+         */
+        private val COMPAT_JS = """
+            (function(){
+              try{
+                if(!window.chrome)window.chrome={};
+                if(!window.chrome.runtime)window.chrome.runtime={};
+              }catch(e){}
+              try{
+                if(window.Notification&&Notification.requestPermission){
+                  var original=Notification.requestPermission.bind(Notification);
+                  Notification.requestPermission=function(){
+                    try{
+                      if(!(navigator.userActivation&&navigator.userActivation.isActive)){
+                        return Promise.resolve('denied');
+                      }
+                    }catch(e){}
+                    return original.apply(null,arguments);
+                  };
+                }
+              }catch(e){}
+            })();
+        """
+
+        /**
          * Hides full-screen AD UIs that live INSIDE the page.
          *
          * The request blocker can stop the ad's network traffic, but a site is
@@ -4070,11 +4335,100 @@ class WebViewActivity : ComponentActivity() {
                   window.__hikariPendingEl=null;
                 }
               }
+              // ---- adaptive relocation -------------------------------------
+              // A blocked element is identified by more than its CSS selector.
+              // Sites re-render constantly and the selector stops matching; the
+              // fingerprint below is the Scrapling idea, reduced to what a
+              // browser needs: tag, text, the identifying attributes, the short
+              // ancestor path and the parent. When the selector misses, the
+              // best candidate above 55% is hidden instead, so a block survives
+              // a redesign without ever guessing wildly.
+              function hkText(e){
+                try{return (e.innerText||e.textContent||'').replace(/\s+/g,' ').trim().slice(0,120)}catch(x){return ''}
+              }
+              function hkFingerprint(e){
+                try{
+                  var attrs={};
+                  ['class','id','href','src','role','data-testid'].forEach(function(a){
+                    var v=e.getAttribute&&e.getAttribute(a);
+                    if(v)attrs[a]=String(v).slice(0,120);
+                  });
+                  var path=[];var n=e;
+                  for(var i=0;i<4&&n&&n.nodeType===1;i++){
+                    path.unshift(n.tagName.toLowerCase());n=n.parentElement;
+                  }
+                  return {
+                    tag:e.tagName.toLowerCase(),
+                    text:hkText(e),
+                    attrs:attrs,
+                    path:path.join('>'),
+                    parent:e.parentElement?e.parentElement.tagName.toLowerCase():'',
+                    parentClass:e.parentElement?String(e.parentElement.className||'').slice(0,80):''
+                  };
+                }catch(x){return null}
+              }
+              function hkSim(a,b){
+                if(!a||!b)return 0;
+                var x=String(a).toLowerCase(),y=String(b).toLowerCase();
+                if(x===y)return 1;
+                if(x.indexOf(y)>=0||y.indexOf(x)>=0)return 0.8;
+                var A=x.split(/\s+/),B=y.split(/\s+/),hit=0;
+                for(var i=0;i<A.length;i++)if(B.indexOf(A[i])>=0)hit++;
+                return A.length?hit/A.length:0;
+              }
+              function hkScore(fp,e){
+                var c=hkFingerprint(e);if(!c)return 0;
+                var total=0,checks=0;
+                total+=(fp.tag===c.tag?1:0);checks++;
+                if(fp.text){total+=hkSim(fp.text,c.text);checks++}
+                var keys=Object.keys(fp.attrs||{});
+                if(keys.length){
+                  var hit=0;
+                  for(var i=0;i<keys.length;i++){
+                    hit+=hkSim(fp.attrs[keys[i]],(c.attrs||{})[keys[i]]||'');
+                  }
+                  total+=hit/keys.length;checks++;
+                }
+                total+=hkSim(fp.path,c.path);checks++;
+                if(fp.parent){
+                  total+=hkSim(fp.parent,c.parent);checks++;
+                  total+=hkSim(fp.parentClass,c.parentClass);checks++;
+                }
+                return checks?total/checks:0;
+              }
+              function hkAdaptiveHide(sel){
+                var raw=null;
+                try{raw=localStorage.getItem('hk_fp_'+sel)}catch(e){}
+                if(!raw)return false;
+                var fp=null;
+                try{fp=JSON.parse(raw)}catch(e){return false}
+                if(!fp)return false;
+                var best=null,bestScore=0;
+                var cands=document.querySelectorAll('div,section,aside,ins,iframe,img,a');
+                for(var i=0;i<cands.length&&i<4000;i++){
+                  var e=cands[i];
+                  if(!e||!e.parentNode)continue;
+                  if(e.querySelector&&e.querySelector('video,audio'))continue;
+                  var sc=hkScore(fp,e);
+                  if(sc>bestScore){bestScore=sc;best=e}
+                }
+                if(best&&bestScore>=0.55){
+                  if(!best.__hikariBlocked){
+                    best.__hikariBlocked=true;
+                    window.__hikariBlockRegistry.push({el:best,sel:sel});
+                  }
+                  best.style.setProperty('display','none','important');
+                  best.style.setProperty('pointer-events','none','important');
+                  return true;
+                }
+                return false;
+              }
               function hideAll(){
                 var sels=window.__hikariBlocks||[];
                 for(var i=0;i<sels.length;i++){
                   try{
                     var els=document.querySelectorAll(sels[i]);
+                    if(!els.length){hkAdaptiveHide(sels[i]);continue}
                     for(var j=0;j<els.length;j++){
                       var e=els[j];
                       if(!e||!e.parentNode)continue;
@@ -4083,6 +4437,14 @@ class WebViewActivity : ComponentActivity() {
                       if(!e.__hikariBlocked){
                         e.__hikariBlocked=true;
                         window.__hikariBlockRegistry.push({el:e,sel:sels[i]});
+                        // Remember what this element looked like the first time,
+                        // so the fallback has something to score against.
+                        try{
+                          if(!localStorage.getItem('hk_fp_'+sels[i])){
+                            var fp=hkFingerprint(e);
+                            if(fp)localStorage.setItem('hk_fp_'+sels[i],JSON.stringify(fp));
+                          }
+                        }catch(err){}
                       }
                       e.style.setProperty('display','none','important');
                       e.style.setProperty('pointer-events','none','important');

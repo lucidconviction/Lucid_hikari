@@ -131,7 +131,16 @@ object StreamProxy {
             requestHeaders["range"]?.let { builder.header("Range", it) }
             if (method == "HEAD") builder.head()
 
-            val response = runCatching { client.newCall(builder.build()).execute() }.getOrNull()
+            val request = builder.build()
+            var response = runCatching { client.newCall(request).execute() }.getOrNull()
+            // One retry on a 5xx or a closed connection: CDN edges fail
+            // transiently, and a hand-off that gives up on the first blip
+            // looks like "the player can't open this source".
+            if (response == null || response.code >= 500) {
+                response?.close()
+                runCatching { Thread.sleep(250) }
+                response = runCatching { client.newCall(request).execute() }.getOrNull()
+            }
             if (response == null) {
                 writeEmpty(output, 502)
                 return
