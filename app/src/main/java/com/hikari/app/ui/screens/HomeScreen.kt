@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Favorite
@@ -122,6 +123,7 @@ import com.hikari.app.data.Collection
 import com.hikari.app.data.CollectionFolder
 import com.hikari.app.data.ContentRepository
 import com.hikari.app.data.CoverKinds
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import com.hikari.app.data.MediaItem
 import com.hikari.app.data.MediaType
@@ -152,6 +154,7 @@ import com.hikari.app.ui.ProviderFlags
 import com.hikari.app.ui.ProviderPacks
 import com.hikari.app.ui.rememberVisibleItems
 import com.hikari.app.ui.components.ContinueWatchingRow
+import com.hikari.app.ui.components.HikariSectionHeader
 import com.hikari.app.ui.components.EmptyState
 import com.hikari.app.ui.components.GlassDialog
 import com.hikari.app.ui.components.GlassSearchField
@@ -1203,6 +1206,23 @@ fun HomeScreen(nav: NavHostController) {
                         maxEntries = 6,
                     )
                 }
+            }
+            // Streaming services: one tile per installed extension/addon,
+            // directly under Continue Watching and always present (the VyseTV
+            // row). It is the shortest path from "open Hikari" to "that site",
+            // which the header chip's dropdown cannot be on a phone.
+            item(key = "streaming-services") {
+                StreamingServicesRow(
+                    onOpen = { platform ->
+                        Routes.safeNavigate(
+                            nav,
+                            Routes.tmdbGridSpec(
+                                com.hikari.app.data.StreamingPlatforms.specFor(platform).encode(),
+                                platform.name,
+                            ),
+                        )
+                    },
+                )
             }
             // Genres sit after Resume, not between the hero and the first
             // shelf: a viewer with something in progress wants that first, and
@@ -4305,6 +4325,101 @@ private fun DonationBanner(onDonate: () -> Unit) {
                         fontWeight = FontWeight.SemiBold,
                         color = accent,
                         maxLines = 1,
+                    )
+                }
+            }
+        }
+    }
+}
+
+
+/**
+ * "Streaming services" — the VyseTV row, with real platforms (Netflix, Hulu,
+ * Disney+…) in place of Hikari's extensions.
+ *
+ * A viewer thinks in services, not in scrapers, so the tiles are the services
+ * themselves and each one opens a TMDB discover grid filtered to that
+ * platform's catalogue. The artwork comes from TMDB's watch-provider
+ * catalogue — the same brand logos VyseTV draws — and falls back to the
+ * service's favicon, then to its initial, so a tile is never an empty square.
+ *
+ * Always present: the list is static, and a viewer with no extensions yet is
+ * exactly who benefits from "show me what is on Netflix".
+ */
+@Composable
+private fun StreamingServicesRow(
+    onOpen: (com.hikari.app.data.StreamingPlatforms.Platform) -> Unit,
+) {
+    val tv = TvMode.current()
+    val tile = if (tv) 96.dp else 72.dp
+    // VyseTV's full featured set (36 services), starting from the offline
+    // names so the row is populated on the first frame; the catalogue then
+    // replaces them with TMDB's names and artwork.
+    var platforms by remember { mutableStateOf(com.hikari.app.data.StreamingPlatforms.fallback()) }
+
+    LaunchedEffect(Unit) {
+        platforms = runCatching { com.hikari.app.data.StreamingPlatforms.catalogue() }
+            .getOrDefault(platforms)
+    }
+
+    Column(Modifier.padding(top = if (tv) 20.dp else 16.dp)) {
+        HikariSectionHeader(
+            title = tr("Streaming services"),
+            subtitle = tr("What is on each service"),
+        )
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            items(platforms, key = { it.id }) { platform ->
+                // TMDB's own provider logo is the service's real brand mark;
+                // the initial underneath is the fallback, so a tile is never
+                // an empty square.
+                val iconModel = platform.logoPath?.let { "https://image.tmdb.org/t/p/w185" + it }
+                Column(
+                    Modifier
+                        .width(tile + 20.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .clickable { onOpen(platform) }
+                        .padding(vertical = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Box(
+                        Modifier
+                            .size(tile)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .border(
+                                1.dp,
+                                MaterialTheme.colorScheme.outline.copy(alpha = 0.18f),
+                                RoundedCornerShape(18.dp),
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            platform.name.take(1).uppercase(),
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        if (iconModel != null) {
+                            AsyncImage(
+                                model = iconModel,
+                                contentDescription = platform.name,
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(if (tv) 12.dp else 9.dp),
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        platform.name,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
                     )
                 }
             }
