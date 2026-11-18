@@ -4723,6 +4723,36 @@ fun searchExceptionOnFlow(): Flow<Boolean> =
         return true
     }
 
+    /**
+     * The bulk form of [seedCs3Repo]: one DataStore write for a whole default
+     * list instead of one per repo.
+     *
+     * The shipped list is 43 repos, and 43 sequential upserts read and re-encode
+     * the entire repo list each time — on a cold start that is tens of seconds
+     * of background writing and the Extensions screen fills in piecemeal. The
+     * same merge in one transform is a single write, and the screen sees the
+     * finished list once.
+     *
+     * A repo the user explicitly removed is skipped, exactly as in
+     * [seedCs3Repo], and a repo already present is left alone (the stored entry
+     * may carry a learnt icon/name the seed version does not have).
+     */
+    suspend fun seedCs3Repos(list: List<Cs3Repo>) {
+        if (list.isEmpty()) return
+        val removed = removedRepoKeys()
+        write("CS3_REPOS") { prefs ->
+            val merged = parseRepos(prefs[K.CS3_REPOS]).toMutableList()
+            val known = merged.mapTo(HashSet()) { repoId(it.url) }
+            for (r in list) {
+                val key = repoId(r.url)
+                if (key in removed || key in known) continue
+                known.add(key)
+                merged.add(r)
+            }
+            prefs[K.CS3_REPOS] = encodeRepos(dedupeRepos(merged))
+        }
+    }
+
     private suspend fun upsertRepo(r: Cs3Repo) {
         val key = repoId(r.url)
         val existing = repos().firstOrNull { repoId(it.url) == key }

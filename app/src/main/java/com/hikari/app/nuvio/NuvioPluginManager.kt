@@ -48,9 +48,34 @@ object NuvioPluginManager {
             "Nuvio providers by Gowaru (French-oriented)",
         ),
         Triple(
-            "https://raw.githubusercontent.com/phisher98/phisher-nuvio-providers/main/manifest.json",
-            "Phisher's Nuvio Repo",
-            "Nuvio providers by Phisher98",
+            "https://raw.githubusercontent.com/D3adlyRocket/All-in-One-Nuvio/main/manifest.json",
+            "All-in-One-Nuvio",
+            "English/Hindi nuvio providers in one manifest",
+        ),
+        Triple(
+            "https://raw.githubusercontent.com/michat88/nuvio-providers/main/manifest.json",
+            "Michat88 Repo",
+            "Community nuvio providers",
+        ),
+        Triple(
+            "https://raw.githubusercontent.com/Abinanthankv/NuvioRepo/master/manifest.json",
+            "Spidey's Providers",
+            "Community nuvio providers (Spidey)",
+        ),
+        Triple(
+            "https://raw.githubusercontent.com/saimuelbr/saimuel-nuvio-repo/main/manifest.json",
+            "saimuel-nuvio-repo",
+            "Community nuvio providers (saimuel)",
+        ),
+        Triple(
+            "https://raw.githubusercontent.com/mooncrown04/nuviotr/main/manifest.json",
+            "MoOnCrOwN-NUVİO",
+            "Turkish nuvio providers",
+        ),
+        Triple(
+            "https://raw.githubusercontent.com/KennethJYS/Nuvio-Providers-Latino/main/manifest.json",
+            "Latino Providers",
+            "Latin-American nuvio providers",
         ),
         Triple(
             "https://plugin.eclipsia.dpdns.org/manifest.json",

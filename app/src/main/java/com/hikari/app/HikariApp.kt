@@ -99,10 +99,16 @@ class HikariApp : Application() {
         var mainActivity: MainActivity? = null
 
         /**
-         * Extension repositories added on the very first run, so a fresh install
-         * can install extensions without pasting a URL: the Hikari (.hiki) repo
-         * and the CloudStream repo. Seeded once — see [AppStore.seededRepos] —
-         * so removing one afterwards sticks.
+         * Every extension repository the app ships with, seeded once on a
+         * fresh install (see the first-run block below). This is the owner's
+         * own repo list from their daily driver, promoted to the default: a
+         * fresh install opens Extensions onto a full catalogue instead of two
+         * starter repos.
+         *
+         * It is a SEED, not a fixture: [AppStore.seedCs3Repo] skips any repo
+         * the user has explicitly removed, and the one-way `seededRepos` flag
+         * means an existing install is never retro-fitted with the list — a
+         * user who pruned their Extensions screen keeps it pruned.
          */
         private val DEFAULT_EXTENSION_REPOS = listOf(
             Cs3Repo(
@@ -117,6 +123,273 @@ class HikariApp : Application() {
                 description = "Anime4i CloudStream extensions",
                 kind = RepoKind.CS3,
             ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/self-similarity/MegaRepo/builds/repo.json",
+                name = "Mega repository",
+                description = "Add all repositories easily.",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/recloudstream/extensions/master/repo.json",
+                name = "Cloudstream providers repository",
+                description = "Cloudstream extension Repository",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/saimuelbr/saimuelrepo/refs/heads/main/builds/repo.json",
+                name = "saimuel repo",
+                description = "saimuelbr repository",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/KSHITIJ8473/raghav/builds/repo.json",
+                name = "raghav repo",
+                description = "Raghav CloudStream extensions(mostly anime)",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/mouradchaouche/cloudstream-frenchrepo/main/repo.json",
+                name = "AMSC French",
+                description = "Updating the Cloudstream French Provider.",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/errorcode26/Ayu-CloudStream-Games/builds/repo.json",
+                name = "Ayu CloudStream Games",
+                description = "Interactive retro emulation runtimes and classic homebrew engine plugins for CloudStream 3.",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/yorik100/Cloudstream/refs/heads/builds/repo.json",
+                name = "French providers repository",
+                description = "AfterDark, Frembed, Flemmix/Wiflix & Xalaflix",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/FlummoxGamer/FLUMMOX-Repo/builds/repo.json",
+                name = "FLUMMOX Repo",
+                description = "Movies, TV Series, Anime",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/CranberrySoup/AniyomiCompatExtension/master/repo.json",
+                name = "Aniyomi Compat",
+                description = "Use Aniyomi Extensions in CloudStream!",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/Gian-Fr/ItalianProvider/builds/repo.json",
+                name = "Italian providers repository",
+                description = "Cloudstream Italian Plugin Repository",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/CakesTwix/cloudstream-extensions-uk/master/repo.json",
+                name = "CakesTwix Providers Repository Codeberg",
+                description = "Cloudstream Ukraine Plugin Repository",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/techtanic/SkillShare-Repo/builds/repo.json",
+                name = "SkillShare-Repo",
+                description = "Cloudstream SkillShare Plugin Repository",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/SaurabhKaperwan/CSX/builds/CS.json",
+                name = "Megix Repo(Hindi & English)",
+                description = "Hindi and English",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/phisher98/cloudstream-extensions-phisher/refs/heads/builds/repo.json",
+                name = "Phisher Repo",
+                description = "Phisher Repository",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/NivinCNC/CNCVerse-Cloud-Stream-Extension/refs/heads/builds/CNC.json",
+                name = "CNC Repo(All Language)",
+                description = "All Language Contents",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/Luna712/Luna712-CloudStream-Extensions/master/repo.json",
+                name = "Luna712's CloudStream extension repository",
+                description = "Luna712's CloudStream Extension Repository",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/redowan99/Redowan-CloudStream/master/repo.json",
+                name = "Redowan's BDIX repository",
+                description = "Redowan's BDIX repository",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/Abodabodd/re-3arabi/refs/heads/main/repo",
+                name = "3rabi عربي",
+                description = "مشاهدة الافلام والمسلسلات تجربة خالية من الاعلانات",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/DieGon7771/ItaliaInStreaming/builds/repo.json",
+                name = "DieGon Repository",
+                description = "Repository con provider prevalentemente italiani e alcuni internazionali",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/Bnyro/GermanProviders/refs/heads/master/repo.json",
+                name = "German providers repository",
+                description = "German providers",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://gitlab.com/tearrs/cloudstream-vietnamese/-/raw/main/repo.json",
+                name = "Vietnamese Extension",
+                description = "https://t.me/cloudstream_extension_vn",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/TeKuma25/IndoStream/builds/repo.json",
+                name = "Indostream Repo",
+                description = "Cloudstream Indonesia Repo",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/Kraptor123/cs-Karma/refs/heads/master/repo.json",
+                name = "cs-karma",
+                description = "Plugins Across All Categories and Languages.",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/redblacker8/storm-ext/refs/heads/builds/repo.json",
+                name = "Storm-ext Fork by redblacker8",
+                description = "A Storm-ext fork with the redblacker8 changes.",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/rockhero1234/cinephile/refs/heads/builds/repo.json",
+                name = "Cinephile",
+                description = "Your Cloudstream Repo",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/med1245/cartoonyrepo/builds/repo.json",
+                name = "Cartoony Repo",
+                description = "Arabic Cartoony provider",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/Reflex755/ReflexRepo/refs/heads/builds/repo.json",
+                name = "Reflex Repo",
+                description = "Reflex Repository",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/RVRBEAST76/allforu-repo/builds/repo.json",
+                name = "AllForU",
+                description = "MovieBox, Netflix, Hotstar & Prime Video — all in one",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/Faisal0786/Desi/main/repo.json",
+                name = "Desi Extensions",
+                description = "Multi-Language Providers (OttSource, NetMirror)",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/doGior/doGiorsHadEnough/refs/heads/builds/repo.json",
+                name = "doGior's Had Enough",
+                description = "Repository with mostly italian providers and some international one",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/lucidconviction/RdNutz-Repo/master/repo.json",
+                name = "RDNUTZ Extensions",
+                description = "Extended CloudStream providers for raw/shocking video content from Crazyshit, LiveGore, Worldstar Hip Hop, and more.",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/sagemoon1996/cloudstream-repo/builds/repo.json",
+                name = "SM-ARB",
+                description = "CloudStream plugins by sagemoon1996",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://github.com/aslafy-z/cloudstream-plugins/releases/download/catalog-stable/repo.json",
+                name = "aslafy-z CloudStream plugins - Stable",
+                description = "Validated plugin builds.",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://cs.eclipsia.dpdns.org/repo.json",
+                name = "Eclipsia",
+                description = "Curated Collection of Providers",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://git.disroot.org/ayza/FStream/raw/branch/main/repo.json",
+                name = "ayza/FStream",
+                description = "",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/Abodabodd/re-3arabi/refs/heads/main/repo.json",
+                name = "3rabi عربي",
+                description = "مشاهدة الافلام والمسلسلات تجربة خالية من الاعلانات",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/dipender98/Indflix/main/repo.json",
+                name = "Indflix",
+                description = "Fast and Multi-Language Provider",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/kotlinsyd/plaviohd/builds/repo.json",
+                name = "PlavioHD",
+                description = "PlavioHD inside CloudStream — one plugin per source. Made by Kotlinsyd",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/sealinwater/north/builds/repo.json",
+                name = "North",
+                description = "North • Deep Blue Nordic Cloudstream Extension Repository (by sealinwater)",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/F0Rextasy/bigbullapp-cs/master/repo.json",
+                name = "BigBullApp",
+                description = "Cloudstream için Türkçe film, dizi, anime, çizgi film ve canlı TV eklentileri",
+                kind = RepoKind.CS3,
+            ),
+            Cs3Repo(
+                url = "https://raw.githubusercontent.com/Mamun015/mamun015-cloudstream-bdix/master/repo.json",
+                name = "🇧🇩 Mamun015 BDIX Repository",
+                description = "BDIX and Bangladeshi sources for Cloudstream: DhakaFlix, Circle FTP, Dflix, ICC FTP, MovieNestBD. The BDIX plugins need a BDIX line; MovieNestBD works on any network.",
+                kind = RepoKind.CS3,
+            ),
+        )
+
+        /**
+         * Stremio addons seeded on a fresh install, the owner's daily set.
+         * Each one is added as a provider row only when it is not already
+         * present under any spelling of its base URL (see
+         * StremioAddon.providerIdFor), and the one-way `stremioAddonSeeded`
+         * flag keeps an existing install from being retro-fitted.
+         *
+         * PenguPlay is deliberately NOT here: its manifest URL carries the
+         * owner's own `auth_token`, which must never ship to other users.
+         * Add it by hand in Extensions if it is wanted on a device.
+         */
+        private val DEFAULT_STREMIO_ADDONS = listOf(
+            "SubDL" to "https://api3.subdl.com/manifest.json",
+            "🏆 Nuvio Live Sports" to "https://nuviosports.xyz/eyJ0aW1lem9uZSI6IkFtZXJpY2EvTG9zX0FuZ2VsZXMiLCJyZXBsYXlGaWx0ZXIiOiJtYWluc3RyZWFtIiwic3BvcnRzIjoiZm9vdGJhbGwsYmFza2V0YmFsbCxhbWVyaWNhbl9mb290YmFsbCxtb3RvcnNwb3J0LGhvY2tleSxiYXNlYmFsbCxydWdieSxjb2xsZWdlLG1tYSx0ZW5uaXMsb3RoZXIifQ/manifest.json",
+            "Sports Streams" to "https://sports.highfly.to/eyJpbmNsdWRlU3BvcnRzIjpbImJhc2tldGJhbGwiLCJhbWVyaWNhbi1mb290YmFsbCIsImhvY2tleSIsImZpZ2h0IiwibW90b3Itc3BvcnRzIiwiYmFzZWJhbGwiLCJ0ZW5uaXMiLCJydWdieSIsImdvbGYiLCJvdGhlciJdfQ/manifest.json",
+            "PlavioHD" to "https://hd.plavio.site/c/eyJzb3VyY2VzIjpbIkhESHViIiwiTW92aWVCb3giLCJDaW5lem8iLCJWaWRsaW5rIiwiVmlkemVlIiwiVmlkQ29yZSIsIkJpbmdyIiwiTW92aWVzNHUiLCJEZXNpRmxpeCIsIlNwYWNlRG9tIiwiTXVsdGlNZWRpYSIsIkFuaVBtIiwiTW92aWVzSHVudCIsIjRraGRodWIiLCJPbmVUb3VjaFRWIiwiR2VvTW92aWVzIiwiVmlkcm9jayIsIkFuaXdhdGNoRml0IiwiQW5pa290byIsIk1vdnkiLCJXYXkyTW92aWVzIiwiTGl2ZVRWIl0sInBjbG91ZCI6ZmFsc2UsInEiOlsiMjE2MHAiLCIxMDgwcCIsIjcyMHAiXSwiZHluYW1pY1JhbmdlIjpbIlNEUiIsIkhEUiIsIlVua25vd24iXSwiY2F0IjpbIkhvbGx5d29vZCIsIkJvbGx5d29vZCIsIkFuaW1lIiwiU291dGggSW5kaWFuIiwiUHVuamFiaSIsIlBha2lzdGFuaSIsIktvcmVhbiIsIkNoaW5lc2UiLCJUdXJraXNoIl0sInNvcnRNb2RlIjoicXVhbGl0eSIsInRpdGxlX2Zvcm1hdCI6ImRlZmF1bHQifQ/manifest.json",
+            "HdHub" to "https://hdhub.thevolecitor.qzz.io/eyJ0b3Jib3giOiJ1bnNldCIsInF1YWxpdGllcyI6IjIxNjBwLDEwODBwLDcyMHAiLCJzb3J0IjoiYXNjIiwibXEiOjUsIm1wIjo1fQ/manifest.json",
+            "111477 stremio" to "https://st.111477.xyz/config/aHR0cHM6Ly9hLjExMTQ3Ny54eXov/manifest.json",
+            "Sitcom Catalogs" to "https://dev.nebulawp.org/stremio/sitcoms-addon/manifest.json",
         )
     }
 
@@ -785,7 +1058,7 @@ class HikariApp : Application() {
             // so a user who removes one doesn't get it re-added every launch.
             runCatching {
                 if (!store.seededRepos()) {
-                    for (r in DEFAULT_EXTENSION_REPOS) store.addCs3Repo(r)
+                    store.seedCs3Repos(DEFAULT_EXTENSION_REPOS)
                     store.markReposSeeded()
                 }
             }
@@ -800,21 +1073,23 @@ class HikariApp : Application() {
             // StremioAddon.providerIdFor).
             runCatching {
                 if (!store.stremioAddonSeeded()) {
-                    val url = com.hikari.app.providers.StremioAddon.DEFAULT_ADDON_URL
-                    val id = com.hikari.app.providers.StremioAddon.providerIdFor(url)
-                    val present = store.providers().any { p ->
-                        p.type == com.hikari.app.data.ProviderType.STREMIO &&
-                            com.hikari.app.providers.StremioAddon.providerIdFor(p.url) == id
-                    }
-                    if (!present) {
-                        store.addProvider(
-                            com.hikari.app.data.ProviderConfig(
-                                id = id,
-                                name = "SubDL",
-                                type = com.hikari.app.data.ProviderType.STREMIO,
-                                url = url,
-                            )
+                    // One write for the whole set (see DEFAULT_STREMIO_ADDONS).
+                    val existing = store.providers()
+                        .filter { it.type == com.hikari.app.data.ProviderType.STREMIO }
+                        .mapTo(HashSet()) { com.hikari.app.providers.StremioAddon.providerIdFor(it.url) }
+                    val additions = DEFAULT_STREMIO_ADDONS.mapNotNull { (name, url) ->
+                        val id = com.hikari.app.providers.StremioAddon.providerIdFor(url)
+                        if (id in existing) null else com.hikari.app.data.ProviderConfig(
+                            id = id,
+                            name = name,
+                            type = com.hikari.app.data.ProviderType.STREMIO,
+                            url = url,
                         )
+                    }
+                    if (additions.isNotEmpty()) {
+                        store.updateProviders { before ->
+                            before + additions.filter { c -> before.none { it.id == c.id } }
+                        }
                     }
                     store.markStremioAddonSeeded()
                 }

@@ -46,6 +46,16 @@ object ZangetsuPluginManager {
             "Zangetsu Providers",
             "The official Zangetsu repo (HiAnime, HDHub4u, VegaMovies, …)",
         ),
+        Triple(
+            "https://raw.githubusercontent.com/Spyhell/zangetsu-experiment-repo/main/index.json",
+            "Spyhell/zangetsu-experiment-repo",
+            "Community Zangetsu providers (experimental)",
+        ),
+        Triple(
+            "https://raw.githubusercontent.com/MewtwoOP1/Zangetsu-repo/main/index.json",
+            "MewtwoOP1/Zangetsu-repo",
+            "Community Zangetsu providers (MewtwoOP1)",
+        ),
     )
 
     fun providersDir(context: Context): File =
