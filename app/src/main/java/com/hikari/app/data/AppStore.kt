@@ -70,9 +70,11 @@ object MyStuffSection {
     const val LIBRARY = "library"
     const val HISTORY = "history"
     const val DOWNLOADS = "downloads"
+    /** Watchlists and personal lists from the signed-in trackers. */
+    const val TRACKERS = "trackers"
 
-    /** The three, in the order the strip draws them. */
-    val ALL = listOf(LIBRARY, HISTORY, DOWNLOADS)
+    /** The sections, in the order the strip draws them. */
+    val ALL = listOf(LIBRARY, HISTORY, DOWNLOADS, TRACKERS)
 }
 
 /** Unit separator: joins a provider folder's name to its ids inside the one
@@ -541,6 +543,11 @@ class AppStore(private val ctx: Context) {
         val MYSTUFF_LIBRARY = booleanPreferencesKey("mystuffLibrary")
         val MYSTUFF_HISTORY = booleanPreferencesKey("mystuffHistory")
         val MYSTUFF_DOWNLOADS = booleanPreferencesKey("mystuffDownloads")
+        /** The Trackers section of My Stuff (Settings → Taskbar buttons →
+         *  My Stuff). On by default: a signed-in tracker with a watchlist is
+         *  exactly the kind of "my stuff" the page exists for, and a user with
+         *  no tracker sees a short connect prompt rather than an empty page. */
+        val MYSTUFF_TRACKERS = booleanPreferencesKey("mystuffTrackers")
         /** Shape of the tiles on the IPTV tab's playlist/group grids (see
          *  [TileShapes]: poster / square / wide). */
         val IPTV_SHAPE = stringPreferencesKey("iptvTileShape")
@@ -3602,6 +3609,7 @@ fun searchExceptionOnFlow(): Flow<Boolean> =
     private fun keyForSection(section: String): Preferences.Key<Boolean> = when (section) {
         MyStuffSection.HISTORY -> K.MYSTUFF_HISTORY
         MyStuffSection.DOWNLOADS -> K.MYSTUFF_DOWNLOADS
+        MyStuffSection.TRACKERS -> K.MYSTUFF_TRACKERS
         else -> K.MYSTUFF_LIBRARY
     }
 

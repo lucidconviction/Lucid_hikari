@@ -2753,10 +2753,12 @@ private fun MyStuffSectionToggles(app: HikariApp) {
     val libraryFlow = remember { app.store.myStuffSectionFlow(com.hikari.app.data.MyStuffSection.LIBRARY) }
     val historyFlow = remember { app.store.myStuffSectionFlow(com.hikari.app.data.MyStuffSection.HISTORY) }
     val downloadsFlow = remember { app.store.myStuffSectionFlow(com.hikari.app.data.MyStuffSection.DOWNLOADS) }
+    val trackersFlow = remember { app.store.myStuffSectionFlow(com.hikari.app.data.MyStuffSection.TRACKERS) }
     val libraryOn by libraryFlow.collectAsState(initial = true)
     val historyOn by historyFlow.collectAsState(initial = true)
     val downloadsOn by downloadsFlow.collectAsState(initial = true)
-    val onCount = listOf(libraryOn, historyOn, downloadsOn).count { it }
+    val trackersOn by trackersFlow.collectAsState(initial = true)
+    val onCount = listOf(libraryOn, historyOn, downloadsOn, trackersOn).count { it }
 
     Column(
         Modifier
@@ -2794,6 +2796,13 @@ private fun MyStuffSectionToggles(app: HikariApp) {
             checked = downloadsOn,
             enabled = !downloadsOn || onCount > 1,
             onChange = { on -> scope.launch { runCatching { app.store.setMyStuffSection(com.hikari.app.data.MyStuffSection.DOWNLOADS, on) } } },
+        )
+        MyStuffSectionRow(
+            label = tr("Trackers"),
+            supporting = tr("Watchlists and lists from AniList, MAL, Simkl, Trakt and more"),
+            checked = trackersOn,
+            enabled = !trackersOn || onCount > 1,
+            onChange = { on -> scope.launch { runCatching { app.store.setMyStuffSection(com.hikari.app.data.MyStuffSection.TRACKERS, on) } } },
         )
         if (onCount == 1) {
             if (!LocalHideHelp.current) {
