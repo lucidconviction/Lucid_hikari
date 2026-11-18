@@ -1213,10 +1213,15 @@ fun HomeScreen(nav: NavHostController) {
             // which the header chip's dropdown cannot be on a phone.
             item(key = "streaming-services") {
                 StreamingServicesRow(
-                    providers = activeProviders,
-                    selected = selected,
-                    onPick = { id -> vm.selectProvider(if (selected == id) null else id) },
-                    onAdd = { Routes.navigateTab(nav, Routes.EXTENSIONS) },
+                    onOpen = { platform ->
+                        Routes.safeNavigate(
+                            nav,
+                            Routes.tmdbGridSpec(
+                                com.hikari.app.data.StreamingPlatforms.specFor(platform).encode(),
+                                platform.name,
+                            ),
+                        )
+                    },
                 )
             }
             // Genres sit after Resume, not between the hero and the first
@@ -4329,83 +4334,52 @@ private fun DonationBanner(onDonate: () -> Unit) {
 
 
 /**
- * "Streaming services" — the VyseTV row, with the app's extensions in place of
- * its TMDB platforms.
+ * "Streaming services" — the VyseTV row, with real platforms (Netflix, Hulu,
+ * Disney+…) in place of Hikari's extensions.
  *
- * One tile per installed extension (a multi-source extension is ONE tile, via
- * [ProviderPacks.rows]), so the row reads as a list of services rather than a
- * list of internal source ids. Tapping a tile narrows Home to that provider;
- * tapping the selected tile returns to All. It is deliberately never hidden:
- * with nothing installed it becomes the "add extensions" entry point, which is
- * exactly when a new user needs it.
+ * A viewer thinks in services, not in scrapers, so the tiles are the services
+ * themselves and each one opens a TMDB discover grid filtered to that
+ * platform's catalogue. The artwork comes from TMDB's watch-provider
+ * catalogue — the same brand logos VyseTV draws — and falls back to the
+ * service's favicon, then to its initial, so a tile is never an empty square.
+ *
+ * Always present: the list is static, and a viewer with no extensions yet is
+ * exactly who benefits from "show me what is on Netflix".
  */
 @Composable
 private fun StreamingServicesRow(
-    providers: List<ContentProvider>,
-    selected: String?,
-    onPick: (String) -> Unit,
-    onAdd: () -> Unit,
+    onOpen: (com.hikari.app.data.StreamingPlatforms.Platform) -> Unit,
 ) {
-    val packs = remember(providers) { ProviderPacks.rows(providers) }
     val tv = TvMode.current()
     val tile = if (tv) 96.dp else 72.dp
+    var logos by remember { mutableStateOf<Map<Int, String>>(emptyMap()) }
+
+    LaunchedEffect(Unit) {
+        logos = runCatching { com.hikari.app.data.StreamingPlatforms.logos() }
+            .getOrDefault(emptyMap())
+    }
 
     Column(Modifier.padding(top = if (tv) 20.dp else 16.dp)) {
         HikariSectionHeader(
             title = tr("Streaming services"),
-            subtitle = if (packs.isEmpty()) null
-            else if (packs.size == 1) tr("1 extension") else packs.size.toString() + " " + tr("extensions"),
+            subtitle = tr("What is on each service"),
         )
-        if (packs.isEmpty()) {
-            Row(
-                Modifier
-                    .padding(horizontal = 16.dp)
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
-                    .border(
-                        1.dp,
-                        MaterialTheme.colorScheme.outline.copy(alpha = 0.18f),
-                        RoundedCornerShape(16.dp),
-                    )
-                    .clickable(onClick = onAdd)
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    Icons.Filled.Extension,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-                Spacer(Modifier.width(12.dp))
-                Column {
-                    Text(
-                        tr("Add extensions"),
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Text(
-                        tr("Your installed addons appear here, one tile each"),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            return@Column
-        }
-
         LazyRow(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 2.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            items(packs, key = { it.key }) { pack ->
-                val id = pack.primary.config.id
-                val isOn = selected == id
+            items(com.hikari.app.data.StreamingPlatforms.ALL, key = { it.key }) { platform ->
+                // TMDB's own provider logo is the service's real brand mark.
+                // The domain favicon is the fallback, the initial the last
+                // resort — never a blank tile.
+                val logoPath = logos[platform.providerId]
+                val iconModel = logoPath?.let { "https://image.tmdb.org/t/p/w185" + it }
+                    ?: ("https://www.google.com/s2/favicons?domain=" + platform.domain + "&sz=128")
                 Column(
                     Modifier
-                        .width(tile + 16.dp)
+                        .width(tile + 20.dp)
                         .clip(RoundedCornerShape(16.dp))
-                        .clickable { onPick(id) }
+                        .clickable { onOpen(platform) }
                         .padding(vertical = 4.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
@@ -4415,47 +4389,35 @@ private fun StreamingServicesRow(
                             .clip(RoundedCornerShape(18.dp))
                             .background(MaterialTheme.colorScheme.surfaceVariant)
                             .border(
-                                width = if (isOn) 2.dp else 1.dp,
-                                color = if (isOn) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.outline.copy(alpha = 0.18f),
-                                shape = RoundedCornerShape(18.dp),
+                                1.dp,
+                                MaterialTheme.colorScheme.outline.copy(alpha = 0.18f),
+                                RoundedCornerShape(18.dp),
                             ),
                         contentAlignment = Alignment.Center,
                     ) {
-                        val icon = pack.primary.config.iconUrl
-                        if (!icon.isNullOrBlank()) {
-                            AsyncImage(
-                                model = icon,
-                                contentDescription = pack.label,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize(),
-                            )
-                        } else {
-                            Text(
-                                pack.label.take(1).uppercase(),
-                                style = MaterialTheme.typography.headlineMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                            )
-                        }
+                        Text(
+                            platform.name.take(1).uppercase(),
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        AsyncImage(
+                            model = iconModel,
+                            contentDescription = platform.name,
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(if (tv) 12.dp else 9.dp),
+                        )
                     }
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        pack.label,
+                        platform.name,
                         style = MaterialTheme.typography.labelMedium,
-                        color = if (isOn) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurface,
+                        color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                         textAlign = TextAlign.Center,
                     )
-                    if (pack.isPack) {
-                        Text(
-                            pack.members.size.toString() + " " + tr("sources"),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                        )
-                    }
                 }
             }
         }
