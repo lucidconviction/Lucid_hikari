@@ -102,6 +102,8 @@ import com.hikari.app.tv.TvUi
 import com.hikari.app.tv.tvFocusGlow
 import com.hikari.app.ui.theme.glassSheen
 import com.hikari.app.ui.theme.rememberGlassTokens
+import com.hikari.app.ui.effects.cardPress
+import com.hikari.app.ui.effects.cardSheen
 import com.hikari.app.ui.theme.HikariMotion
 import com.hikari.app.ui.theme.rememberAnimationsEnabled
 import com.hikari.app.ui.shape
@@ -1936,7 +1938,7 @@ private fun fmtRemaining(ms: Long): String {
  * and a tall one keeps the card's own curve — so everything inside a card
  * matches the card it is inside.
  */
-val GlassCornerRadius = 26.dp
+val GlassCornerRadius = 18.dp
 val GlassShape = RoundedCornerShape(GlassCornerRadius)
 
 @Composable
@@ -1947,6 +1949,10 @@ fun GlassCard(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val glass = rememberGlassTokens()
+    // The press/sheen effects need the same interaction source the clickable
+    // uses; a second, private source would never see the press.
+    val interactions = remember { MutableInteractionSource() }
+    val indication = androidx.compose.foundation.LocalIndication.current
     // Television cards wear the desktop language — flat elevated-black with
     // 12dp corners and a hairline edge — while phones keep the glass card.
     // One branch here repaints every settings card and repo row on TV.
@@ -1976,7 +1982,25 @@ fun GlassCard(
             // translucent fill into a pane of glass (see [glassSheen]). TV
             // cards are deliberately flat, so they skip it.
             .then(if (tv) Modifier else Modifier.glassSheen(glass))
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
+            .then(
+                if (onClick != null) {
+                    Modifier
+                        // Touch only: a television already answers the remote
+                        // with the focus ring, and scaling on every OK press
+                        // fights that cue.
+                        .then(
+                            if (tv) Modifier
+                            else Modifier.cardPress(interactions).cardSheen(interactions)
+                        )
+                        .clickable(
+                            interactionSource = interactions,
+                            indication = indication,
+                            onClick = onClick,
+                        )
+                } else {
+                    Modifier
+                }
+            ),
         content = content,
     )
 }

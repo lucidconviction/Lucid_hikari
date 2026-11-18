@@ -116,6 +116,9 @@ class AppStore(private val ctx: Context) {
     val PLAYER_ENHANCE_CUSTOMS = stringPreferencesKey("playerEnhanceCustoms")
         val UI_SCALE_ENABLED = booleanPreferencesKey("uiScaleEnabled")
         val UI_SCALE_PERCENT = intPreferencesKey("uiScalePercent")
+        /** Motion & effects: "" follows the device default (Full on touch,
+         *  Subtle on a television). See com.hikari.app.ui.effects.MotionLevel. */
+        val MOTION_LEVEL = stringPreferencesKey("motionLevel")
         val HISTORY = stringPreferencesKey("history")
         val HISTORY_PAUSED = booleanPreferencesKey("historyPaused")
         val HIDE_CONTINUE = booleanPreferencesKey("hideContinue")
@@ -4176,6 +4179,26 @@ fun searchExceptionOnFlow(): Flow<Boolean> =
         // Mirror into the synchronous cache so View-based screens (player,
         // WebView) and the next cold start pick the change up immediately.
         runCatching { UiScale.sync(ctx, enabled, uiScale()) }
+    }
+
+    // ---- Motion & effects (Settings → Appearance & Theme) ----
+
+    /**
+     * The motion level key, or blank for "whatever this device should do".
+     *
+     * The blank default is deliberate: a television should be Subtle and a
+     * phone Full, and one stored value cannot express both without pinning a
+     * device the user never chose. The UI resolves blank through
+     * [com.hikari.app.ui.effects.MotionLevel.defaultFor].
+     */
+    fun motionLevelFlow(): Flow<String> =
+        store.data.map { it[K.MOTION_LEVEL] ?: "" }
+            .distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    suspend fun motionLevel(): String = motionLevelFlow().first()
+
+    suspend fun setMotionLevel(key: String) {
+        write("MOTION_LEVEL") { it[K.MOTION_LEVEL] = key.trim().lowercase() }
     }
 
     /** The in-app scale (0.7f–1.3f) used while [uiScaleEnabledFlow] is on.

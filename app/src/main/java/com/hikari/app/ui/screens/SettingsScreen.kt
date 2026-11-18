@@ -1002,6 +1002,7 @@ fun SettingsScreen(nav: NavHostController) {
                             }
                         }
                     }
+                    item { SettingsCard { MotionCard(app) } }
                     // The things the app wears. Each is several choices wide (a
                     // wall of accent swatches, a dozen icon aliases, a stack of
                     // fonts), so they get their own pages instead of turning
@@ -4490,6 +4491,75 @@ private fun VolumeBoostCard(app: HikariApp) {
  * Auto in the player's Subtitles menu, an added file), because an explicit
  * pick outranks a default; the next video simply starts hidden again.
  */
+/**
+ * Settings → Appearance & Theme → Motion & effects.
+ *
+ * One preference rather than per-screen switches: the card press, the shelf
+ * snap, the popouts and the glides all read the same level (see
+ * [com.hikari.app.ui.effects.MotionLevel]). A blank stored value follows the
+ * device — Full on a phone, Subtle on a television — which is why the dialog
+ * shows the resolved level as selected even before the user picks one.
+ *
+ * "Off" is not "the app stops working": it removes transforms only. Snapping
+ * and layout stay, because those are positioning rules, not decoration.
+ */
+@Composable
+private fun MotionCard(app: HikariApp) {
+    val scope = rememberCoroutineScope()
+    val flow = remember { app.store.motionLevelFlow() }
+    val stored by flow.collectAsState(initial = "")
+    var open by remember { mutableStateOf(false) }
+
+    val level = if (stored.isBlank()) {
+        com.hikari.app.ui.effects.MotionLevel.defaultFor(TvMode.isTv)
+    } else {
+        com.hikari.app.ui.effects.MotionLevel.fromKey(stored)
+    }
+
+    Column(Modifier.padding(16.dp)) {
+        SettingsCardHeading(Icons.Filled.AutoAwesome, tr("Motion & effects"))
+        ChoiceRow(
+            value = tr(level.label),
+            supporting = when (level) {
+                com.hikari.app.ui.effects.MotionLevel.OFF ->
+                    tr("No movement; state changes are instant.")
+                com.hikari.app.ui.effects.MotionLevel.SUBTLE ->
+                    tr("Small lifts and short glides. The default on TVs.")
+                com.hikari.app.ui.effects.MotionLevel.FULL ->
+                    tr("Cards press, lift and catch the light.")
+            },
+            leadingIcon = Icons.Filled.AutoAwesome,
+            onClick = { open = true },
+        )
+    }
+
+    if (open) {
+        ChoiceDialog(
+            title = tr("Motion & effects"),
+            items = com.hikari.app.ui.effects.MotionLevel.entries.map { item ->
+                ChoiceItem(
+                    item.key,
+                    tr(item.label),
+                    when (item) {
+                        com.hikari.app.ui.effects.MotionLevel.OFF ->
+                            tr("Instant, still, no transforms")
+                        com.hikari.app.ui.effects.MotionLevel.SUBTLE ->
+                            tr("Gentle movement, lighter on weak devices")
+                        com.hikari.app.ui.effects.MotionLevel.FULL ->
+                            tr("The complete set of effects")
+                    },
+                )
+            },
+            selectedKey = level.key,
+            onPick = { picked ->
+                open = false
+                scope.launch { runCatching { app.store.setMotionLevel(picked) } }
+            },
+            onDismiss = { open = false },
+        )
+    }
+}
+
 @Composable
 private fun SubtitlesDefaultCard(app: HikariApp) {
     val scope = rememberCoroutineScope()
