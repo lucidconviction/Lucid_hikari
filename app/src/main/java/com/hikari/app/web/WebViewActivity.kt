@@ -15,6 +15,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.Message
 import android.os.SystemClock
+import android.util.Base64
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -247,6 +248,13 @@ class WebViewActivity : ComponentActivity() {
 
     private fun recentUserGesture(): Boolean =
         android.os.SystemClock.uptimeMillis() - lastUserTouchAt < 2_500L
+
+    /** Debug-build breadcrumb for a page that renders blank: what loaded,
+     *  what was cancelled, and which gate cancelled it. Release builds log
+     *  nothing. */
+    private fun dbg(msg: String) {
+        if (com.hikari.app.BuildConfig.DEBUG) android.util.Log.d("HikariWeb", msg)
+    }
 
     @Volatile
     private var lastBlockedRedirectUrl: String? = null
@@ -800,6 +808,13 @@ class WebViewActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Debug builds only: expose the WebView to `chrome://inspect` /
+        // `adb forward ... webview_devtools_remote_<pid>` so a page that
+        // renders blank can be inspected (its real URL, console errors and
+        // DOM). Release builds stay closed.
+        if (com.hikari.app.BuildConfig.DEBUG) {
+            runCatching { WebView.setWebContentsDebuggingEnabled(true) }
+        }
         // Never allow a window title bar — the app draws no header anywhere.
         window.requestFeature(Window.FEATURE_NO_TITLE)
         super.onCreate(savedInstanceState)
@@ -1316,6 +1331,7 @@ class WebViewActivity : ComponentActivity() {
                                 // below still apply.
                                 return false
                             }
+                            dbg("cancel-navigation " + request.url)
                             showBlockedToast(blockedRedirectToast(request.url))
                             rememberBlockedRedirect(request.url.toString())
                             return true
@@ -1342,6 +1358,7 @@ class WebViewActivity : ComponentActivity() {
                 // other way (a meta refresh, a script assignment, a redirect
                 // chain) still gets an empty body instead of a donate card.
                 if (request.isForMainFrame && PromoGuard.isDonationUrl(u)) {
+                    dbg("block-donation " + u)
                     showBlockedToast("Blocked a donation page")
                     return WebResourceResponse(
                         "text/plain", "utf-8", ByteArrayInputStream(ByteArray(0))
@@ -1360,12 +1377,38 @@ class WebViewActivity : ComponentActivity() {
                     if (AdBlocker.matches(host, whitelistDomains)) {
                         return null
                     }
-                    if (AdBlocker.matches(host, blockedDomains)) {
+                    val firstParty = currentPageHost()?.let { isSameSite(host, it) } == true
+                    if (!firstParty && AdBlocker.matches(host, blockedDomains)) {
+                        dbg("ad-host " + host + " main=" + request.isForMainFrame)
                         // NEVER block actual media — blocklists routinely contain
                         // tube-site CDN domains (phncdn.com, …) that serve the
                         // actual video. Blocking those turns "video loads" into
                         // "video buffering forever" (the Pornhub-style stall).
                         if (!isMediaRequest(request)) {
+                            if (request.isForMainFrame) {
+                                // An ad GATE: follow the destination it carries
+                                // instead of leaving an empty document.
+                                val cur = currentPageHost()
+                                val dest = adGateDestination(u)?.takeIf { d ->
+                                    val dh = runCatching { java.net.URI(d).host }
+                                        .getOrNull().orEmpty()
+                                    // The site's own domain is allowed as a gate
+                                    // destination even when a list carries it:
+                                    // blocklists name streaming domains for
+                                    // their ad subresources, not because the
+                                    // page itself is an advert.
+                                    !isAdHost(d) || (cur != null && isSameSite(dh, cur))
+                                }
+                                dbg("ad-gate " + host + " -> " + dest)
+                                if (dest != null) return adGatePage(dest)
+                                // A top-level DOCUMENT is never turned into a
+                                // blank page. Rumble itself is in three ad lists
+                                // (for its ad subresources), and blanking the
+                                // page's own domain is what stopped Rumble from
+                                // loading anything past the first page.
+                                dbg("ad-gate allow-document " + host)
+                                return null
+                            }
                             return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
                         }
                     }
@@ -1374,9 +1417,10 @@ class WebViewActivity : ComponentActivity() {
                     // subdomains no list names, rotating popunder hosts. Same
                     // guarantees as above: whitelist already won, media never
                     // blocked.
-                    if (!isMediaRequest(request) &&
+                    if (!request.isForMainFrame && !isMediaRequest(request) &&
                         AdBlocker.matchesPattern(request, currentPageHost())
                     ) {
+                        dbg("ad-pattern " + u + " main=" + request.isForMainFrame)
                         return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
                     }
                 }
@@ -1423,6 +1467,7 @@ class WebViewActivity : ComponentActivity() {
                                 // not an ad hijack's.
                                 return null
                             }
+                            dbg("cancel-request " + u + " main=" + request.isForMainFrame)
                             showBlockedToast(blockedRedirectToast(request.url))
                             rememberBlockedRedirect(u)
                             return WebResourceResponse(
@@ -1447,6 +1492,7 @@ class WebViewActivity : ComponentActivity() {
             }
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                dbg("start " + url)
                 pageUrl = url
                 pageHostCache = runCatching { url?.let { java.net.URI(it).host?.lowercase() } }.getOrNull()
                 loadFailed = false
@@ -1662,6 +1708,7 @@ class WebViewActivity : ComponentActivity() {
                                 return
                             }
                             relayed = true
+                            dbg("relay-popup " + url)
                             runCatching {
                                 lastPopupUrl = url
                                 lastPopupHost = runCatching { java.net.URI(url).host }
@@ -2666,21 +2713,30 @@ class WebViewActivity : ComponentActivity() {
         if (hasFocus) hideSystemBars()
     }
 
-    /** Adds [url] to the detected set ONLY after confirming it serves real video. */
+    /**
+     * How good a source is, 0 = not a video. Populated by [maybeAddVideo]'s
+     * probe and used to order the player's server list.
+     *
+     * The scale mirrors what makes a source *playable* rather than merely
+     * present: an adaptive master (it carries the whole ladder, so the player
+     * can pick a rendition and seek) beats a single media playlist, which beats
+     * a bare file. An HLS playlist whose only tracks are audio is not a video
+     * at all and scores 0.
+     */
+    private val videoScores = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
     private fun maybeAddVideo(url: String) {
         // Verification view never offers video.
         if (autoCloseWhenCloudflarePassed) return
         if (detectedVideos.contains(url)) return
-        // An ad that happens to be served as video is still an ad. The click
-        // that opens a streaming episode routinely fires a short ad clip from
-        // a popunder host, and offering it as "video 1" is how the player
-        // opened on an advert instead of the episode.
+        // An ad that happens to be served as video is still an ad.
         if (isAdVideoCandidate(url)) return
         Thread {
-            val isVideo = isRealVideo(url)
-            if (isVideo) {
+            val score = probeVideoScore(url)
+            if (score > 0) {
                 runOnUiThread {
                     if (detectedVideos.add(url)) {
+                        videoScores[url] = score
                         videoChip.text = "\u25B6 ${detectedVideos.size} video" +
                             if (detectedVideos.size > 1) "s" else ""
                         videoChip.visibility = View.VISIBLE
@@ -2707,8 +2763,20 @@ class WebViewActivity : ComponentActivity() {
             u.contains("/media/") || u.contains("phncdn") || u.contains("streamable")
     }
 
-    /** Fetches a few bytes and decides whether [url] is actual video content. */
-    private fun isRealVideo(url: String): Boolean {
+    /**
+     * Fetches the first couple of kilobytes and scores the source:
+     *
+     *  - 0    not video (or an audio-only HLS playlist)
+     *  - 40   a direct file (mp4/webm)
+     *  - 60   an HLS media playlist (one rendition)
+     *  - 110  a DASH manifest
+     *  - 120  an HLS master playlist (a full quality ladder)
+     *
+     * A master playlist is the difference between "opens at 480p and cannot
+     * seek well" and a normal adaptive stream; it is why this ranks above a
+     * single media playlist instead of both being "a video".
+     */
+    private fun probeVideoScore(url: String): Int {
         // Share the WebView's cookie jar with the probe request — Cloudflare /
         // auth-token CDNs answer with a 403 (or a challenge page) without it.
         val cookie = runCatching { CookieManager.getInstance().getCookie(url) }.getOrNull()
@@ -2718,28 +2786,112 @@ class WebViewActivity : ComponentActivity() {
             put("User-Agent", (application as HikariApp).effectiveWebViewUa())
             if (!cookie.isNullOrBlank()) put("Cookie", cookie)
         }
-        val r = runCatching { Http.get(url, headers) }.getOrNull() ?: return false
+        val r = runCatching { Http.get(url, headers) }.getOrNull() ?: return 0
         r.use { resp ->
-            if (!resp.isSuccessful) return false
+            if (!resp.isSuccessful) return 0
             val ct = resp.header("Content-Type")?.lowercase().orEmpty()
-            val body = resp.body?.bytes() ?: return false
-            val head = String(body, 0, minOf(body.size, 2048), Charsets.ISO_8859_1)
+            val body = resp.body?.bytes() ?: return 0
+            val head = String(body, 0, minOf(body.size, 4096), Charsets.ISO_8859_1)
             return when {
-                head.startsWith("#EXTM3U") -> true // HLS manifest
-                ct.contains("application/dash+xml") || head.contains("<mpd") -> true // DASH
-                ct.contains("video/") -> true // mp4/webm/etc
-                ct.contains("application/octet-stream") && looksLikeMp4(body) -> true
-                else -> false
+                head.startsWith("#EXTM3U") -> {
+                    val master = head.contains("#EXT-X-STREAM-INF")
+                    val media = head.contains("#EXTINF")
+                    val videoCodec = Regex("avc1|hvc1|hev1|vp09|av01|dvh1|dvhe", RegexOption.IGNORE_CASE)
+                        .containsMatchIn(head)
+                    // An audio-only playlist (demuxed live audio) is not a
+                    // playable "video" and must never occupy a server slot.
+                    if (!master && media && !videoCodec) 0
+                    else if (master) 120
+                    else 60
+                }
+                ct.contains("application/dash+xml") || head.contains("<mpd") -> 110
+                ct.contains("video/") -> 40
+                ct.contains("application/octet-stream") && looksLikeMp4(body) -> 40
+                else -> 0
             }
         }
+    }
+
+    /**
+     * The real destination carried by an ad GATE.
+     *
+     * Streaming sites and Rumble wrap a click in a click-tracker on an ad host
+     * (`d4.ads.rmbl.ws/c?…&fb=<base64 of the video page>`): the main frame is
+     * sent to the tracker, which then 302s to the page. Blocking the tracker
+     * outright left the WebView on an empty document — the white page at
+     * "level 2". The destination is in the query, so we take it and load the
+     * page the click was for; only a gate with nothing usable behind it is
+     * cancelled.
+     */
+    private fun adGateDestination(raw: String): String? {
+        val uri = runCatching { Uri.parse(raw) }.getOrNull() ?: return null
+        for (key in listOf("fb", "url", "u", "dest", "destination", "redirect", "redirect_url", "to", "target")) {
+            val v = uri.getQueryParameter(key) ?: continue
+            for (candidate in listOf(v, decodeBase64(v))) {
+                val c = candidate?.trim().orEmpty()
+                if (c.startsWith("http://") || c.startsWith("https://")) return c
+            }
+        }
+        return null
+    }
+
+    private fun decodeBase64(raw: String): String? = runCatching {
+        val t = Uri.decode(raw).trim()
+        val bytes = runCatching {
+            Base64.decode(t, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+        }.recoverCatching {
+            Base64.decode(t, Base64.DEFAULT)
+        }.getOrThrow()
+        String(bytes, Charsets.UTF_8)
+    }.getOrNull()
+
+    /** True when [url]'s host is one the ad lists block. */
+    private fun isAdHost(url: String): Boolean {
+        val h = runCatching { java.net.URI(url).host }.getOrNull().orEmpty()
+        return h.isNotBlank() && AdBlocker.matches(h, blockedDomains)
+    }
+
+    /**
+     * What a main-frame navigation to a blocked ad host renders instead of a
+     * blank document. With a destination it forwards there immediately; with
+     * none it says what happened and offers the way back, because a white
+     * page reads as "the app is broken".
+     */
+    private fun adGatePage(destination: String?): WebResourceResponse {
+        val style = "html,body{background:#000;color:#fff;font:15px sans-serif;margin:0}" +
+            ".w{display:flex;height:100vh;flex-direction:column;gap:14px;align-items:center;" +
+            "justify-content:center;padding:24px;text-align:center}a{color:#7DD3FC}"
+        val html = if (destination != null) {
+            val url = destination.replace("\"", "%22")
+            "<!doctype html><meta charset=\"utf-8\">" +
+                "<meta http-equiv=\"refresh\" content=\"0;url=" + url + "\">" +
+                "<style>" + style + "</style><div class=\"w\">Opening…</div>" +
+                "<script>location.replace(" + org.json.JSONObject.quote(destination) + ")</script>"
+        } else {
+            "<!doctype html><meta charset=\"utf-8\"><style>" + style + "</style>" +
+                "<div class=\"w\"><div>An ad link was blocked.</div>" +
+                "<a href=\"javascript:history.back()\">Go back</a></div>"
+        }
+        return WebResourceResponse(
+            "text/html", "utf-8",
+            java.io.ByteArrayInputStream(html.toByteArray(Charsets.UTF_8)),
+        )
     }
 
     /** True when [url] is a host/pattern the ad lists already call an ad. */
     private fun isAdVideoCandidate(url: String): Boolean {
         val host = runCatching { java.net.URI(url).host }.getOrNull().orEmpty()
         if (host.isBlank()) return true
+        val page = currentPageHost()
+        // A source served from the page's own site is not an ad however many
+        // lists carry that domain (Rumble is in three of them, for its ad
+        // subresources — treating that as "every video is an ad" left the chip
+        // empty on every Rumble page).
+        if (page != null && isSameSite(host, page)) {
+            return AdBlocker.matchesPatternUrl(url, page)
+        }
         if (AdBlocker.matches(host, blockedDomains)) return true
-        return AdBlocker.matchesPatternUrl(url, currentPageHost())
+        return AdBlocker.matchesPatternUrl(url, page)
     }
 
     private fun looksLikeMp4(b: ByteArray): Boolean {
@@ -2806,20 +2958,15 @@ class WebViewActivity : ComponentActivity() {
                 // The episode's own CDN first: it is normally served from the
                 // site's domain or a subdomain of it, while an advert comes from
                 // an unrelated host. Manifests before fragments after that.
-                compareBy<String>(
+                compareByDescending<String> {
                     // 1. What the page's player is actually using.
-                    { if (it in preferred) 0 else 1 },
+                    if (it in preferred) 1 else 0
+                }
                     // 2. Its own CDN before an unrelated host.
-                    { if (sameSiteAsPage(it)) 0 else 1 },
-                    // 3. A manifest before a fragment.
-                    {
-                        when {
-                            it.contains(".m3u8", true) -> 0
-                            it.contains(".mpd", true) -> 1
-                            else -> 2
-                        }
-                    },
-                )
+                    .thenByDescending { if (sameSiteAsPage(it)) 1 else 0 }
+                    // 3. The probed source score: a master playlist with a full
+                    //    ladder above a single rendition above a bare file.
+                    .thenByDescending { videoScores[it] ?: 0 }
             )
         if (unique.isEmpty()) {
             Toast.makeText(this, I18n.t("No playable video found"), Toast.LENGTH_SHORT).show()
