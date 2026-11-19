@@ -1,3 +1,18 @@
+## 0.15.5
+
+**19 November 2026**
+
+### A player that holds its buffer, and a browser a remote can use
+
+- **Fewer stalls**: VOD banks three minutes, keeps 30 seconds behind the playhead (a backwards seek or the next-episode hand-off no longer goes back to the network), and playback's connection pool doubled to 16 sockets / 32 per host so HLS segments reuse TLS instead of handshaking every time.
+- **Smoother next episode**: the corner preview starts twelve seconds before the end instead of six, so the hand-off lands on an already-loaded player.
+- **PiP**: entering picture-in-picture releases the corner preview, leaving one decoder for the small window — the first thing that used to stutter there.
+- **The in-app preview is half its old size** (23% of the page, 110–260dp) and still resizes by pinch.
+- **TV layout starts at 100% in-app scale** instead of 70%, and TV pages keep a 32dp gutter from the bezel.
+- **The browser has bookmark tabs at the bottom**: `+` saves the page, a chip opens it, long-press forgets it, twelve are kept.
+- **Every detected stream now shows a 16:9 frame of the page** in the source sheet, so a row is recognised without reading its URL.
+- **The browser is usable with a TV remote**: arrows scroll, OK taps the page centre, media keys play/pause and seek the page's video.
+
 ## 0.15.4
 
 **18 November 2026**
