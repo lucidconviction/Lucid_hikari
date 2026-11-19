@@ -1,3 +1,17 @@
+## 0.15.6
+
+**19 November 2026**
+
+### Custom metadata, and a spotlight for anime
+
+- **Custom metadata tweaks** (Settings → Integrations): choose which source answers for anime and for movies & series — AioMetadata, Simkl, AniList, TMDB — with a Simkl app ID, an AioMetadata endpoint, and per-engine switches. Installed Stremio addons are listed with whether they actually serve metadata, and can be switched off one by one.
+- **Your metadata addons now fill what an extension leaves bare**: AioMetadata first, then the enabled Stremio addons, then TMDB. A "native" list keeps the sources whose own metadata you prefer untouched, and changing any switch re-resolves the page instead of serving old text.
+- **Anime spotlight on Home**: a floating AniList carousel under Streaming services — centre snapping, a lead-in card, a new-episode dot for titles airing within 24 hours, and Show All → Trending / Popular grids. It works with no anime extension installed and keeps six hours of cache for offline starts.
+- **Manga detail enrichment**: AniList, Jikan, Kitsu, MangaDex and PornHwaDB fill blurbs, genres and covers, with the PornHwaDB key checked live from Settings.
+- **Better artwork**: TheTVDB supplies a missing poster or backdrop when TMDB has neither.
+- **Faster cold starts**: a hand-authored baseline profile is installed by profileinstaller.
+- **CloudStream plugin fix**: a Plugin base-class shadow stops `NoSuchFieldError: $stable` on plugins built against a newer core.
+
 ## 0.15.5
 
 **19 November 2026**
