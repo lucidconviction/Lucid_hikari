@@ -95,13 +95,16 @@ fun MiniPlayerHost() {
         val maxW = maxWidth.value
         val maxH = maxHeight.value
         var resultWidth by remember(current.url) {
-            mutableFloatStateOf((maxW * 0.46f).coerceIn(180f, 420f))
+            // The preview is a glance, not a second television: half the old
+            // footprint, so it covers a corner of the page instead of a fifth
+            // of it. Pinch still resizes up to the old ceiling.
+            mutableFloatStateOf((maxW * 0.23f).coerceIn(110f, 260f))
         }
         val aspect = 16f / 9f
         val heightDp = resultWidth / aspect
         var offsetX by remember(current.url) { mutableFloatStateOf(-1f) }
         var offsetY by remember(current.url) { mutableFloatStateOf(-1f) }
-        val minWidth = 140f
+        val minWidth = 100f
         val maxWidthDp = (maxW - 24f).coerceAtLeast(minWidth)
         LaunchedEffect(current.url, maxW, maxH) {
             if (offsetX < 0f) {

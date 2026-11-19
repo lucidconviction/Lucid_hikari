@@ -67,7 +67,9 @@ fun rememberLayoutTokens(): LayoutTokens {
     return when (device) {
         DeviceClass.TV -> LayoutTokens(
             device = DeviceClass.TV,
-            pageGutter = 0.dp,
+            // A big panel needs an edge: content pressed against the bezel
+            // reads as a phone screen stretched, not a television page.
+            pageGutter = 32.dp,
             sectionGap = TvDesktop.SpaceL,
             cardGap = TvDesktop.SpaceM,
             gridMin = maxOf(96f, TvUi.posterWidth().value).dp,

@@ -6,12 +6,14 @@ import android.app.DownloadManager
 import android.widget.Button
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.BitmapFactory
 import android.graphics.drawable.GradientDrawable
 import android.text.InputType
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.ScrollView
 import android.graphics.Color
@@ -23,6 +25,8 @@ import android.os.Handler
 import android.os.Looper
 import android.os.Message
 import android.os.SystemClock
+import android.view.KeyEvent
+import android.view.MotionEvent
 import android.util.Base64
 import android.view.Gravity
 import android.view.View
@@ -110,6 +114,8 @@ class WebViewActivity : ComponentActivity() {
     @Volatile
     private var pagePreviewTitle: String = ""
     private lateinit var rootView: LinearLayout
+    /** Horizontal strip of saved pages at the bottom of the browser. */
+    private lateinit var bookmarkBar: LinearLayout
     private var contentFrame: FrameLayout? = null
     // Main-frame load failure panel. A blank black page with no explanation was
     // the whole "it didn't load" experience: a dead host, a dropped connection
@@ -1060,6 +1066,20 @@ class WebViewActivity : ComponentActivity() {
             errorDetail = (panel.getChildAt(1) as? TextView)
         }
 
+        // Bottom bookmark strip. It is the browser's "tabs" in the only form a
+        // television can use: one row of saved pages, reachable with the D-pad
+        // without opening a menu, plus a + to save the page you are on.
+        bookmarkBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(10), 0, dp(10), 0)
+        }
+        val bookmarkScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            setBackgroundColor(0xFF0D1018.toInt())
+            addView(bookmarkBar, ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+
         rootView = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.BLACK)
@@ -1073,6 +1093,10 @@ class WebViewActivity : ComponentActivity() {
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
                     topMargin = dp(16)
                 },
+            )
+            addView(
+                bookmarkScroll,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)),
             )
         }
         setContentView(rootView)
@@ -1201,6 +1225,7 @@ class WebViewActivity : ComponentActivity() {
 
         restoreActiveTab(recreated = savedInstanceState != null)
         setupWebView(startUrl)
+        refreshBookmarks()
     }
 
     private fun setupWebView(startUrl: String) {
@@ -1221,6 +1246,10 @@ class WebViewActivity : ComponentActivity() {
         ws.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         ws.cacheMode = WebSettings.LOAD_DEFAULT
         ws.offscreenPreRaster = true
+        webView.isFocusable = true
+        webView.isFocusableInTouchMode = true
+        webView.setOnKeyListener { _, _, event -> handleTvRemote(event) }
+        if (com.hikari.app.tv.TvMode.isTv) webView.requestFocus()
         // The WebView's own Safe Browsing check (default on modern Android;
         // set explicitly so a vendor build cannot quietly disable it).
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -1613,6 +1642,7 @@ class WebViewActivity : ComponentActivity() {
                 // of letting the blank error document hide it.
                 if (loadFailed) return
                 noteVisited(url)
+                refreshBookmarks()
                 if (url != null && isOneShotAllowed(url)) allowedOnceUrl = null
                 // The popup relay child (if any) served its purpose — free it.
                 popupChild?.let { runCatching { it.destroy() } }
@@ -3173,6 +3203,203 @@ class WebViewActivity : ComponentActivity() {
      * host and a play button. This is the "finding video" surface — the badge
      * only says how many, this says which.
      */
+    // ---------------------------------------------------------------- bookmarks
+
+    private fun bookmarkPrefs() = getSharedPreferences("webview_bookmarks", MODE_PRIVATE)
+
+    private fun loadBookmarks(): List<Pair<String, String>> = runCatching {
+        val raw = bookmarkPrefs().getString("items", "[]").orEmpty()
+        val arr = org.json.JSONArray(raw)
+        (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            val u = o.optString("u")
+            if (!u.startsWith("http")) return@mapNotNull null
+            o.optString("t").ifBlank { urlHost(u) } to u
+        }
+    }.getOrDefault(emptyList())
+
+    private fun saveBookmarks(items: List<Pair<String, String>>) {
+        runCatching {
+            val arr = org.json.JSONArray()
+            items.take(12).forEach { (t, u) ->
+                arr.put(org.json.JSONObject().put("t", t).put("u", u))
+            }
+            bookmarkPrefs().edit().putString("items", arr.toString()).apply()
+        }
+    }
+
+    /**
+     * Redraws the bottom strip. "+" saves the current page; each saved page is
+     * a focusable chip (D-pad OK loads it, long-press forgets it). The strip is
+     * rebuilt on every page finish so its title/URL are the current ones.
+     */
+    private fun refreshBookmarks() {
+        if (!::bookmarkBar.isInitialized) return
+        bookmarkBar.removeAllViews()
+        bookmarkBar.addView(
+            bookmarkChip("+", accent = true, onClick = { addCurrentBookmark() }, onLongClick = null),
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(34)).apply {
+                marginEnd = dp(8)
+            },
+        )
+        for ((title, url) in loadBookmarks()) {
+            bookmarkBar.addView(
+                bookmarkChip(title, accent = false, onClick = {
+                    if (webView.url != url || !webView.canGoBack()) {
+                        webView.loadUrl(url)
+                    }
+                    webView.requestFocus()
+                }, onLongClick = {
+                    val next = loadBookmarks().filterNot { it.second == url }
+                    saveBookmarks(next)
+                    refreshBookmarks()
+                    Toast.makeText(this, I18n.t("Bookmark removed"), Toast.LENGTH_SHORT).show()
+                }),
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(34)).apply {
+                    marginEnd = dp(8)
+                },
+            )
+        }
+        if (loadBookmarks().isEmpty()) {
+            bookmarkBar.addView(
+                TextView(this).apply {
+                    text = I18n.t("Save a page with +")
+                    textSize = 11f
+                    setTextColor(0xFF7C86A2.toInt())
+                },
+            )
+        }
+    }
+
+    private fun addCurrentBookmark() {
+        val url = webView.url ?: return
+        if (!url.startsWith("http")) return
+        val title = pageTitle.ifBlank { webView.title.orEmpty() }.ifBlank { urlHost(url) }
+            .take(40)
+        val existing = loadBookmarks()
+        if (existing.any { it.second == url }) {
+            Toast.makeText(this, I18n.t("Already saved"), Toast.LENGTH_SHORT).show()
+            return
+        }
+        saveBookmarks((listOf(title to url) + existing).take(12))
+        refreshBookmarks()
+        Toast.makeText(this, I18n.t("Page saved"), Toast.LENGTH_SHORT).show()
+    }
+
+    private fun bookmarkChip(
+        label: String,
+        accent: Boolean,
+        onClick: () -> Unit,
+        onLongClick: (() -> Unit)?,
+    ): TextView = TextView(this).apply {
+        text = label
+        textSize = 12f
+        maxLines = 1
+        ellipsize = android.text.TextUtils.TruncateAt.END
+        maxWidth = dp(170)
+        setTextColor(if (accent) Color.WHITE else 0xFFE6EAF5.toInt())
+        setPadding(dp(14), 0, dp(14), 0)
+        gravity = Gravity.CENTER
+        background = GradientDrawable().apply {
+            cornerRadius = dp(17).toFloat()
+            setColor(if (accent) 0xFF3D5AFE.toInt() else 0x33161C2B)
+            setStroke(dp(1), if (accent) 0x00000000 else 0x33FFFFFF)
+        }
+        isFocusable = true
+        isFocusableInTouchMode = false
+        isClickable = true
+        setOnClickListener { onClick() }
+        if (onLongClick != null) setOnLongClickListener { onLongClick(); true }
+    }
+
+    // ------------------------------------------------------------ TV remote
+
+    /**
+     * D-pad support for the browser. A WebView is a touch surface: without
+     * this, a television remote can focus the URL bar but has no way to scroll
+     * the page or press what is on it. Arrows scroll; OK taps the centre (the
+     * element a site puts there: the player, a cookie banner's accept, a play
+     * button); media keys toggle and seek the page's <video>.
+     */
+    private fun handleTvRemote(event: KeyEvent): Boolean {
+        if (event.action != KeyEvent.ACTION_DOWN) return false
+        if (!com.hikari.app.tv.TvMode.isTv) return false
+        return when (event.keyCode) {
+            KeyEvent.KEYCODE_DPAD_DOWN -> {
+                webView.scrollBy(0, dp(110)); true
+            }
+            KeyEvent.KEYCODE_DPAD_UP -> {
+                webView.scrollBy(0, -dp(110)); true
+            }
+            KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                webView.scrollBy(dp(140), 0); true
+            }
+            KeyEvent.KEYCODE_DPAD_LEFT -> {
+                webView.scrollBy(-dp(140), 0); true
+            }
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                remoteTap()
+                true
+            }
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                webView.evaluateJavascript(
+                    "(function(){var v=document.querySelector('video');if(!v)return;if(v.paused){v.play()}else{v.pause()}})()",
+                    null,
+                )
+                true
+            }
+            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
+                webView.evaluateJavascript(
+                    "(function(){var v=document.querySelector('video');if(v)v.currentTime=Math.min(v.duration||1e9,v.currentTime+10)})()",
+                    null,
+                )
+                true
+            }
+            KeyEvent.KEYCODE_MEDIA_REWIND -> {
+                webView.evaluateJavascript(
+                    "(function(){var v=document.querySelector('video');if(v)v.currentTime=Math.max(0,v.currentTime-10)})()",
+                    null,
+                )
+                true
+            }
+            else -> false
+        }
+    }
+
+    private fun remoteTap() {
+        val w = webView.width
+        val h = webView.height
+        if (w <= 0 || h <= 0) return
+        val x = w / 2f
+        val y = h / 2f
+        val now = SystemClock.uptimeMillis()
+        val down = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, x, y, 0)
+        val up = MotionEvent.obtain(now, now + 60, MotionEvent.ACTION_UP, x, y, 0)
+        runCatching {
+            webView.dispatchTouchEvent(down)
+            webView.dispatchTouchEvent(up)
+        }
+        down.recycle()
+        up.recycle()
+    }
+
+    /** A WebView frame cropped to 16:9 and scaled down for the source rows. */
+    private fun capturePageFrame(): Bitmap? {
+        val v = webView ?: return null
+        if (v.width <= 0 || v.height <= 0) return null
+        return runCatching {
+            val full = Bitmap.createBitmap(v.width, v.height, Bitmap.Config.ARGB_8888)
+            v.draw(Canvas(full))
+            val cropH = (v.width * 9f / 16f).toInt().coerceIn(1, v.height)
+            val top = ((v.height - cropH) / 2).coerceAtLeast(0)
+            val cropped = Bitmap.createBitmap(full, 0, top, v.width, cropH)
+            if (cropped !== full) full.recycle()
+            val scaled = Bitmap.createScaledBitmap(cropped, 320, 180, true)
+            if (scaled !== cropped) cropped.recycle()
+            scaled
+        }.getOrNull()
+    }
+
     private fun showMediaSheet() {
         val list = sortedDetected()
         if (list.isEmpty()) {
@@ -3219,6 +3446,7 @@ class WebViewActivity : ComponentActivity() {
                 ellipsize = android.text.TextUtils.TruncateAt.END
             },
         )
+        val frame = capturePageFrame()
         root.addView(
             TextView(this).apply {
                 text = I18n.t("Tap a source to play it in Hikari")
@@ -3246,15 +3474,29 @@ class WebViewActivity : ComponentActivity() {
 
         for (u in list) {
             val row = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(dp(2), dp(10), dp(2), dp(10))
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(2), dp(8), dp(2), dp(8))
                 isClickable = true
+                isFocusable = com.hikari.app.tv.TvMode.isTv
                 setOnClickListener {
                     dialog.dismiss()
                     launchPlayer(listOf(u), pageUrl ?: webView.url, preferred = setOf(u))
                 }
             }
+            // A frame of what the page is showing, at the same size for every
+            // source: the list is a channel guide, and a guide without a picture
+            // makes the reader work out which row is which from a URL.
             row.addView(
+                ImageView(this).apply {
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    setBackgroundColor(0xFF1B2030.toInt())
+                    frame?.let { setImageBitmap(it) }
+                },
+                LinearLayout.LayoutParams(dp(112), dp(63)).apply { marginEnd = dp(12) },
+            )
+            val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            texts.addView(
                 TextView(this).apply {
                     text = mediaTypeLabel(u) + "  \u00B7  " + urlHost(u)
                     textSize = 14f
@@ -3263,7 +3505,7 @@ class WebViewActivity : ComponentActivity() {
                     ellipsize = android.text.TextUtils.TruncateAt.END
                 },
             )
-            row.addView(
+            texts.addView(
                 TextView(this).apply {
                     text = u
                     textSize = 11f
@@ -3271,6 +3513,10 @@ class WebViewActivity : ComponentActivity() {
                     maxLines = 1
                     ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
                 },
+            )
+            row.addView(
+                texts,
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
             )
             root.addView(row)
         }

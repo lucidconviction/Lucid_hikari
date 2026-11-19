@@ -85,11 +85,11 @@ object PlayerHttp {
             .followRedirects(true)
             // Many aggregator links bounce https → http (HubCloud et al.).
             .followSslRedirects(true)
-            .connectionPool(ConnectionPool(8, 5, TimeUnit.MINUTES))
+            .connectionPool(ConnectionPool(16, 5, TimeUnit.MINUTES))
             .dispatcher(
                 Dispatcher().apply {
                     maxRequests = 64
-                    maxRequestsPerHost = 16
+                    maxRequestsPerHost = 32
                 }
             )
             .build()

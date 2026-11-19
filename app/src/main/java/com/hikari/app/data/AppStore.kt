@@ -4210,11 +4210,12 @@ fun searchExceptionOnFlow(): Flow<Boolean> =
     }
 
     /** The in-app scale (0.7f–1.3f) used while [uiScaleEnabledFlow] is on.
-     *  A television starts at 70%: its interface is read from the sofa, but a
-     *  1080p panel reports only 540dp of height, so the phone-sized chrome is
-     *  too large for the screen. An explicit choice always wins. */
+     *  A television starts at 100%: the owner's chosen default for the TV
+     *  layout. The phone-sized chrome at its designed size is what should be
+     *  legible from the sofa, not a shrunken copy of it. An explicit choice
+     *  always wins. */
     fun uiScaleFlow(): Flow<Float> =
-        store.data.map { (it[K.UI_SCALE_PERCENT] ?: if (com.hikari.app.tv.TvMode.isTv) 70 else 100).coerceIn(70, 130) / 100f }.distinctUntilChanged().flowOn(Dispatchers.Default)
+        store.data.map { (it[K.UI_SCALE_PERCENT] ?: 100).coerceIn(70, 130) / 100f }.distinctUntilChanged().flowOn(Dispatchers.Default)
 
     suspend fun uiScale(): Float = uiScaleFlow().first()
 

@@ -3676,6 +3676,10 @@ class PlayerActivity : ComponentActivity() {
         if (isInPictureInPictureMode) {
             pipExitSilenceArmed = true
             pipExitPending = false
+            // The full player is the only decoder PiP should pay for. A corner
+            // preview running the next episode at the same time doubles the
+            // decoders and is the first thing to stutter in the small window.
+            if (nextPreviewStarted || nextPreview != null) releaseNextPreview()
         } else if (pipExitSilenceArmed) {
             // The PiP window went away. That is EITHER the ✕ (finish the
             // player) or a tap-to-expand (resume is on its way): both cross
@@ -6033,7 +6037,7 @@ class PlayerActivity : ComponentActivity() {
      *  continue from the same timestamp when the current one ends. (It used to
      *  be ten, but the preview's own buffering then competed with the last
      *  seconds of the episode on a weak link.) */
-    private val previewVisibleLeadMs: Long = 6_000L
+    private val previewVisibleLeadMs: Long = 12_000L
 
     /** Resolution starts earlier than that, so a slow provider still has time
      *  to answer before the preview must be on screen. */
@@ -14788,7 +14792,7 @@ class PlayerActivity : ComponentActivity() {
                 when {
                     isTd -> 180_000                        // maxBufferMs — MTProto ceiling
                     isLive -> 60_000                       // maxBufferMs — IPTV live ceiling
-                    else -> 120_000                        // maxBufferMs — VOD ceiling
+                    else -> 180_000                        // maxBufferMs — VOD: bank three minutes
                 },
                 when {
                     isTd -> 1_000                          // bufferForPlaybackMs — MTProto
@@ -14801,6 +14805,12 @@ class PlayerActivity : ComponentActivity() {
                     else -> 3_000                          // VOD rebuffer resume
                 },
             )
+            // Hold the bank for a short back-buffer too: a seek backwards or a
+            // quick resume after the next-episode hand-off should not hit the
+            // network again. Time wins over the byte ceiling so the configured
+            // minutes are actually used on a slow link.
+            .setBackBuffer(30_000, true)
+            .setPrioritizeTimeOverSizeThresholds(true)
             .setTargetBufferBytes(
                 // The time ceilings above already cap what a fast link can bank;
                 // this byte ceiling keeps that bank from becoming hundreds of
