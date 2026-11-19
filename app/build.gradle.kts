@@ -60,6 +60,16 @@ android {
     }
 
     buildTypes {
+        // Opt-in side-by-side debug installs: with `-PdebugSuffix=debug` the
+        // debug APK installs as `com.lucid.hikari.debug`, so it can be tested
+        // on a phone that already has the release build (different signing
+        // key, same applicationId = INSTALL_FAILED_UPDATE_INCOMPATIBLE).
+        // Without the property nothing changes — CI's continuous debug APKs
+        // keep the normal `com.lucid.hikari` package.
+        debug {
+            val suffix = (findProperty("debugSuffix") as String?)?.trim().orEmpty()
+            if (suffix.isNotEmpty()) applicationIdSuffix = ".$suffix"
+        }
         release {
             // ---- Shrinking: ON ----
             //
@@ -285,6 +295,18 @@ val cloudstreamCleanJar = tasks.register<org.gradle.api.tasks.bundling.Jar>("clo
         // NoClassDefFoundError. CommonActivity is the only class in the jar
         // that references it.
         exclude("com/lagradost/cloudstream3/databinding/ToastBinding.class")
+        // The jar's plugins/Plugin is compiled by an older Kotlin/Compose
+        // toolchain and carries no Compose `$stable` field. Plugins built
+        // against a newer core read that field off the host base class in
+        // their own <clinit> and die with
+        //   NoSuchFieldError: No field $stable of type I in class
+        //   Lcom/lagradost/cloudstream3/plugins/Plugin;
+        // at instantiate time (StreamPlay v709, …). Shadow it with
+        // app/src/main/java/com/lagradost/cloudstream3/plugins/Plugin.kt —
+        // same package, same public API, compiled here with `@Stable` so the
+        // field exists — and drop the jar copy so they cannot collide
+        // ("Type ... is defined multiple times") during dex merging.
+        exclude("com/lagradost/cloudstream3/plugins/Plugin.class")
     }
     duplicatesStrategy = org.gradle.api.file.DuplicatesStrategy.EXCLUDE
 }
@@ -369,6 +391,10 @@ dependencies {
     // version in libs.versions.toml matched to it.
     implementation("io.github.anilbeesetti:nextlib-media3ext:1.7.1-0.9.0")
     implementation(libs.androidx.splashscreen)
+    // Installing the hand-authored baseline profile in app/src/main/baseline-prof.txt.
+    // Sideloaded installs get no Play cloud profiles, so this is what compiles the
+    // startup/first-scroll paths AOT on a fresh install.
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     implementation(libs.okhttp)
     // The three classpath-only companions of OkHttp 5 that EXTENSIONS link
     // against. They are not used by Hikari's own code (nothing here calls
