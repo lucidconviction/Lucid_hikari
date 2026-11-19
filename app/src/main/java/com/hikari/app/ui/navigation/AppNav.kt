@@ -121,6 +121,7 @@ import com.hikari.app.net.Updater
 import com.hikari.app.ui.components.UpdateDialog
 import com.hikari.app.ui.tutorial.FirstVisitTutorial
 import com.hikari.app.ui.screens.AnimeCalendarScreen
+import com.hikari.app.ui.screens.AnimeSpotlightScreen
 import com.hikari.app.ui.screens.CatalogScreen
 import com.hikari.app.ui.screens.CollectionGridScreen
 import com.hikari.app.ui.screens.CollectionViewScreen
@@ -424,6 +425,8 @@ object Routes {
     const val COLLECTION_VIEW = "collection-view?cid={cid}&fid={fid}"
     const val COLLECTION_GRID = "collection-grid?cid={cid}"
     const val TMDB_GRID = "tmdb-grid?preset={preset}&title={title}"
+    /** AniList's Trending / Popular grid, opened from Home's Anime spotlight. */
+    const val ANIME_SPOTLIGHT = "anime-spotlight?tab={tab}"
     /** One hand-built TMDB source (a studio, a network, a person, a custom
      *  discover query…) as a full grid. The spec is JSON in the query string,
      *  the same way a detail route carries its poster. */
@@ -438,6 +441,9 @@ object Routes {
 
     fun tmdbGrid(presetKey: String, title: String): String =
         "tmdb-grid?preset=${Uri.encode(presetKey)}&title=${Uri.encode(title)}"
+
+    /** Opens the AniList Trending (0) or Popular (1) grid. */
+    fun animeSpotlight(tab: Int = 0): String = "anime-spotlight?tab=${tab.coerceIn(0, 1)}"
 
     /** Opens one saved [com.hikari.app.data.TmdbSpec] as a full grid. */
     fun tmdbGridSpec(specJson: String, title: String): String =
@@ -1841,6 +1847,17 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
                 val spec = Uri.decode(entry.arguments?.getString("spec").orEmpty())
                 val title = Uri.decode(entry.arguments?.getString("title").orEmpty())
                 TmdbGridScreen(nav, "", title, spec)
+            }
+            composable(
+                route = Routes.ANIME_SPOTLIGHT,
+                arguments = listOf(
+                    navArgument("tab") { type = NavType.IntType; defaultValue = 0 },
+                )
+            ) { entry ->
+                AnimeSpotlightScreen(
+                    nav = nav,
+                    initialTab = entry.arguments?.getInt("tab") ?: 0,
+                )
             }
             composable(
                 route = Routes.CATALOG,

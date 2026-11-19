@@ -1060,6 +1060,7 @@ fun SettingsScreen(nav: NavHostController) {
                     item { SettingsCard { CustomBackgroundCard(app) } }
                     item { SettingsCard { DetailHeaderCard(app) } }
                     item { SettingsCard { ContinueWatchingCard(app, hideContinue, scope) } }
+                    item { SettingsCard { AnimeSpotlightCard(app) } }
                     // Animated covers (a personal catalog's GIF folder tiles).
                     // Per-device on purpose: the same imported file goes to a
                     // phone that renders a row of GIFs happily and to a TV stick
@@ -1661,6 +1662,47 @@ private fun ContinueWatchingCard(
                 // see [Modifier.tvToggle].
                 modifier = Modifier.tvToggle(!hideContinue) { show ->
                     scope.launch { app.store.setHideContinue(!show) }
+                },
+            )
+        }
+    }
+}
+
+/**
+ * "Anime spotlight" — Home's AniList rail under Streaming services.
+ *
+ * It is on by default because it is the one Home shelf that needs no extension
+ * installed: AniList answers with trending titles, and the normal detail page
+ * resolves them against whatever sources the user has.
+ */
+@Composable
+private fun AnimeSpotlightCard(app: HikariApp) {
+    val scope = rememberCoroutineScope()
+    val flow = remember { app.store.animeSpotlightFlow() }
+    val on by flow.collectAsState(initial = true)
+    Column(Modifier.padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    tr("Anime spotlight"),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    tr("Trending anime from AniList, under Streaming services"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Switch(
+                checked = on,
+                onCheckedChange = { value ->
+                    scope.launch { app.store.setAnimeSpotlight(value) }
+                },
+                modifier = Modifier.tvToggle(on) { value ->
+                    scope.launch { app.store.setAnimeSpotlight(value) }
                 },
             )
         }

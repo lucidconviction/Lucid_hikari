@@ -841,6 +841,11 @@ fun HomeScreen(nav: NavHostController) {
     val history by historyFlow.collectAsState(initial = emptyList())
     // Settings → "Continue Watching": lets the user hide the shelf entirely.
     val hideContinue by hideContinueFlow.collectAsState(initial = false)
+    // Settings → App Layout → Anime spotlight: Home's AniList rail under the
+    // Streaming services row. On by default — it is the one shelf that works
+    // with no anime extension installed.
+    val spotlightFlow = remember { app.store.animeSpotlightFlow() }
+    val spotlightOn by spotlightFlow.collectAsState(initial = true)
     // Settings → App Layout → Featured banner: which shape the banner takes and
     // which of its optional lines are drawn. Read here (not inside the banner)
     // so the whole feed recomposes to the new shape the moment it is picked.
@@ -1045,10 +1050,12 @@ fun HomeScreen(nav: NavHostController) {
     // shelves stream in differently ordered, shimmer placeholders come and go,
     // or Continue Watching changes. The order and conditions must stay the
     // same as the feed itself.
-    val feedKeys = remember(uniqueRows, continueEntries, collectionFolderRows, loading, hideContinue, rows.isEmpty()) {
+    val feedKeys = remember(uniqueRows, continueEntries, collectionFolderRows, loading, hideContinue, spotlightOn, rows.isEmpty()) {
         buildList {
             add("home-header")
             if (!hideContinue && continueEntries.isNotEmpty()) add("continue-watching")
+            add("streaming-services")
+            if (spotlightOn) add("anime-spotlight")
             add("home-genres")
             collectionFolderRows.forEach { c -> add("collection-folders|${c.id}") }
             if (loading && collectionFolderRows.isEmpty()) repeat(4) { i -> add("home-shimmer|$i") }
@@ -1223,6 +1230,27 @@ fun HomeScreen(nav: NavHostController) {
                         )
                     },
                 )
+            }
+            // Anime spotlight: AniList's trending shelf, directly under the
+            // services. It is metadata, not an extension's catalogue, so it is
+            // always present (with a cached last-known list when AniList is
+            // unreachable) and works before the first anime source is
+            // installed. The glass carousel lives in AnimeSpotlightRow.
+            if (spotlightOn) {
+                item(key = "anime-spotlight") {
+                    com.hikari.app.ui.components.AnimeSpotlightRow(
+                        onOpen = { item ->
+                            Routes.safeNavigate(
+                                nav,
+                                Routes.detail(
+                                    item.providerId, item.type, item.id,
+                                    item.title, item.posterUrl, item.rawType,
+                                ),
+                            )
+                        },
+                        onShowAll = { Routes.safeNavigate(nav, Routes.animeSpotlight(0)) },
+                    )
+                }
             }
             // Genres sit after Resume, not between the hero and the first
             // shelf: a viewer with something in progress wants that first, and

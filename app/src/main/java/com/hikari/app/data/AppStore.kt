@@ -124,6 +124,9 @@ class AppStore(private val ctx: Context) {
         val HISTORY = stringPreferencesKey("history")
         val HISTORY_PAUSED = booleanPreferencesKey("historyPaused")
         val HIDE_CONTINUE = booleanPreferencesKey("hideContinue")
+        /** Home's Anime spotlight rail (AniList trending, under Streaming
+         *  services). On by default; the switch in App Layout hides it. */
+        val ANIME_SPOTLIGHT = booleanPreferencesKey("animeSpotlight")
         /** Animate animated covers on tiles (see [gifAnimFlow]). */
         val GIF_ANIM = booleanPreferencesKey("gifAnim")
         /**
@@ -5296,6 +5299,16 @@ fun searchExceptionOnFlow(): Flow<Boolean> =
 
     suspend fun setHideContinue(hide: Boolean) {
         write("HIDE_CONTINUE") { it[K.HIDE_CONTINUE] = hide }
+    }
+
+    /** Home's Anime spotlight rail — on unless the user switched it off. */
+    fun animeSpotlightFlow(): Flow<Boolean> =
+        store.data.map { it[K.ANIME_SPOTLIGHT] ?: true }.distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    suspend fun animeSpotlight(): Boolean = animeSpotlightFlow().first()
+
+    suspend fun setAnimeSpotlight(on: Boolean) {
+        write("ANIME_SPOTLIGHT") { it[K.ANIME_SPOTLIGHT] = on }
     }
 
     // ---- Last-used server per video ----
