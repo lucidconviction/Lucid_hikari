@@ -72,13 +72,19 @@ fun keptListState(
     itemKeys: List<String> = emptyList(),
     /** Called while waiting when the target row is not loaded yet (paged lists). */
     onNeedMore: (() -> Unit)? = null,
+    /**
+     * First-visible index used ONLY when this key has no saved position yet.
+     * Lets a carousel with a lead-in card open on its first real item instead
+     * of the lead-in, without touching the restore path.
+     */
+    initialIndex: Int = 0,
 ): LazyListState {
     val saved = remember(key) { ScrollKeeper.load(key) }
     // Never seed a high index while an anchor exists: the list is still short
     // on first composition and Lazy clamps the seed to its end — the user sees
     // the bottom before the restore effect can run. Start at the top and let
     // the effect below land on the anchor once it is actually present.
-    val startIndex = if (saved?.anchor != null) 0 else (saved?.index ?: 0).coerceAtLeast(0)
+    val startIndex = if (saved?.anchor != null) 0 else (saved?.index ?: initialIndex).coerceAtLeast(0)
     val startOffset = if (saved?.anchor != null) 0 else (saved?.offset ?: 0).coerceAtLeast(0)
     val state = rememberLazyListState(
         initialFirstVisibleItemIndex = startIndex,

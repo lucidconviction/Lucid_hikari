@@ -31,6 +31,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
@@ -65,6 +66,8 @@ import com.hikari.app.i18n.tr
 import com.hikari.app.ui.theme.glassSheen
 import com.hikari.app.ui.theme.rememberGlassTokens
 import kotlin.math.abs
+
+private const val SPOTLIGHT_LEAD_KEY = "anime-spotlight-lead"
 
 /**
  * Home's Anime spotlight: a floating glass shelf under Streaming services,
@@ -115,7 +118,7 @@ fun AnimeSpotlightRow(
             actionLabel = tr("Show All"),
         )
         when {
-            entries.isNotEmpty() -> SpotlightCarousel(entries, onOpen)
+            entries.isNotEmpty() -> SpotlightCarousel(entries, onOpen, onShowAll)
             loading -> SpotlightSkeleton()
             else -> SpotlightUnavailable(onRetry = { attempt++ })
         }
@@ -124,9 +127,9 @@ fun AnimeSpotlightRow(
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun SpotlightCarousel(
-    entries: List<AnimeCatalogRepository.SpotlightEntry>,
+private fun SpotlightCarousel(    entries: List<AnimeCatalogRepository.SpotlightEntry>,
     onOpen: (MediaItem) -> Unit,
+    onShowAll: () -> Unit,
 ) {
     val tv = com.hikari.app.tv.TvMode.current()
     val cardW: Dp = if (tv) {
@@ -146,9 +149,20 @@ private fun SpotlightCarousel(
     val tokens = rememberGlassTokens()
     val accent = MaterialTheme.colorScheme.primary
     // The rail's own slot in ScrollKeeper: coming back from a title lands on
-    // the same card, exactly like every other Home shelf.
-    val rowKeys = remember(entries) { entries.map { it.item.uniqueId } }
-    val state = keptListState("homeRow:anime-spotlight", itemKeys = rowKeys)
+    // the same card, exactly like every other Home shelf. The lead-in card is
+    // index 0, so the first poster is index 1.
+    val rowKeys = remember(entries) {
+        listOf(SPOTLIGHT_LEAD_KEY) + entries.map { it.item.uniqueId }
+    }
+    // With no saved position, open on the #1 title (index 1) and let the
+    // lead-in card peek on the left — that fills the shelf instead of showing
+    // a blank half. A restored ScrollKeeper position always wins.
+    val firstVisit = remember { ScrollKeeper.load("homeRow:anime-spotlight") == null }
+    val state = keptListState(
+        key = "homeRow:anime-spotlight",
+        itemKeys = rowKeys,
+        initialIndex = if (firstVisit) 1 else 0,
+    )
 
     // Centre snapping, with a little more friction than the default: the rail
     // should answer a flick immediately and come to rest on one card.
@@ -170,9 +184,10 @@ private fun SpotlightCarousel(
                 ?.index ?: 0
         }
     }
-    val active = entries.getOrNull(activeIndex) ?: entries.first()
+    // Index 0 is the lead-in, so index/entries.size is exactly the content
+    // progress: 1/22 on the first title, 22/22 on the last, 0 on the lead-in.
     val progress by animateFloatAsState(
-        targetValue = ((activeIndex + 1).toFloat() / entries.size.coerceAtLeast(1)).coerceIn(0f, 1f),
+        targetValue = (activeIndex.toFloat() / entries.size.coerceAtLeast(1)).coerceIn(0f, 1f),
         animationSpec = spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMediumLow),
         label = "spotlightProgress",
     )
@@ -205,6 +220,21 @@ private fun SpotlightCarousel(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxSize(),
             ) {
+                item(key = SPOTLIGHT_LEAD_KEY) {
+                    SpotlightLeadCard(
+                        count = entries.size,
+                        cardW = cardW,
+                        cardH = cardH,
+                        shape = shape,
+                        accent = accent,
+                        state = state,
+                        focused = focusedKey == SPOTLIGHT_LEAD_KEY,
+                        onFocusChanged = { on ->
+                            focusedKey = if (on) SPOTLIGHT_LEAD_KEY else null
+                        },
+                        onClick = onShowAll,
+                    )
+                }
                 itemsIndexed(entries, key = { _, e -> e.item.uniqueId }) { _, entry ->
                     SpotlightCard(
                         entry = entry,
@@ -231,36 +261,58 @@ private fun SpotlightCarousel(
             animationSpec = tween(180),
             label = "spotlightCaption",
         ) { index ->
-            val e = entries.getOrNull(index) ?: return@Crossfade
             Column(
                 Modifier
                     .fillMaxWidth()
                     .padding(top = if (tv) 14.dp else 10.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text(
-                    e.item.title,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 24.dp),
-                )
-                Row(
-                    Modifier
-                        .padding(top = 5.dp)
-                        .height(18.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    e.item.rating?.takeIf { it > 0.0 }?.let { rating ->
-                        SpotlightChip(Icons.Filled.Star, String.format(java.util.Locale.US, "%.1f", rating))
+                if (index <= 0) {
+                    // The lead-in card is centred: say what the rail is, and
+                    // that tapping it opens the full grid.
+                    Text(
+                        tr("Trending on AniList"),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                    )
+                    Row(
+                        Modifier
+                            .padding(top = 5.dp)
+                            .height(18.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        SpotlightChip(Icons.Filled.AutoAwesome, tr("Tap to browse all"))
                     }
-                    airingLabel(e.item.nextEpisodeDate, e.nextEpisode)?.let { label ->
-                        SpotlightChip(
-                            Icons.Filled.CalendarMonth,
-                            if (e.nextEpisode != null && e.nextEpisode > 0) tr("Ep") + " " + label else label,
+                } else {
+                    val e = entries.getOrNull(index - 1)
+                    if (e != null) {
+                        Text(
+                            e.item.title,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 24.dp),
                         )
+                        Row(
+                            Modifier
+                                .padding(top = 5.dp)
+                                .height(18.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            e.item.rating?.takeIf { it > 0.0 }?.let { rating ->
+                                SpotlightChip(Icons.Filled.Star, String.format(java.util.Locale.US, "%.1f", rating))
+                            }
+                            airingLabel(e.item.nextEpisodeDate, e.nextEpisode)?.let { label ->
+                                SpotlightChip(
+                                    Icons.Filled.CalendarMonth,
+                                    if (e.nextEpisode != null && e.nextEpisode > 0) tr("Ep") + " " + label else label,
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -330,17 +382,7 @@ private fun SpotlightCard(
             .height(cardH)
             .onFocusChanged { onFocusChanged(it.isFocused) }
             .clickable(onClick = onClick)
-            .graphicsLayer {
-                val eased = if (focused) 1f else spotlightFraction(state, key)
-                val scale = 0.84f + 0.16f * eased
-                scaleX = scale
-                scaleY = scale
-                alpha = 0.62f + 0.38f * eased
-                translationY = (1f - eased) * 10.dp.toPx()
-                shadowElevation = 2.dp.toPx() + 20.dp.toPx() * eased
-                this.shape = shape
-                clip = true
-            },
+            .spotlightCardEffect(state, key, focused, shape),
     ) {
         val url = entry.item.posterUrl
         if (!url.isNullOrBlank()) {
@@ -375,7 +417,109 @@ private fun SpotlightCard(
                 }
                 .border(1.dp, accent, shape),
         )
+        // A new episode within the next 24h: one quiet dot, no label. It rides
+        // the card's own layer, so it scales/fades with it.
+        if (animeAiringSoon(entry.item.nextEpisodeDate)) {
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(10.dp)
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(accent)
+                    .border(1.5.dp, MaterialTheme.colorScheme.background.copy(alpha = 0.55f), CircleShape),
+            )
+        }
     }
+}
+
+/**
+ * The soft lead-in card at index 0: a branded "Trending on AniList" tile that
+ * fills the left edge of the shelf and opens the full grid. It is deliberately
+ * not a poster — the eye should read it as the rail's door, not as title #0.
+ */
+@Composable
+private fun SpotlightLeadCard(
+    count: Int,
+    cardW: Dp,
+    cardH: Dp,
+    shape: Shape,
+    accent: Color,
+    state: LazyListState,
+    focused: Boolean,
+    onFocusChanged: (Boolean) -> Unit,
+    onClick: () -> Unit,
+) {
+    val tokens = rememberGlassTokens()
+    Box(
+        Modifier
+            .width(cardW)
+            .height(cardH)
+            .onFocusChanged { onFocusChanged(it.isFocused) }
+            .clickable(onClick = onClick)
+            .spotlightCardEffect(state, SPOTLIGHT_LEAD_KEY, focused, shape)
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        accent.copy(alpha = 0.30f),
+                        tokens.fillTop,
+                        tokens.fillBottom,
+                    ),
+                ),
+                shape,
+            )
+            .border(1.dp, tokens.border, shape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier.padding(14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Icon(
+                Icons.Filled.AutoAwesome,
+                contentDescription = null,
+                tint = accent,
+                modifier = Modifier.size(30.dp),
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                tr("TRENDING"),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = accent,
+            )
+            Spacer(Modifier.height(3.dp))
+            Text(
+                tr("on AniList"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "$count " + tr("titles"),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+            )
+        }
+    }
+}
+
+/** The shared scale/lift/shadow recipe for both the lead-in and a poster. */
+private fun Modifier.spotlightCardEffect(
+    state: LazyListState,
+    key: Any,
+    focused: Boolean,
+    shape: Shape,
+): Modifier = graphicsLayer {
+    val eased = if (focused) 1f else spotlightFraction(state, key)
+    val scale = 0.84f + 0.16f * eased
+    scaleX = scale
+    scaleY = scale
+    alpha = 0.62f + 0.38f * eased
+    translationY = (1f - eased) * 10.dp.toPx()
+    shadowElevation = 2.dp.toPx() + 20.dp.toPx() * eased
+    this.shape = shape
+    clip = true
 }
 
 @Composable
@@ -453,4 +597,12 @@ private fun airingLabel(date: String?, episode: Int?): String? {
             .format(instant)
     }.getOrNull() ?: return null
     return if (episode != null && episode > 0) "$episode · $day" else day
+}
+
+/** True when AniList's next airing for this title is within the next 24h. */
+private fun animeAiringSoon(date: String?): Boolean {
+    if (date.isNullOrBlank()) return false
+    val at = runCatching { java.time.Instant.parse(date).toEpochMilli() }.getOrNull() ?: return false
+    val delta = at - System.currentTimeMillis()
+    return delta in 0..(24L * 60L * 60L * 1000L)
 }
