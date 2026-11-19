@@ -1149,10 +1149,27 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
         // silently swallowed by the runCatching calls — which is exactly why the
         // Details block and the Cast/Trailers/Related/Similar rows never showed up.
         withContext(Dispatchers.IO) {
+            // Custom metadata tweaks (Settings → Integrations): the Aio/addon
+            // legs answer beside TMDB, so the shelves fill even with TMDB off.
+            // A family switched off — or a source marked native — keeps its own
+            // site data and is never enriched.
+            val engineFamily = manager.byId(item.providerId)?.config?.type
+            val nativeIds = runCatching { getApplication<HikariApp>().store.nativeProviders() }.getOrDefault(emptySet())
+            val externalOn = engineFamily != null && item.providerId !in nativeIds &&
+                runCatching { com.hikari.app.data.MetaSources.familyEnabled(engineFamily) }
+                    .getOrDefault(true)
+            val metaAddons = manager.providers.value
+                .filterIsInstance<com.hikari.app.providers.StremioAddon>()
+                .filter { it.config.enabled && it.config.id != item.providerId }
             // Extras first: they are ONE TMDB call (credits+videos+certifications)
             // and carry the details block, so the page fills in fastest this way.
             val ex = runCatching { TmdbMeta.extras(item) }.getOrNull()
-            _extras.value = ex
+            val addonEx = if (externalOn) {
+                runCatching {
+                    com.hikari.app.data.MetaSources.addonExtras(item, metaAddons)
+                }.getOrNull()
+            } else null
+            _extras.value = mergeShelfExtras(addonEx, ex)
             // Ratings next: a handful of review sites (Wikidata, Rotten Tomatoes,
             // Metacritic, Letterboxd) asked in parallel and each independently
             // optional. TMDB's own score is part of the strip and comes from the
@@ -1170,8 +1187,70 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }.getOrDefault(emptyList()).let { _ratings.value = it }
             _related.value = runCatching { TmdbMeta.related(item) }.getOrDefault(emptyList())
-            _similar.value = runCatching { TmdbMeta.similar(item) }.getOrDefault(emptyList())
+            var sim = runCatching { TmdbMeta.similar(item) }.getOrDefault(emptyList())
+            // Addon recommendations (Aio serves these inside its meta doc):
+            // fill the Similar row when TMDB is off or answered nothing.
+            if (sim.isEmpty() && externalOn) {
+                sim = runCatching {
+                    com.hikari.app.data.MetaSources.addonSimilar(item, metaAddons)
+                }.getOrDefault(emptyList())
+            }
+            _similar.value = sim
         }
+    }
+
+    /**
+     * Merges the addon legs' [TitleExtras] with TMDB's: the addon wins where it
+     * answered (Aio aggregates TMDB server-side, so its cast/trailers are
+     * current), TMDB fills the rest. Company rows are a union — a Stremio meta
+     * doc rarely carries studios, and dropping TMDB's would empty the
+     * Production row. Same shape as the reference client.
+     */
+    private fun mergeShelfExtras(addon: TitleExtras?, tmdb: TitleExtras?): TitleExtras? {
+        if (addon == null) return tmdb
+        if (tmdb == null) return addon
+        val addonCast = addon.cast.takeIf { it.isNotEmpty() }
+        val mergedCast = addonCast?.map { member ->
+            if (!member.profileUrl.isNullOrBlank()) member
+            else tmdb.cast.firstOrNull {
+                it.name.equals(member.name, ignoreCase = true) && !it.profileUrl.isNullOrBlank()
+            }?.let { member.copy(profileUrl = it.profileUrl) } ?: member
+        } ?: tmdb.cast
+        val aDet = addon.details
+        val tDet = tmdb.details
+        val mergedDetails = if (aDet == null) tDet else if (tDet == null) aDet else TitleDetails(
+            status = tDet.status ?: aDet.status,
+            runtimeMinutes = tDet.runtimeMinutes ?: aDet.runtimeMinutes,
+            year = tDet.year ?: aDet.year,
+            rating = tDet.rating ?: aDet.rating,
+            voteCount = tDet.voteCount ?: aDet.voteCount,
+            certification = tDet.certification ?: aDet.certification,
+            country = tDet.country ?: aDet.country,
+            language = tDet.language ?: aDet.language,
+            releaseDate = tDet.releaseDate ?: aDet.releaseDate,
+            director = tDet.director ?: aDet.director,
+            writers = tDet.writers.ifEmpty { aDet.writers },
+            imdbId = tDet.imdbId ?: aDet.imdbId,
+        )
+        return TitleExtras(
+            details = mergedDetails,
+            cast = mergedCast,
+            trailers = addon.trailers.takeIf { it.isNotEmpty() } ?: tmdb.trailers,
+            castIsCharacters = if (addonCast != null) false else tmdb.castIsCharacters,
+            localizedTitle = tmdb.localizedTitle ?: addon.localizedTitle,
+            originalTitle = tmdb.originalTitle?.takeIf { it.isNotBlank() } ?: addon.originalTitle,
+            overview = tmdb.overview ?: addon.overview,
+            companies = (addon.companies + tmdb.companies)
+                .distinctBy { (if (it.isNetwork) "n" else "c") + "|" + it.id }
+                .map { c ->
+                    if (!c.logoUrl.isNullOrBlank()) c
+                    else tmdb.companies.firstOrNull {
+                        it.name.equals(c.name, ignoreCase = true) && !it.logoUrl.isNullOrBlank()
+                    }?.let { c.copy(logoUrl = it.logoUrl) } ?: c
+                }
+                .take(10),
+            collection = tmdb.collection,
+        )
     }
 
     /**

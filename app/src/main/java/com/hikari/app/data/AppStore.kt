@@ -572,6 +572,30 @@ class AppStore(private val ctx: Context) {
         val TMDB_MODULE_SEASON_POSTERS = booleanPreferencesKey("tmdbModuleSeasonPosters")
         val TMDB_MODULE_MORE_LIKE = booleanPreferencesKey("tmdbModuleMoreLike")
         val TMDB_MODULE_COLLECTIONS = booleanPreferencesKey("tmdbModuleCollections")
+        // ---- Custom metadata tweaks (Settings → Integrations) -------------
+        // Which metadata source may answer for anime / movies & series. Every
+        // source is a fallback chain: a miss falls through to the next leg, so
+        // switching one on can never blank a detail page.
+        val ANIME_SIMKL = booleanPreferencesKey("animeMetaSimkl")
+        val ANIME_ANILIST = booleanPreferencesKey("animeMetaAnilist")
+        val ANIME_TMDB = booleanPreferencesKey("animeMetaTmdb")
+        val ANIME_SIMKL_APP_ID = stringPreferencesKey("animeMetaSimklAppId")
+        val ANIME_AIO = booleanPreferencesKey("animeMetaAio")
+        val VIDEO_TMDB = booleanPreferencesKey("videoMetaTmdb")
+        val VIDEO_AIO = booleanPreferencesKey("videoMetaAio")
+        /** An AIOStreams / AIO Metadata instance: the base URL its `meta`
+         *  endpoint is built from, plus the optional API key it expects. */
+        val AIO_BASE_URL = stringPreferencesKey("aioBaseUrl")
+        val AIO_API_KEY = stringPreferencesKey("aioApiKey")
+        /** Manga metadata — AniList blurbs/genres/covers, and the adult
+         *  manhwa catalogue (PornHwaDB) which needs its own key. */
+        val MANGA_ANILIST = booleanPreferencesKey("mangaMetaAnilist")
+        val ADULT_MANHWA = booleanPreferencesKey("adultManhwaMeta")
+        val PORNHWA_API_KEY = stringPreferencesKey("pornhwaApiKey")
+        /** Extension families whose titles may take external metadata, and the
+         *  native providers whose own site metadata must never be overridden. */
+        val META_FAMILY_EXTERNAL = stringSetPreferencesKey("metaFamilyExternal")
+        val NATIVE_PROVIDERS = stringSetPreferencesKey("nativeMetadataProviders")
         val MDB_ENABLED = booleanPreferencesKey("mdbEnabled")
         val MDB_IMDB = booleanPreferencesKey("mdbImdb")
         val MDB_TMDB = booleanPreferencesKey("mdbTmdb")
@@ -1094,6 +1118,69 @@ class AppStore(private val ctx: Context) {
             }
         }
     }
+
+    // ---- Custom metadata tweaks (Settings → Integrations) -----------------
+
+    fun animeSimklFlow(): Flow<Boolean> = store.data.map { it[K.ANIME_SIMKL] ?: true }.distinctUntilChanged().flowOn(Dispatchers.Default)
+    suspend fun animeSimkl(): Boolean = animeSimklFlow().first()
+    suspend fun setAnimeSimkl(value: Boolean) { write("ANIME_SIMKL") { it[K.ANIME_SIMKL] = value } }
+
+    fun animeAnilistFlow(): Flow<Boolean> = store.data.map { it[K.ANIME_ANILIST] ?: true }.distinctUntilChanged().flowOn(Dispatchers.Default)
+    suspend fun animeAnilist(): Boolean = animeAnilistFlow().first()
+    suspend fun setAnimeAnilist(value: Boolean) { write("ANIME_ANILIST") { it[K.ANIME_ANILIST] = value } }
+
+    fun animeTmdbFlow(): Flow<Boolean> = store.data.map { it[K.ANIME_TMDB] ?: true }.distinctUntilChanged().flowOn(Dispatchers.Default)
+    suspend fun animeTmdb(): Boolean = animeTmdbFlow().first()
+    suspend fun setAnimeTmdb(value: Boolean) { write("ANIME_TMDB") { it[K.ANIME_TMDB] = value } }
+
+    fun animeSimklAppIdFlow(): Flow<String> = store.data.map { it[K.ANIME_SIMKL_APP_ID] ?: "" }.distinctUntilChanged().flowOn(Dispatchers.Default)
+    suspend fun animeSimklAppId(): String = animeSimklAppIdFlow().first()
+    suspend fun setAnimeSimklAppId(value: String) { write("ANIME_SIMKL_APP_ID") { it[K.ANIME_SIMKL_APP_ID] = value } }
+
+    fun animeAioFlow(): Flow<Boolean> = store.data.map { it[K.ANIME_AIO] ?: true }.distinctUntilChanged().flowOn(Dispatchers.Default)
+    suspend fun animeAio(): Boolean = animeAioFlow().first()
+    suspend fun setAnimeAio(value: Boolean) { write("ANIME_AIO") { it[K.ANIME_AIO] = value } }
+
+    fun videoTmdbFlow(): Flow<Boolean> = store.data.map { it[K.VIDEO_TMDB] ?: true }.distinctUntilChanged().flowOn(Dispatchers.Default)
+    suspend fun videoTmdb(): Boolean = videoTmdbFlow().first()
+    suspend fun setVideoTmdb(value: Boolean) { write("VIDEO_TMDB") { it[K.VIDEO_TMDB] = value } }
+
+    fun videoAioFlow(): Flow<Boolean> = store.data.map { it[K.VIDEO_AIO] ?: true }.distinctUntilChanged().flowOn(Dispatchers.Default)
+    suspend fun videoAio(): Boolean = videoAioFlow().first()
+    suspend fun setVideoAio(value: Boolean) { write("VIDEO_AIO") { it[K.VIDEO_AIO] = value } }
+
+    fun aioBaseUrlFlow(): Flow<String> = store.data.map { it[K.AIO_BASE_URL].orEmpty() }.distinctUntilChanged().flowOn(Dispatchers.Default)
+    suspend fun aioBaseUrl(): String = aioBaseUrlFlow().first()
+    suspend fun setAioBaseUrl(value: String) { write("AIO_BASE_URL") { it[K.AIO_BASE_URL] = value } }
+
+    fun aioApiKeyFlow(): Flow<String> = store.data.map { it[K.AIO_API_KEY].orEmpty() }.distinctUntilChanged().flowOn(Dispatchers.Default)
+    suspend fun aioApiKey(): String = aioApiKeyFlow().first()
+    suspend fun setAioApiKey(value: String) { write("AIO_API_KEY") { it[K.AIO_API_KEY] = value } }
+
+    fun mangaAnilistFlow(): Flow<Boolean> = store.data.map { it[K.MANGA_ANILIST] ?: true }.distinctUntilChanged().flowOn(Dispatchers.Default)
+    suspend fun mangaAnilist(): Boolean = mangaAnilistFlow().first()
+    suspend fun setMangaAnilist(value: Boolean) { write("MANGA_ANILIST") { it[K.MANGA_ANILIST] = value } }
+
+    fun adultManhwaFlow(): Flow<Boolean> = store.data.map { it[K.ADULT_MANHWA] ?: false }.distinctUntilChanged().flowOn(Dispatchers.Default)
+    suspend fun adultManhwa(): Boolean = adultManhwaFlow().first()
+    suspend fun setAdultManhwa(value: Boolean) { write("ADULT_MANHWA") { it[K.ADULT_MANHWA] = value } }
+
+    fun pornhwaApiKeyFlow(): Flow<String> = store.data.map { it[K.PORNHWA_API_KEY] ?: "" }.distinctUntilChanged().flowOn(Dispatchers.Default)
+    suspend fun pornhwaApiKey(): String = pornhwaApiKeyFlow().first()
+    suspend fun setPornhwaApiKey(value: String) { write("PORNHWA_API_KEY") { it[K.PORNHWA_API_KEY] = value } }
+
+    fun metaFamilyExternalFlow(): Flow<Set<String>> =
+        store.data.map { prefs ->
+            if (prefs.contains(K.META_FAMILY_EXTERNAL)) prefs[K.META_FAMILY_EXTERNAL].orEmpty()
+            else MetaSources.EXTERNAL_FAMILY_NAMES.toSet()
+        }.distinctUntilChanged().flowOn(Dispatchers.Default)
+    suspend fun metaFamilyExternal(): Set<String> = metaFamilyExternalFlow().first()
+    suspend fun setMetaFamilyExternal(names: Set<String>) { write("META_FAMILY_EXTERNAL") { it[K.META_FAMILY_EXTERNAL] = names.toSet() } }
+
+    fun nativeProvidersFlow(): Flow<Set<String>> =
+        store.data.map { it[K.NATIVE_PROVIDERS] ?: emptySet() }.distinctUntilChanged().flowOn(Dispatchers.Default)
+    suspend fun nativeProviders(): Set<String> = nativeProvidersFlow().first()
+    suspend fun setNativeProviders(ids: Set<String>) { write("NATIVE_PROVIDERS") { it[K.NATIVE_PROVIDERS] = ids.toSet() } }
 
     fun mdbEnabledFlow(): Flow<Boolean> = store.data.map { it[K.MDB_ENABLED] ?: false }.distinctUntilChanged().flowOn(Dispatchers.Default)
     suspend fun mdbEnabled(): Boolean = mdbEnabledFlow().first()

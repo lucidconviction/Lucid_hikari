@@ -6443,8 +6443,20 @@ class ContentRepository(private val manager: ProviderManager) {
         // enrichment for.
         // Tracker rows were served wrong-show meta from these caches — the
         // suffix re-keys them once so every tracker title refetches clean.
+        // The metadata-tweaks fingerprint is part of the key too: flipping a
+        // source/family switch must re-resolve the page instead of serving the
+        // previous chain's text forever (see MetaSources.fingerprint).
         val metaKey = MetaCache.metaKey(item.uniqueId) +
-            if (TrackerAnimeResolver.isTrackerAnime(item)) "|trk2" else ""
+            (if (TrackerAnimeResolver.isTrackerAnime(item)) "|trk2" else "") +
+            runCatching {
+                MetaSources.fingerprint(
+                    item,
+                    manager.byId(item.providerId)?.config?.type,
+                    manager.providers.value.joinToString(",") {
+                        it.config.id + ":" + it.config.enabled
+                    },
+                )
+            }.getOrDefault("")
         MetaCache.cachedMeta(metaKey)?.let { cached ->
             if (!cached.overview.isNullOrBlank()) {
                 synchronized(metaCache) { metaCache[item.uniqueId] = cached }
@@ -6462,6 +6474,29 @@ class ContentRepository(private val manager: ProviderManager) {
                 }
             }
             ?: item
+        // Custom metadata tweaks (Settings → Integrations): AioMetadata first,
+        // then the enabled Stremio metadata addons, filling only what the
+        // extension's own meta left bare. A family switched off — or a source
+        // marked native — never takes part, so its titles keep pure site
+        // metadata. Only paid when there IS a blank: a complete meta row must
+        // not cost an Aio request on every page open.
+        runCatching {
+            val family = originProvider?.config?.type
+            val nativeIds = HikariApp.instance.store.nativeProviders()
+            val needsExternal = result.overview.isNullOrBlank() ||
+                result.backdropUrl.isNullOrBlank() ||
+                result.posterUrl.isNullOrBlank() ||
+                result.genres.isEmpty()
+            if (family != null && needsExternal && item.providerId !in nativeIds &&
+                MetaSources.familyEnabled(family)
+            ) {
+                val metaAddons = manager.providers.value
+                    .filterIsInstance<StremioAddon>()
+                    .filter { it.config.enabled && it.config.id != item.providerId }
+                val patched = MetaSources.applyExternal(result, metaAddons)
+                if (patched !== result) result = patched
+            }
+        }
         if (result.backdropUrl != null && result.overview != null) {
             val t = translateItem(result)
             synchronized(metaCache) { metaCache[item.uniqueId] = t }
@@ -6555,7 +6590,17 @@ class ContentRepository(private val manager: ProviderManager) {
         // reported "~15 seconds for the episode list".
         val got = episodesForInner(item, onPartial)
             ?.let { EpisodeDubSub.mergedFor(item.uniqueId, it) }
-        if (!got.isNullOrEmpty()) return@interactive got
+        // Addon-leg thumbnails (Settings → Integrations → Custom metadata
+        // tweaks): Aio first, then the installed metadata addons fill episode
+        // stills only — ids and numbering are never touched, so a dead image
+        // CDN can't black out the list and playback stays on the origin's ids.
+        val thumbs = if (!got.isNullOrEmpty()) {
+            val metaAddons = manager.providers.value
+                .filterIsInstance<com.hikari.app.providers.StremioAddon>()
+                .filter { it.config.enabled }
+            runCatching { MetaSources.fillEpisodeImages(item, got, metaAddons) }.getOrDefault(got)
+        } else got
+        if (!thumbs.isNullOrEmpty()) return@interactive thumbs
         // Tracker anime with no borrowable list: build the correct numbered
         // list (Bangumi numbering for donghua, Simkl counts for every anime,
         // AniList/MyAnimeList counts otherwise) instead of Episodes (0).

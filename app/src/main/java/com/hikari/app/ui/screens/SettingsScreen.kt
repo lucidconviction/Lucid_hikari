@@ -108,6 +108,7 @@ import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Slideshow
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Translate
@@ -170,6 +171,8 @@ import androidx.navigation.NavHostController
 import com.hikari.app.BuildConfig
 import com.hikari.app.HikariApp
 import com.hikari.app.data.BackupManager
+import com.hikari.app.data.MangaMetadataRepository
+import com.hikari.app.data.MetaSources
 import com.hikari.app.data.ProviderType
 import com.hikari.app.data.Ratings
 import com.hikari.app.data.TmdbLang
@@ -384,8 +387,8 @@ private enum class SettingsFolder(
     ),
     INTEGRATIONS_ANIME(
         "integrations.anime",
-        "Anime Metadata",
-        "AniList-first titles, episodes & next-airing",
+        "Custom metadata tweaks",
+        "Metadata sources, addons, native providers & manga",
         Icons.Filled.AutoAwesome,
         parent = "integrations",
     ),    // The user's own catalogs (Collections) live here rather than under
@@ -652,7 +655,7 @@ private fun searchSettings(rawQuery: String): List<SettingsSearchEntry> {
     section("sec-ask-where", "Ask where to play", servers, "servers", null, "player.start", "ask where play extension selected scope choice")
     section("sec-server-search", "Server search", servers, "servers", null, null, "server search all extensions nuvio stremio cloudstream hikari anymex aniyomi skystream sora vega choose")
     section("sec-tracker-servers", "Tracker servers", servers, "servers", null, null, "tracker servers search")
-    section("sec-anime-meta", "Anime Metadata", "Integrations", "integrations", "integrations.anime", null, "anime metadata anilist simkl episodes")
+    section("sec-anime-meta", "Custom metadata tweaks", "Integrations", "integrations", "integrations.anime", null, "anime metadata anilist simkl tmdb aio aio metadata metadata addons native providers manga pornhwadb adult manhwa custom metadata tweaks")
     section("sec-tmdb", "TMDB Enrichment", "Integrations", "integrations", "integrations.tmdb", "integrations.tmdb.main", "tmdb artwork metadata episodes credits")
     section("sec-tmdb-mod", "TMDB modules", "Integrations", "integrations", "integrations.tmdb", "integrations.tmdb.modules", "tmdb modules artwork")
     section("sec-mdb", "MDBList Ratings", "Integrations", "integrations", "integrations.mdblist", "integrations.mdblist.main", "ratings imdb rotten tomatoes")
@@ -7452,12 +7455,347 @@ private fun TrackerServiceCard(
     }
 }
 
+/**
+ * Settings → Integrations → Custom metadata tweaks.
+ *
+ * Every source here is a fallback chain, never a replacement: a title's text,
+ * art and episodes come from the first source that answers, and a dead or
+ * unconfigured backend falls through to the next leg (AioMetadata → installed
+ * Stremio metadata addons → TMDB → the extension's own site data). That is why
+ * switching one off can never blank a detail page — see
+ * [com.hikari.app.data.MetaSources].
+ */
 @Composable
 private fun AnimeMetadataIntegrationCard(app: HikariApp) {
+    val scope = rememberCoroutineScope()
+    val simkl by remember { app.store.animeSimklFlow() }.collectAsState(initial = true)
+    val anilist by remember { app.store.animeAnilistFlow() }.collectAsState(initial = true)
+    val animeTmdb by remember { app.store.animeTmdbFlow() }.collectAsState(initial = true)
+    val videoTmdb by remember { app.store.videoTmdbFlow() }.collectAsState(initial = true)
+    val animeAio by remember { app.store.animeAioFlow() }.collectAsState(initial = true)
+    val videoAio by remember { app.store.videoAioFlow() }.collectAsState(initial = true)
+    val savedAioUrl by remember { app.store.aioBaseUrlFlow() }.collectAsState(initial = "")
+    var draftAioUrl by remember { mutableStateOf("") }
+    LaunchedEffect(savedAioUrl) { draftAioUrl = savedAioUrl }
+    val savedSimklId by remember { app.store.animeSimklAppIdFlow() }.collectAsState(initial = "")
+    var draftSimklId by remember { mutableStateOf("") }
+    LaunchedEffect(savedSimklId) { draftSimklId = savedSimklId }
+    val context = LocalContext.current
+    val mangaAnilist by remember { app.store.mangaAnilistFlow() }.collectAsState(initial = true)
+    val adultManhwa by remember { app.store.adultManhwaFlow() }.collectAsState(initial = false)
+    val savedPwdbKey by remember { app.store.pornhwaApiKeyFlow() }.collectAsState(initial = "")
+    var draftPwdbKey by remember { mutableStateOf("") }
+    LaunchedEffect(savedPwdbKey) { draftPwdbKey = savedPwdbKey }
+    var checkingPwdb by remember { mutableStateOf(false) }
+    val native by remember { app.store.nativeProvidersFlow() }.collectAsState(initial = emptySet())
+    val installed by app.providers.providers.collectAsState()
+    val videoProviders = remember(installed) {
+        installed.filter { it.config.enabled && it.config.type.isFamilyEngine }
+            .sortedBy { it.config.name.ifBlank { it.config.id }.lowercase() }
+    }
+    var nativeQuery by remember { mutableStateOf("") }
+    val shownProviders = remember(videoProviders, nativeQuery) {
+        val q = nativeQuery.trim().lowercase()
+        if (q.isBlank()) videoProviders
+        else videoProviders.filter { p ->
+            p.config.name.ifBlank { p.config.id }.lowercase().contains(q) ||
+                p.config.id.lowercase().contains(q) ||
+                p.config.type.groupLabel.lowercase().contains(q)
+        }
+    }
+
     Column(Modifier.padding(16.dp)) {
-        SettingsCardHeading(Icons.Filled.AutoAwesome,tr("Anime metadata"))
-        Spacer(Modifier.height(8.dp))
-        Text(tr("All titles, episodes, seasons and details now come from TMDB, the same as everything else."),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        SettingsCardHeading(Icons.Filled.AutoAwesome, tr("Metadata sources"))
+        if (!LocalHideHelp.current) Text(
+            tr("Anime metadata merges AioMetadata, then Simkl, then AniList, then TMDB — the first hit wins per field. No logins needed; everything enabled here fetches automatically."),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(tr("Anime"), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+        SettingsToggle(
+            label = tr("Simkl"),
+            supporting = tr("Anime titles, posters and episode details from Simkl"),
+            checked = simkl,
+            onCheckedChange = { on -> scope.launch { runCatching { app.store.setAnimeSimkl(on) } } },
+        )
+        SettingsToggle(
+            label = tr("AniList"),
+            supporting = tr("Anime titles, posters and episode details from AniList"),
+            checked = anilist,
+            onCheckedChange = { on -> scope.launch { runCatching { app.store.setAnimeAnilist(on) } } },
+        )
+        SettingsToggle(
+            label = tr("TMDB"),
+            supporting = tr("Anime titles, posters and episode details from TMDB"),
+            checked = animeTmdb,
+            onCheckedChange = { on -> scope.launch { runCatching { app.store.setAnimeTmdb(on) } } },
+        )
+        SettingsToggle(
+            label = tr("AioMetadata"),
+            supporting = tr("Anime titles, posters and descriptions from AioMetadata first"),
+            checked = animeAio,
+            onCheckedChange = { on -> scope.launch { runCatching { app.store.setAnimeAio(on) } } },
+        )
+        if (simkl) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                tr("Simkl app ID"),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                tr("Optional. A connected Simkl tracker login already supplies one; a free app ID from the Simkl API portal works without any login."),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp, bottom = 10.dp),
+            )
+            ApiKeyEditor(
+                label = "Simkl app ID",
+                value = draftSimklId,
+                savedValue = savedSimklId,
+                onValueChange = { draftSimklId = it },
+                onSave = {
+                    scope.launch { runCatching { app.store.setAnimeSimklAppId(draftSimklId.trim()) } }
+                },
+            )
+        }
+        Spacer(Modifier.height(14.dp))
+        Text(tr("Movies & series"), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+        SettingsToggle(
+            label = tr("TMDB"),
+            supporting = tr("Posters, details and episode names for movies and series"),
+            checked = videoTmdb,
+            onCheckedChange = { on -> scope.launch { runCatching { app.store.setVideoTmdb(on) } } },
+        )
+        SettingsToggle(
+            label = tr("AioMetadata"),
+            supporting = tr("Posters and descriptions from AioMetadata first"),
+            checked = videoAio,
+            onCheckedChange = { on -> scope.launch { runCatching { app.store.setVideoAio(on) } } },
+        )
+        if (videoAio) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                tr("AioMetadata endpoint"),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                tr("Paste your Install URL from aiometadata.elfhosted.com (the …/stremio/…/manifest.json link) — or just the ID part. Blank means Aio is skipped and TMDB answers as before. No extra key needed."),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp, bottom = 10.dp),
+            )
+            ApiKeyEditor(
+                label = "AioMetadata install URL or ID",
+                value = draftAioUrl,
+                savedValue = savedAioUrl,
+                onValueChange = { draftAioUrl = it },
+                onSave = {
+                    scope.launch { runCatching { app.store.setAioBaseUrl(draftAioUrl.trim().trimEnd('/')) } }
+                },
+            )
+        }
+        Spacer(Modifier.height(14.dp))
+        Text(tr("Metadata addons"), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+        if (!LocalHideHelp.current) Text(
+            tr("AioMetadata answers first when its endpoint is set above. Every enabled Stremio addon below is asked next, in Extensions order, then TMDB. Toggle an addon off and it is never consulted; reorder in Extensions to change priority."),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "● " + tr("AioMetadata") + " — " + if (savedAioUrl.isNotBlank()) tr("first") else tr("not configured"),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        var addonMetaRows by remember { mutableStateOf<List<Triple<String, String, Boolean>>?>(null) }
+        LaunchedEffect(installed) {
+            addonMetaRows = installed
+                .filter { it.config.type == ProviderType.STREMIO }
+                .sortedBy { it.config.name.ifBlank { it.config.id }.lowercase() }
+                .map { p ->
+                    val declares = (p as? com.hikari.app.providers.StremioAddon)?.let {
+                        runCatching { it.declaresMeta() }.getOrDefault(false)
+                    } == true
+                    Triple(
+                        p.config.id,
+                        p.config.name.ifBlank { p.config.id },
+                        declares,
+                    )
+                }
+        }
+        val rows = addonMetaRows
+        val enabledById = remember(installed) {
+            installed.associate { it.config.id to it.config.enabled }
+        }
+        if (rows == null) {
+            Text(
+                tr("Checking installed addons…"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        } else if (rows.isEmpty()) {
+            Text(
+                tr("No installed Stremio addon — add Cinemeta from Extensions to get descriptions here."),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        } else {
+            rows.forEach { (id, name, declares) ->
+                SettingsToggle(
+                    label = name,
+                    supporting = if (declares) tr("Metadata addon — on: answers catalogs + detail")
+                    else tr("No metadata resource — on: answers catalogs + streams"),
+                    checked = enabledById[id] != false,
+                    onCheckedChange = { on ->
+                        scope.launch {
+                            runCatching { app.store.setEnabled(id, on) }
+                            // The switch list reads the in-memory provider list —
+                            // without a refresh the toggle saves but the UI snaps back.
+                            runCatching { app.providers.refresh() }
+                        }
+                    },
+                )
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        Text(tr("Apply external metadata to"), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+        if (!LocalHideHelp.current) Text(
+            tr("Off keeps that category on its extension's own site metadata only. On lets Aio, your metadata addons and TMDB fill what the site left bare."),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        val extFam by remember { app.store.metaFamilyExternalFlow() }
+            .collectAsState(initial = com.hikari.app.data.MetaSources.EXTERNAL_FAMILY_NAMES.toSet())
+        for (t in com.hikari.app.data.MetaSources.EXTERNAL_FAMILIES) {
+            SettingsToggle(
+                label = t.groupLabel,
+                supporting = t.name,
+                checked = t.name in extFam,
+                onCheckedChange = { v ->
+                    scope.launch {
+                        runCatching {
+                            app.store.setMetaFamilyExternal(if (v) extFam + t.name else extFam - t.name)
+                        }
+                    }
+                },
+            )
+        }
+        Spacer(Modifier.height(14.dp))
+        Text(tr("Manga"), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+        SettingsToggle(
+            label = tr("AniList"),
+            supporting = tr("Manhwa, manhua and manga blurbs, genres and covers from AniList"),
+            checked = mangaAnilist,
+            onCheckedChange = { on -> scope.launch { runCatching { app.store.setMangaAnilist(on) } } },
+        )
+        SettingsToggle(
+            label = tr("Adult manhwa (PornHwaDB)"),
+            supporting = tr("Adult titles enriched from PornHwaDB — needs your free API key below"),
+            checked = adultManhwa,
+            onCheckedChange = { on -> scope.launch { runCatching { app.store.setAdultManhwa(on) } } },
+        )
+        if (adultManhwa) {
+            Text(
+                tr("Get your free key from pornhwadb.com — Profile, Settings, Developer tab — then paste it below."),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp, bottom = 10.dp),
+            )
+            TextButton(
+                onClick = {
+                    runCatching {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(MangaMetadataRepository.GET_KEY_URL)))
+                    }
+                },
+            ) {
+                Icon(Icons.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(tr("Get a key from PornHwaDB"))
+            }
+            ApiKeyEditor(
+                label = "PornHwaDB API key",
+                value = draftPwdbKey,
+                savedValue = savedPwdbKey,
+                onValueChange = { draftPwdbKey = it },
+                onSave = {
+                    scope.launch {
+                        val key = draftPwdbKey.trim()
+                        runCatching { app.store.setPornhwaApiKey(key) }
+                        if (key.isEmpty()) return@launch
+                        checkingPwdb = true
+                        val code = runCatching { MangaMetadataRepository.checkApiKey(key) }.getOrDefault(-1)
+                        checkingPwdb = false
+                        val msg = when (code) {
+                            200 -> "PornHwaDB key saved — adult manhwa metadata is on"
+                            401 -> "That key was rejected (401) — check it on pornhwadb.com"
+                            else -> "Key saved, but PornHwaDB did not answer — it will retry when a title opens"
+                        }
+                        Toast.makeText(context, I18n.t(msg), Toast.LENGTH_LONG).show()
+                    }
+                },
+            )
+            if (checkingPwdb) {
+                Text(
+                    tr("Checking key..."),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        Text(tr("Extension metadata"), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+        if (!LocalHideHelp.current) Text(
+            tr("Sources whose own metadata is better stay native: their titles, posters and episode names are used as-is, with no external enrichment."),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (videoProviders.isEmpty()) {
+            Text(
+                tr("Install a video source to choose native metadata per source."),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        } else {
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(
+                value = nativeQuery,
+                onValueChange = { nativeQuery = it },
+                placeholder = { Text(tr("Search sources…")) },
+                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().tvTextFieldKeys(nativeQuery),
+            )
+        }
+        if (shownProviders.isEmpty() && videoProviders.isNotEmpty()) {
+            Text(
+                tr("No sources match that search."),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+        for (p in shownProviders) {
+            val id = p.config.id
+            SettingsToggle(
+                label = p.config.name.ifBlank { id },
+                supporting = p.config.type.groupLabel,
+                checked = id in native,
+                onCheckedChange = { on ->
+                    scope.launch {
+                        runCatching {
+                            app.store.setNativeProviders(if (on) native + id else native - id)
+                        }
+                    }
+                },
+            )
+        }
     }
 }
 

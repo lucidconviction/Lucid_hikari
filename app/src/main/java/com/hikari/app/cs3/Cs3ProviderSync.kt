@@ -33,7 +33,10 @@ object Cs3ProviderSync {
      */
     suspend fun reconcile(context: Context, store: AppStore): Boolean {
         val current = store.providers()
-        val cs3 = current.filter { it.type == ProviderType.CS3 }
+        val cs3 = current.filter {
+            it.type == ProviderType.CS3 ||
+                (it.type == ProviderType.MANGA && Cs3MangaProvider.isCs3MangaId(it.id))
+        }
         if (cs3.isEmpty()) return false
 
         val merged = LinkedHashMap<String, ProviderConfig>()
@@ -56,13 +59,25 @@ object Cs3ProviderSync {
             val template = configs.first()
             val kept = LinkedHashMap<String, ProviderConfig>()
             apis.forEachIndexed { i, api ->
-                val id = "cs3|$hash|$i"
+                // A CloudStream manga plugin's catalogues are titles and its
+                // "episodes" are chapters (see [Cs3MangaProvider]); it must be
+                // stored as MANGA so the manga screens/reader open on it, and
+                // with the manga id prefix so ProviderManager can dispatch it.
+                val manga = Cs3MangaProvider.isMangaApi(api)
+                val id = (if (manga) Cs3MangaProvider.MANGA_PREFIX else "cs3|") + hash + "|" + i
+                val otherId = (if (manga) "cs3|" else Cs3MangaProvider.MANGA_PREFIX) + hash + "|" + i
                 val name = api.name.ifBlank { file.name.removeSuffix(".cs3") }
-                val prev = previousById[id]
-                val next = prev?.copy(name = name) ?: ProviderConfig(
+                // Carry the enabled flag across a kind move: a video row the
+                // user kept enabled must not come back disabled as manga.
+                val prev = previousById[id] ?: previousById[otherId]
+                val next = prev?.copy(
                     id = id,
                     name = name,
-                    type = ProviderType.CS3,
+                    type = if (manga) ProviderType.MANGA else ProviderType.CS3,
+                ) ?: ProviderConfig(
+                    id = id,
+                    name = name,
+                    type = if (manga) ProviderType.MANGA else ProviderType.CS3,
                     url = path,
                     iconUrl = template.iconUrl,
                     extra = template.extra,
@@ -75,13 +90,13 @@ object Cs3ProviderSync {
         }
 
         if (!changed) return false
-        val cs3Ids = cs3.map { it.id }.toSet()
+        val oldIds = cs3.map { it.id }.toSet()
         // Written as a locked read-modify-write: the list this rebuilds is the
         // one in the store RIGHT NOW, so a provider another thread added while
         // this ran (an install, another engine's reconcile) is kept instead of
         // being overwritten by this snapshot (see [AppStore.updateProviders]).
         store.updateProviders { all ->
-            all.filterNot { it.id in cs3Ids } + merged.values
+            all.filterNot { it.id in oldIds } + merged.values
         }
         return true
     }

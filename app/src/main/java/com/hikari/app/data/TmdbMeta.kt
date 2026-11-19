@@ -59,6 +59,10 @@ object TmdbMeta {
      * whole means neither source knew this title.
      */
     suspend fun artwork(item: MediaItem): Pair<String?, String?>? {
+        // AioMetadata FIRST — above the TMDB switches: Aio carries its own
+        // Anime/Movies toggles (Settings → Integrations), so turning TMDB off
+        // must never silence Aio. A miss falls through to the chain below.
+        runCatching { AioMetadata.artwork(item) }.getOrNull()?.let { return it }
         if (!runCatching { HikariApp.instance.store.tmdbEnabled() }.getOrDefault(true) ||
             !runCatching { HikariApp.instance.store.tmdbModule("artwork") }.getOrDefault(true)) return null
         // An anime AniList/Bangumi knew: its art wins outright, and TMDB is
@@ -73,15 +77,26 @@ object TmdbMeta {
             else -> {}
         }
         val resolved = runCatching { TmdbResolver.resolve(item) }.getOrNull()
+        var poster: String? = null
+        var backdrop: String? = null
         if (resolved != null) {
             val seg = segment(resolved.mediaType)
             val d = TmdbResolver.apiGet("/$seg/${resolved.tmdbId}", emptyMap())
             if (d != null) {
-                val p = d.tmdbPath("poster_path")?.let { IMG + it }
-                val b = d.tmdbPath("backdrop_path")?.let { IMG_WIDE + it }
-                if (p != null || b != null) return p to b
+                poster = d.tmdbPath("poster_path")?.let { IMG + it }
+                backdrop = d.tmdbPath("backdrop_path")?.let { IMG_WIDE + it }
             }
         }
+        // TVDB fills whatever TMDB missed (no entry, no art, a mistrusted
+        // match) with its own poster + wide banner, keyless — see [TvdbArt].
+        // TMDB wins both halves when it has them.
+        if (poster == null || backdrop == null) {
+            runCatching { TvdbArt.lookup(item) }.getOrNull()?.let { tv ->
+                if (poster == null) poster = tv.poster
+                if (backdrop == null) backdrop = tv.banner
+            }
+        }
+        if (poster != null || backdrop != null) return poster to backdrop
         return imdbArtwork(item)
     }
 
@@ -104,6 +119,7 @@ object TmdbMeta {
     private val logoCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     suspend fun logo(item: MediaItem): String? {
+        if (!MetaSources.tmdbKindOn(item)) return null
         if (!runCatching { HikariApp.instance.store.tmdbEnabled() }.getOrDefault(true) ||
             !runCatching { HikariApp.instance.store.tmdbModule("artwork") }.getOrDefault(true)) return null
         // Anime pick: TMDB's logo would be the mistranslated title's wordmark.
@@ -358,11 +374,15 @@ object TmdbMeta {
 
     /** TMDB's "similar" titles for [item] (same genre/vibe). */
     suspend fun similar(item: MediaItem, limit: Int = 18): List<MediaItem> =
-        if (runCatching { HikariApp.instance.store.tmdbModule("more_like") }.getOrDefault(true)) shelf(item, "similar", limit) else emptyList()
+        if (MetaSources.tmdbKindOn(item) &&
+            runCatching { HikariApp.instance.store.tmdbModule("more_like") }.getOrDefault(true)
+        ) shelf(item, "similar", limit) else emptyList()
 
     /** TMDB's "recommendations" for [item] (what people watched next). */
     suspend fun related(item: MediaItem, limit: Int = 18): List<MediaItem> =
-        if (runCatching { HikariApp.instance.store.tmdbModule("more_like") }.getOrDefault(true)) shelf(item, "recommendations", limit) else emptyList()
+        if (MetaSources.tmdbKindOn(item) &&
+            runCatching { HikariApp.instance.store.tmdbModule("more_like") }.getOrDefault(true)
+        ) shelf(item, "recommendations", limit) else emptyList()
 
     private suspend fun shelf(item: MediaItem, kind: String, limit: Int): List<MediaItem> {
         // Anime pick: TMDB's shelves would list the mistranslated title's
@@ -456,6 +476,10 @@ object TmdbMeta {
             }
             else -> {}
         }
+        // Per-kind TMDB toggle (Settings → Integrations → Anime / Movies &
+        // series). The master switch keeps its existing meaning here: it never
+        // gated the modules, so it still doesn't.
+        if (!MetaSources.tmdbKindOn(item)) return null
         val resolved = runCatching { TmdbResolver.resolve(item) }.getOrNull() ?: return null
         val seg = segment(resolved.mediaType)
         val certKey = if (seg == "movie") "release_dates" else "content_ratings"

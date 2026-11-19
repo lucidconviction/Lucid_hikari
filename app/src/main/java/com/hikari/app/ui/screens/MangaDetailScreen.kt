@@ -62,6 +62,7 @@ import coil.compose.AsyncImage
 import com.hikari.app.HikariApp
 import com.hikari.app.data.MediaItem
 import com.hikari.app.data.MediaType
+import com.hikari.app.data.MangaMetadataRepository
 import com.hikari.app.i18n.I18n
 import com.hikari.app.i18n.tr
 import com.hikari.app.manga.MangaChapter
@@ -209,7 +210,21 @@ fun MangaDetailScreen(
         val fresh = withContext(Dispatchers.IO) {
             runCatching { provider.getMeta(base) }.getOrDefault(base)
         }
-        meta = fresh
+        // AniList / Jikan / Kitsu / MangaDex / PornHwaDB enrichment (Settings →
+        // Integrations → Manga). External text/art wins where it answered, the
+        // engine's own fields fill the rest — see mergeExternalFirst. Both
+        // toggles off answers null without a request, so this costs nothing
+        // unless the user opted in.
+        val enriched = withContext(Dispatchers.IO) {
+            runCatching {
+                val ext = MangaMetadataRepository.fetchExternal(
+                    app,
+                    title.ifBlank { fresh.title },
+                )
+                if (ext != null) MangaMetadataRepository.mergeExternalFirst(fresh, ext) else fresh
+            }.getOrDefault(fresh)
+        }
+        meta = enriched
         val cached = MangaStore.chaptersFor(key)
         if (cached.isNullOrEmpty()) {
             withContext(Dispatchers.IO) {

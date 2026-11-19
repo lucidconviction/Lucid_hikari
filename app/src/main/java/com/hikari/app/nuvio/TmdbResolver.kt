@@ -5,6 +5,7 @@ import com.hikari.app.data.MediaItem
 import com.hikari.app.data.TrackerAnimeResolver
 import com.hikari.app.data.NsfwGate
 import com.hikari.app.data.MediaType
+import com.hikari.app.data.AioMetadata
 import com.hikari.app.data.TmdbMeta
 import com.hikari.app.net.Http
 import kotlinx.coroutines.Dispatchers
@@ -80,7 +81,14 @@ object TmdbResolver {
         return item.title.isNotBlank()
     }
 
-    suspend fun resolve(item: MediaItem): Resolved? {
+    suspend fun resolve(item: MediaItem, allowAio: Boolean = true): Resolved? {
+        // AioMetadata first (all engines): a configured Aio backend that already
+        // knows this title's TMDB row wins over a fuzzy name search — this is
+        // what stops wrong-show / wrong-episode TMDB hits. Miss -> TMDB below.
+        // allowAio=false is AioMetadata's own id lookup (recursion guard).
+        if (allowAio) runCatching { AioMetadata.resolveId(item) }.getOrNull()?.let {
+            return Resolved(it.id, it.mediaType)
+        }
         val key = cacheKey(item)
         memory[key]?.let { return it }
         // Tracker rows never touch the FILE cache: older builds stored
