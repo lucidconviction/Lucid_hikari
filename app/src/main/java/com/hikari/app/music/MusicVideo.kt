@@ -28,5 +28,6 @@ internal suspend fun openMusicVideo(
     val request = runCatching { MusicSourceResolver.videoRequest(track) }.getOrNull() ?: return false
     val intent = youTubePlayerIntent(context, request.copy(startPositionMs = startPositionMs.coerceAtLeast(0L)))
     if (context !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    if (com.hikari.app.player.PipLauncher.intercept(context, intent)) return true
     return runCatching { context.startActivity(intent); true }.getOrDefault(false)
 }

@@ -20007,7 +20007,7 @@ private class SidewaysScrollView(context: android.content.Context) : HorizontalS
  * intact — it is genuinely useful when one rendition of a master playlist is
  * broken while the others are fine.
  */
-private class RetryFriendlyLoadErrorPolicy :
+internal class RetryFriendlyLoadErrorPolicy :
     DefaultLoadErrorHandlingPolicy(TRANSIENT_RETRIES) {
 
     /** When each load task first reported an error, so its retry ladder can be

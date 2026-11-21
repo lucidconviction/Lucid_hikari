@@ -3641,12 +3641,15 @@ class WebViewActivity : ComponentActivity() {
                     .put("subtitles", JSONArray())
             )
         }
-        startActivity(
-            Intent(this, PlayerActivity::class.java).apply {
-                putExtra("title", pageTitle)
-                putExtra("sources", sources.toString())
-            }
-        )
+        val playerIntent = Intent(this, PlayerActivity::class.java).apply {
+            putExtra("title", pageTitle)
+            putExtra("sources", sources.toString())
+        }
+        // PIP Mode/Ch Preview: the web page's media opens in the floating
+        // window over the app instead of leaving the browser for the player.
+        if (!com.hikari.app.player.PipLauncher.intercept(this, playerIntent)) {
+            startActivity(playerIntent)
+        }
     }
 
     private fun urlHost(u: String): String = runCatching {

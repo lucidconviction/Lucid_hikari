@@ -3209,11 +3209,23 @@ private fun HomeHeader(
         // The provider chip: one place to re-scope the feed, in the header.
         // It replaces the floating pill that used to hover over the posters.
         if (onProviderClick != null) {
-            HomeProviderChip(
-                label = providerLabel ?: I18n.t("All providers"),
-                onClick = onProviderClick,
-                modifier = Modifier.padding(start = 16.dp, bottom = 2.dp),
-            )
+            // The provider chip and the PIP Mode/Ch Preview switch share the
+            // line under the title. PIP sits to its right, exactly where the
+            // feed is scoped, so the mode is always one tap away.
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 8.dp, bottom = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                HomeProviderChip(
+                    label = providerLabel ?: I18n.t("All providers"),
+                    onClick = onProviderClick,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                com.hikari.app.player.PipModeChip()
+            }
         }
     }
 }

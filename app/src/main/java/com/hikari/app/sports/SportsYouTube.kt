@@ -174,6 +174,7 @@ object SportsYouTube {
             // feed's More Videos queue or its resume state.
             if (context !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
+        if (com.hikari.app.player.PipLauncher.intercept(context, intent)) return null
         return runCatching { context.startActivity(intent) }.fold(
             onSuccess = { null },
             onFailure = {

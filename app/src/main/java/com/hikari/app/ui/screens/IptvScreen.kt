@@ -3764,6 +3764,9 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                                     showSheet = false
                                     selectedQc = null
                                 },
+                                onLongClick = {
+                                    playChannelInNewPip(ctx, ch, allChannels)
+                                },
                             )
                         }
                     }
@@ -4061,19 +4064,31 @@ private fun QuickChannelCardBig(
 
 /**
  * Channel list item with working status indicator.
+ *
+ * Holding a row sends that channel to its own NEW PIP window (see
+ * [playChannelInNewPip]); a tap keeps the normal "open in the current window
+ * / full player" behavior.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ChannelListItem(
     channel: IptvChannel,
     isAlive: Boolean?,
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
-            .clickable(onClick = onClick)
+            .then(
+                if (onLongClick != null) {
+                    Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                } else {
+                    Modifier.clickable(onClick = onClick)
+                },
+            )
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -4192,12 +4207,11 @@ private fun channelSurfWindow(allChannels: List<IptvChannel>, currentUrl: String
  * button shows and what CH+/CH- steps through.
  * The providerId is extracted from the channel itself (set by IptvProvider.channels()).
  */
-private fun playChannel(
+private fun channelPlayerIntent(
     ctx: android.content.Context,
     channel: IptvChannel,
-    nav: NavHostController,
     allChannels: List<IptvChannel>,
-) {
+): android.content.Intent {
     val providerId = channel.providerId
     val isM3u8 = channel.url.endsWith(".m3u8", ignoreCase = true)
     val isMpd = channel.url.substringBefore('?').contains(".mpd", ignoreCase = true)
@@ -4215,7 +4229,7 @@ private fun playChannel(
             .put("isTorrent", false)
         )
     }
-    val intent = android.content.Intent(ctx, com.hikari.app.player.PlayerActivity::class.java).apply {
+    return android.content.Intent(ctx, com.hikari.app.player.PlayerActivity::class.java).apply {
         putExtra("title", channel.name)
         putExtra("sources", sources.toString())
         putExtra("askServer", false)
@@ -4248,7 +4262,35 @@ private fun playChannel(
             putExtra("channelSurfChannels", arr.toString())
         }
     }
-    ctx.startActivity(intent)
+}
+
+private fun playChannel(
+    ctx: android.content.Context,
+    channel: IptvChannel,
+    nav: NavHostController,
+    allChannels: List<IptvChannel>,
+) {
+    val intent = channelPlayerIntent(ctx, channel, allChannels)
+    // PIP Mode/Ch Preview: the channel opens in a floating window instead of
+    // the full player. With the mode off this is the unchanged player launch.
+    if (!com.hikari.app.player.PipLauncher.intercept(ctx, intent)) ctx.startActivity(intent)
+}
+
+/** Long-press a channel: send it to its own extra PIP window, leaving the one
+ *  already playing untouched. */
+private fun playChannelInNewPip(
+    ctx: android.content.Context,
+    channel: IptvChannel,
+    allChannels: List<IptvChannel>,
+) {
+    val intent = channelPlayerIntent(ctx, channel, allChannels)
+    val added = com.hikari.app.player.PipLauncher.addNew(ctx, intent)
+    android.widget.Toast.makeText(
+        ctx,
+        if (added) com.hikari.app.i18n.I18n.t("Added to a new PIP")
+        else com.hikari.app.i18n.I18n.t("Turn on PIP Mode/Ch Preview first"),
+        android.widget.Toast.LENGTH_SHORT,
+    ).show()
 }
 
 /** poster → square → wide → poster. */
@@ -4732,11 +4774,18 @@ private fun QuickChannelsSectionEmbedded(playlists: List<IptvProvider>, onChanne
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         items(sortedMatches) { ch ->
                             val isWorking = aliveByUrl[ch.url]
-                            ChannelListItem(channel = ch, isAlive = isWorking, onClick = {
-                                onChannelSelected(ch, allChannels)
-                                showSheet = false
-                                selectedQc = null
-                            })
+                            ChannelListItem(
+                                channel = ch,
+                                isAlive = isWorking,
+                                onClick = {
+                                    onChannelSelected(ch, allChannels)
+                                    showSheet = false
+                                    selectedQc = null
+                                },
+                                onLongClick = {
+                                    playChannelInNewPip(ctx, ch, allChannels)
+                                },
+                            )
                         }
                     }
                 }

@@ -374,7 +374,9 @@ private fun playOffline(context: Context, t: DownloadTask) {
             putExtra("histEpisodeName", t.episodeLabel)
         }
     }
-    runCatching { context.startActivity(intent) }
+    if (!com.hikari.app.player.PipLauncher.intercept(context, intent)) {
+        runCatching { context.startActivity(intent) }
+    }
 }
 
 /** Plays an EXPORTED file (a MediaStore content:// URI, or a plain path on
@@ -402,5 +404,7 @@ private fun playSaved(context: Context, t: DownloadTask) {
         putExtra("showLoadingBanner", false)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
-    runCatching { context.startActivity(intent) }
+    if (!com.hikari.app.player.PipLauncher.intercept(context, intent)) {
+        runCatching { context.startActivity(intent) }
+    }
 }

@@ -604,6 +604,7 @@ class HikariApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        com.hikari.app.player.PipModeSettings.init(this)
         // OkHttp 5's PublicSuffixDatabase reads through the application
         // context, and ours is never set: androidx-startup (which normally
         // calls OkHttp.initialize) is stripped/disabled in this build, so

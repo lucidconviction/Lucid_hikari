@@ -1,7 +1,9 @@
 package com.hikari.app.ui.screens
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -572,13 +574,39 @@ private fun AsyncImageOrMark(team: TeamInfo, size: androidx.compose.ui.unit.Dp) 
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ChannelRow(match: ChannelMatch, feed: FeedFinder.Found? = null) {
     val context = LocalContext.current
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = match.channel != null) { match.channel?.let { playIptvChannel(context, it) } },
+            .combinedClickable(
+                enabled = match.channel != null,
+                onClick = { match.channel?.let { playIptvChannel(context, it) } },
+                onLongClick = {
+                    match.channel?.let { ch ->
+                        val headers = buildMap {
+                            putAll(ch.headers)
+                            ch.cookie?.takeIf { it.isNotBlank() }?.let { put("Cookie", it) }
+                        }
+                        val added = com.hikari.app.player.PipLauncher.addChannel(
+                            context = context,
+                            name = ch.name,
+                            url = ch.url,
+                            headers = headers,
+                            logo = ch.artwork,
+                            providerId = ch.providerId,
+                        )
+                        android.widget.Toast.makeText(
+                            context,
+                            if (added) com.hikari.app.i18n.I18n.t("Added to a new PIP")
+                            else com.hikari.app.i18n.I18n.t("Turn on PIP Mode/Ch Preview first"),
+                            android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                },
+            ),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)),
     ) {

@@ -1,4 +1,7 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package com.hikari.app.ui.screens
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.focus.focusRequester
 import com.hikari.app.i18n.I18n
 import com.hikari.app.i18n.tr
@@ -2658,6 +2661,11 @@ fun DetailScreen(
                     putExtra("channelSurfChannels", arr.toString())
                 }
         }
+        // PIP Mode/Ch Preview: the title opens in a floating window, and the
+        // same intent (servers, history, resume) is kept for "expand".
+        if (com.hikari.app.player.PipLauncher.intercept(context, intent)) {
+            return@launchPlayer true
+        }
         // Never leave the guard stuck ON if the launch itself fails (e.g. the
         // player activity can't be resolved): report failure so the caller can
         // fall back to the source sheet instead of a dead tap.
@@ -2720,8 +2728,11 @@ fun DetailScreen(
         loadingStreams = true
         // Full-screen title card from the very first frame of the tap (the
         // source sheet only appears if nothing playable can be found at all).
-        // Skipped entirely when the user turned the loading banner off.
-        showLoadingBanner = showLoadingCoverSetting
+        // Skipped entirely when the user turned the loading banner off — and
+        // skipped in PIP mode, where the floating window itself is the loading
+        // state and the page behind it must stay usable.
+        showLoadingBanner = showLoadingCoverSetting &&
+            !com.hikari.app.player.PipModeSettings.isOn
         showSheet = false
         // A fresh tap must always be allowed to open the player. If an earlier
         // launch never reported back (activity result lost, process reshuffle),
@@ -2805,7 +2816,13 @@ fun DetailScreen(
         } else {
             emptyList<StreamSource>()
         }
-        if (launchPlayer(initialStreams, ep, sid, startPos, wantsDownload)) {
+        // In PIP mode, do not open the full player with an empty list just to
+        // let it run the extension search. Wait for the search below to find
+        // its first playable server, then hand that list to the floating
+        // window. Non-PIP playback keeps the instant "player opens and
+        // searches" behaviour.
+        val waitForPipSources = com.hikari.app.player.PipModeSettings.isOn && initialStreams.isEmpty()
+        if (!waitForPipSources && launchPlayer(initialStreams, ep, sid, startPos, wantsDownload)) {
             launched.set(true)
         }
         // Warm-start from the persisted last successful server. This removes the
@@ -3057,8 +3074,24 @@ fun DetailScreen(
                 // screen is alive.
                 val startNow: suspend () -> Unit = startNow@{
                     if (launched.get() || playerLaunched) return@startNow
-                    val playable = playableEvery(found)
+                    var playable = playableEvery(found)
                     if (playable.isEmpty()) return@startNow
+                    // PIP appears the moment there is something to play. The
+                    // only exception is a torrent-only first batch: TorrServer
+                    // needs peers, while the direct mirrors are usually a
+                    // moment behind, so give them up to five seconds to land
+                    // and prefer one (see PipLauncher.startIndex). A batch
+                    // that already has a direct link never waits at all.
+                    if (com.hikari.app.player.PipModeSettings.isOn && playable.all { it.isTorrent }) {
+                        var waited = 0
+                        while (waited < 5_000 && playable.all { it.isTorrent } && !launched.get()) {
+                            delay(1_000L)
+                            waited += 1_000
+                            if (launched.get() || playerLaunched) return@startNow
+                            val next = playableEvery(found)
+                            if (next.isNotEmpty()) playable = next
+                        }
+                    }
                     var started = false
                     onUi {
                         if (launched.get()) return@onUi
@@ -6948,7 +6981,9 @@ fun DetailScreen(
                             },
                             modifier = Modifier
                                 .clip(RoundedCornerShape(10.dp))
-                                .clickable(enabled = enabled) {
+                                .combinedClickable(
+                                    enabled = enabled,
+                                    onClick = {
                                     when {
                                         s.ytId != null -> {
                                             showSheet = false
@@ -6990,7 +7025,23 @@ fun DetailScreen(
                                             launchPlayer(listOf(s) + others, selectedEp, sessionId, pendingStartPos, false)
                                         }
                                     }
-                                }
+                                    },
+                                    onLongClick = {
+                                        // Hold a server row: that server opens
+                                        // in a NEW floating window, leaving the
+                                        // one already playing untouched.
+                                        sendStreamToNewPip(
+                                            context = context,
+                                            title = artTitle,
+                                            stream = s,
+                                            mediaTitle = m?.title ?: title,
+                                            providerId = m?.providerId ?: providerId,
+                                            poster = m?.posterUrl ?: posterUrl,
+                                            startPosition = pendingStartPos,
+                                            episode = selectedEp,
+                                        )
+                                    },
+                                )
                         )
                     }
                     }
@@ -7059,9 +7110,12 @@ fun DetailScreen(
                     headers = source.headers,
                     isLive = source.isLive,
                 )
-                val launched = runCatching {
-                    playerLauncher.launch(youTubePlayerIntent(context, request))
-                }.isSuccess
+                val trailerIntent = youTubePlayerIntent(context, request)
+                val launched = if (com.hikari.app.player.PipLauncher.intercept(context, trailerIntent)) {
+                    true
+                } else {
+                    runCatching { playerLauncher.launch(trailerIntent) }.isSuccess
+                }
                 if (!launched) playerLaunched = false
             } else if (source == null) {
                 android.widget.Toast.makeText(
@@ -7861,6 +7915,57 @@ private fun MinimalLoadingCard(
 
 /** Builds the PlayerActivity "sources" JSON payload for the given streams,
  *  carrying torrent metadata so the player can spin up TorrServer. */
+/**
+ * Long-pressing one row of the "Playback sources" sheet sends THAT server to
+ * its own floating PIP window. The rest of the list is deliberately left out:
+ * the existing window keeps playing its own server, so the viewer can compare
+ * two servers or keep a second title side by side.
+ */
+private fun sendStreamToNewPip(
+    context: android.content.Context,
+    title: String,
+    stream: StreamSource,
+    mediaTitle: String,
+    providerId: String,
+    poster: String?,
+    startPosition: Long,
+    episode: Episode?,
+) {
+    if (!com.hikari.app.player.PipModeSettings.isOn) {
+        android.widget.Toast.makeText(
+            context,
+            I18n.t("Turn on PIP Mode/Ch Preview first"),
+            android.widget.Toast.LENGTH_SHORT,
+        ).show()
+        return
+    }
+    val payload = playerPayload(listOf(stream)) ?: return
+    val intent = Intent(context, PlayerActivity::class.java).apply {
+        putExtra("title", title)
+        putExtra("sources", payload)
+        putExtra("startPosition", startPosition.coerceAtLeast(0L))
+        putExtra("histProviderId", providerId)
+        putExtra("histTitle", mediaTitle)
+        poster?.takeIf { it.isNotBlank() }?.let {
+            putExtra("histPoster", PosterLoader.tokenize(it).orEmpty())
+            putExtra("titleLogo", PosterLoader.tokenize(it).orEmpty())
+            putExtra("bannerBackdrop", PosterLoader.tokenize(it).orEmpty())
+        }
+        episode?.let { ep ->
+            putExtra("histEpisodeId", ep.id)
+            putExtra("histEpisodeName", ep.name)
+            putExtra("histEpisodeSeason", ep.season)
+            putExtra("histEpisodeNumber", ep.number)
+        }
+    }
+    val added = com.hikari.app.player.PipLauncher.addNew(context, intent)
+    android.widget.Toast.makeText(
+        context,
+        if (added) I18n.t("Added to a new PIP") else I18n.t("Couldn't add this stream to PIP"),
+        android.widget.Toast.LENGTH_SHORT,
+    ).show()
+}
+
 private fun playerPayload(streams: List<StreamSource>): String? = runCatching {
     JSONArray().apply {
         streams.forEach { s ->

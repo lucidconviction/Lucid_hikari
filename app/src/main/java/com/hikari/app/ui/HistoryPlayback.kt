@@ -54,8 +54,10 @@ suspend fun openHistoryEntry(context: Context, nav: NavHostController, entry: Hi
             ),
         )
         if (context !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        runCatching { context.startActivity(intent) }.onFailure {
-            Toast.makeText(context, "Couldn't open the YouTube player.", Toast.LENGTH_SHORT).show()
+        if (!com.hikari.app.player.PipLauncher.intercept(context, intent)) {
+            runCatching { context.startActivity(intent) }.onFailure {
+                Toast.makeText(context, "Couldn't open the YouTube player.", Toast.LENGTH_SHORT).show()
+            }
         }
         return
     }

@@ -2124,5 +2124,8 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
         // over every tab, can be dragged and pinched, and taps through to the
         // full player. Draw it last so it is above the taskbar/rail.
         com.hikari.app.ui.MiniPlayerHost()
+        // PIP Mode/Ch Preview: floating, movable preview windows plus the
+        // minimized folder. Drawn last so they sit above every tab and the taskbar.
+        com.hikari.app.player.PipHost()
     }
 }

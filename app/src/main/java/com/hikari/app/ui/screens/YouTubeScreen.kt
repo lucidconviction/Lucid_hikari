@@ -76,7 +76,8 @@ fun YouTubeScreen(nav: NavHostController) {
     LaunchedEffect(followUp) {
         val req = followUp ?: return@LaunchedEffect
         lastRequest = req
-        player.launch(youTubePlayerIntent(context, req))
+        val intent = youTubePlayerIntent(context, req)
+        if (!com.hikari.app.player.PipLauncher.intercept(context, intent)) player.launch(intent)
         followUp = null
     }
 
@@ -87,7 +88,8 @@ fun YouTubeScreen(nav: NavHostController) {
         EngineYouTubeScreen(
             onPlay = { request ->
                 lastRequest = request
-                player.launch(youTubePlayerIntent(context, request))
+                val intent = youTubePlayerIntent(context, request)
+                if (!com.hikari.app.player.PipLauncher.intercept(context, intent)) player.launch(intent)
             },
         )
     }

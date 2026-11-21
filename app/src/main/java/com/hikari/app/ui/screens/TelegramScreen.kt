@@ -2894,17 +2894,18 @@ private fun playTdVideo(context: android.content.Context, video: Td.ChatVideo) {
     // with no fallback, so a tap that could not open the player did NOTHING —
     // the exact "telegram video unclickable" report, with no log line to
     // answer it.
-    val opened = runCatching {
-        context.startActivity(
-            Intent(context, com.hikari.app.player.PlayerActivity::class.java).apply {
-                putExtra("title", video.title)
-                putExtra("sources", sources.toString())
-            }
-        )
+    val intent = Intent(context, com.hikari.app.player.PlayerActivity::class.java).apply {
+        putExtra("title", video.title)
+        putExtra("sources", sources.toString())
     }
-    if (opened.isFailure) {
-        Logs.log("Telegram", "player would not open: " + (opened.exceptionOrNull()?.message ?: "unknown"))
-        Toast.makeText(context, I18n.t("Couldn't open the player"), Toast.LENGTH_SHORT).show()
+    // TDLib media stays in the full player (see PipLauncher); public Telegram
+    // CDN videos can float in a PIP window like any other stream.
+    if (!com.hikari.app.player.PipLauncher.intercept(context, intent)) {
+        val opened = runCatching { context.startActivity(intent) }
+        if (opened.isFailure) {
+            Logs.log("Telegram", "player would not open: " + (opened.exceptionOrNull()?.message ?: "unknown"))
+            Toast.makeText(context, I18n.t("Couldn't open the player"), Toast.LENGTH_SHORT).show()
+        }
     }
 }
 
@@ -2930,16 +2931,15 @@ private fun playTelegramVideo(context: android.content.Context, video: TelegramV
     )
     // Same never-silent rule as [playTdVideo] above: a tap that cannot open
     // the player says so instead of doing nothing.
-    val opened = runCatching {
-        context.startActivity(
-            Intent(context, com.hikari.app.player.PlayerActivity::class.java).apply {
-                putExtra("title", video.title)
-                putExtra("sources", sources.toString())
-            }
-        )
+    val intent = Intent(context, com.hikari.app.player.PlayerActivity::class.java).apply {
+        putExtra("title", video.title)
+        putExtra("sources", sources.toString())
     }
-    if (opened.isFailure) {
-        Logs.log("Telegram", "player would not open: " + (opened.exceptionOrNull()?.message ?: "unknown"))
-        Toast.makeText(context, I18n.t("Couldn't open the player"), Toast.LENGTH_SHORT).show()
+    if (!com.hikari.app.player.PipLauncher.intercept(context, intent)) {
+        val opened = runCatching { context.startActivity(intent) }
+        if (opened.isFailure) {
+            Logs.log("Telegram", "player would not open: " + (opened.exceptionOrNull()?.message ?: "unknown"))
+            Toast.makeText(context, I18n.t("Couldn't open the player"), Toast.LENGTH_SHORT).show()
+        }
     }
 }

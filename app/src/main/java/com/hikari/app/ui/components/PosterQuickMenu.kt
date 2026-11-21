@@ -143,11 +143,11 @@ fun Modifier.quickMenuGesture(
  *  slot; Play starts playback directly, Details opens the page, Close
  *  dismisses with no action. */
 @Composable
-fun BoxScope.QuickMenuOverlay(selected: Int) {
+fun BoxScope.QuickMenuOverlay(selected: Int, playLabelOverride: String? = null) {
     val scheme = MaterialTheme.colorScheme
     val glass = rememberGlassTokens()
     val detailsLabel = tr("Details")
-    val playLabel = tr("Play")
+    val playLabel = playLabelOverride ?: tr("Play")
     val libraryLabel = tr("Library")
     val closeLabel = tr("Close")
     val hint = tr("Slide to explore")

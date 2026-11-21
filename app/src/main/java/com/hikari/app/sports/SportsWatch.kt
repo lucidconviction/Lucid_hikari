@@ -296,7 +296,9 @@ object SportsWatch {
             poster?.takeIf { it.isNotBlank() }?.let { putExtra("histPoster", it) }
             if (context !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        runCatching { context.startActivity(intent) }
+        if (!com.hikari.app.player.PipLauncher.intercept(context, intent)) {
+            runCatching { context.startActivity(intent) }
+        }
     }
 
     /** The player keys its history row on the provider id; for an add-on row

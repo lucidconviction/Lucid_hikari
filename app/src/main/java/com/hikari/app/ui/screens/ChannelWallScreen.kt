@@ -1595,11 +1595,37 @@ private fun ColumnScope.WallSourceRows(
             val checking = match.url !in probes.probed
             val result = probes.results[match.url]
             val playable = !checking && result?.isPlayable == true
+            val rowContext = LocalContext.current
             Row(
                 Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(10.dp))
-                    .clickable(enabled = playable) { onPlay(match) }
+                    .combinedClickable(
+                        enabled = playable,
+                        onClick = { onPlay(match) },
+                        onLongClick = {
+                            // Holding a working source sends it to a new PIP
+                            // window without disturbing the one playing.
+                            val headers = buildMap {
+                                putAll(match.headers)
+                                match.cookie?.takeIf { it.isNotBlank() }?.let { put("Cookie", it) }
+                            }
+                            val added = com.hikari.app.player.PipLauncher.addChannel(
+                                context = rowContext,
+                                name = match.name,
+                                url = match.url,
+                                headers = headers,
+                                logo = match.artwork,
+                                providerId = match.providerId,
+                            )
+                            android.widget.Toast.makeText(
+                                rowContext,
+                                if (added) com.hikari.app.i18n.I18n.t("Added to a new PIP")
+                                else com.hikari.app.i18n.I18n.t("Turn on PIP Mode/Ch Preview first"),
+                                android.widget.Toast.LENGTH_SHORT,
+                            ).show()
+                        },
+                    )
                     .alpha(if (playable) 1f else 0.68f)
                     .padding(vertical = 7.dp, horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,

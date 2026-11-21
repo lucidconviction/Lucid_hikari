@@ -1091,26 +1091,48 @@ fun CatalogScreen(
                             )
                         },
                         onQuickPlay = { quick ->
-                            // Manga rows open the reader's detail (no video to
-                            // autoplay); video rows arrive already wanting
-                            // playback (see DetailScreen autoplay).
-                            if (rawType != "manga") {
-                                com.hikari.app.player.PlaybackQueueStore.set(uniqueItems, quick)
-                            }
-                            Routes.safeNavigate(
-                                nav,
-                                if (rawType == "manga") {
-                                    Routes.mangaRoute(
-                                        quick.providerId, quick.id, quick.title, quick.posterUrl
-                                    )
-                                } else {
-                                    Routes.detail(
-                                        quick.providerId, quick.type, quick.id,
-                                        quick.title, quick.posterUrl, quick.rawType,
-                                        autoplay = true,
-                                    )
+                            // Channel cards: holding a stream and picking the
+                            // play slot sends it to its OWN PIP window, so the
+                            // one already playing keeps playing. Other rows
+                            // keep the normal "open detail and autoplay" path.
+                            if (quick.rawType == "channel" &&
+                                com.hikari.app.player.PipModeSettings.isOn
+                            ) {
+                                val added = com.hikari.app.player.PipLauncher.addChannel(
+                                    context = context,
+                                    name = quick.title,
+                                    url = quick.id,
+                                    logo = quick.posterUrl,
+                                    providerId = quick.providerId,
+                                )
+                                android.widget.Toast.makeText(
+                                    context,
+                                    if (added) I18n.t("Added to a new PIP")
+                                    else I18n.t("Couldn't add this channel to PIP"),
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                            } else {
+                                // Manga rows open the reader's detail (no video
+                                // to autoplay); video rows arrive already
+                                // wanting playback (see DetailScreen autoplay).
+                                if (rawType != "manga") {
+                                    com.hikari.app.player.PlaybackQueueStore.set(uniqueItems, quick)
                                 }
-                            )
+                                Routes.safeNavigate(
+                                    nav,
+                                    if (rawType == "manga") {
+                                        Routes.mangaRoute(
+                                            quick.providerId, quick.id, quick.title, quick.posterUrl
+                                        )
+                                    } else {
+                                        Routes.detail(
+                                            quick.providerId, quick.type, quick.id,
+                                            quick.title, quick.posterUrl, quick.rawType,
+                                            autoplay = true,
+                                        )
+                                    }
+                                )
+                            }
                         },
                         onMultiView = if (rawType == "channel") {
                             {
@@ -1325,7 +1347,14 @@ private fun CatalogCard(
                         .size(10.dp),
                 ) {}
             }
-            if (quickMenu.visible) QuickMenuOverlay(quickMenu.selected)
+            if (quickMenu.visible) {
+                val pipAction = item.rawType == "channel" &&
+                    com.hikari.app.player.PipModeSettings.isOn
+                QuickMenuOverlay(
+                    quickMenu.selected,
+                    playLabelOverride = if (pipAction) tr("New PIP") else null,
+                )
+            }
         }
         quickLibraryItem?.let { picked ->
             QuickAddToLibrarySheet(item = picked, onDismiss = { quickLibraryItem = null })

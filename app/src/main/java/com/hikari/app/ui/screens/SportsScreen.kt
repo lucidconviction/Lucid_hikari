@@ -2083,7 +2083,7 @@ private fun playReplayUrl(
         putExtra("sources", sources.toString())
         putExtra("askServer", false)
     }
-    context.startActivity(intent)
+    if (!com.hikari.app.player.PipLauncher.intercept(context, intent)) context.startActivity(intent)
 }
 
 private fun openInBrowser(context: Context, url: String) {
@@ -2152,5 +2152,5 @@ internal fun playIptvChannel(context: Context, channel: IptvChannel) {
             putExtra("histPoster", it)
         }
     }
-    context.startActivity(intent)
+    if (!com.hikari.app.player.PipLauncher.intercept(context, intent)) context.startActivity(intent)
 }
