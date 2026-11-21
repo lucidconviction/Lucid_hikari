@@ -1,3 +1,16 @@
+## 0.15.7
+
+**21 November 2026**
+
+### PIP Mode/Ch Preview, with a folder for what you fold away
+
+- **PIP Mode/Ch Preview** sits on Home, directly beside the provider chip. Off by default; remembered on the device. With it on, channels, movies, series, add-on streams, sports, downloads, public Telegram videos, web media and YouTube open in a floating window instead of taking over the screen.
+- **A real floating window**: drag the title bar or hold the picture to move it, resize from the bottom bar or the corner, lock the position, mute/change volume, seek VOD, pause, expand to the full player or close. The transport row never hides, and touches inside the window can no longer fall through to the page behind it.
+- **Minimize into a folder**: the top-left minimize folds a stream into a draggable circular folder with a count badge. Its dialog restores each window at the timestamp where it stopped.
+- **Open a second PIP from a stream**: tap and hold a Quick Channels row, an IPTV channel card (hold menu → New PIP), a sports channel row, a CH Wall source or a row in the detail page's Playback sources list. Normal taps keep reusing the newest window; holding adds another, tiled alongside it.
+- **No loading screen behind the window**: the detail page stays usable while the PIP does its own tuning. Mixed server lists prefer a direct/verified mirror over a torrent, and the detail page's live server feed folds new mirrors into the window until the first frame renders.
+- **Full-player parity for hard links**: wrapper pages are resolved, CS3's playback client/interceptor and hotlink referrers are used, VOD goes through the shared cache and the retry policy retries 429/transient errors. TDLib media and DRM stay in the full player.
+
 ## 0.15.6
 
 **19 November 2026**
