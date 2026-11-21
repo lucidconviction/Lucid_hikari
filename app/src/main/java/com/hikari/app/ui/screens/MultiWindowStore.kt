@@ -229,7 +229,10 @@ object MultiWindowStore {
         // A phone in portrait gets four; a tablet (smallest width 600dp) can
         // use the full nine even when held upright.
         val tablet = config.smallestScreenWidthDp >= 600
-        if (portrait && !tablet) 4 else MAX_SLOTS
+        // A television has one shared decoder budget (and usually 2 GB of
+        // RAM): four simultaneous streams is the ceiling that stays smooth.
+        if (com.hikari.app.tv.TvMode.isTv) 4
+        else if (portrait && !tablet) 4 else MAX_SLOTS
     }.getOrDefault(MAX_SLOTS)
 
     fun removeSlot(slotIndex: Int) {

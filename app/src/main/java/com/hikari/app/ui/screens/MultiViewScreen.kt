@@ -97,6 +97,8 @@ import com.hikari.app.data.QuickChannel
 import com.hikari.app.data.QuickChannelList
 import com.hikari.app.data.StreamValidationStore
 import com.hikari.app.player.PlayerPool
+import com.hikari.app.tv.TvMode
+import com.hikari.app.tv.tvPress
 import com.hikari.app.providers.IptvProvider
 import com.hikari.app.providers.ContentProvider
 import com.hikari.app.ui.navigation.LocalTaskbarInset
@@ -157,7 +159,7 @@ fun MultiViewScreen(
             // playback positions stay in MultiWindowStore, so coming back resumes
             // exactly what the user left open.
             for (s in MultiWindowStore.allStreams) {
-                val p = pool.get(s.slotIndex)
+                val p = pool.get(s.id)
                 MultiWindowStore.setPosition(s.id, p.currentPosition)
                 p.pause()
             }
@@ -179,7 +181,7 @@ fun MultiViewScreen(
         onBack = onBack,
         onBrowseIptv = { nav?.navigate(Routes.IPTV) },
         onBrowseQuickChannels = { /* handled by QuickChannelSheet */ },
-        onFullscreen = { stream -> openChannelFullscreen(context, stream.url) },
+        onFullscreen = { stream -> MultiWindowStore.setFullscreenStream(stream.id) },
         onPauseAll = { togglePauseAll(pool) },
         onMuteAll = { toggleMuteAll(pool) },
         onRefreshAll = { refreshAll(pool) },
@@ -220,7 +222,7 @@ private fun openChannelFullscreen(context: android.content.Context, url: String)
 private fun togglePauseAll(pool: PlayerPool) {
     val allPaused = MultiWindowStore.allStreams.all { MultiWindowStore.isPaused(it.id) }
     for (stream in MultiWindowStore.allStreams) {
-        val player = pool.get(stream.slotIndex)
+        val player = pool.get(stream.id)
         if (allPaused) {
             player.playWhenReady = true
             MultiWindowStore.setPaused(stream.id, false)
@@ -235,7 +237,7 @@ private fun toggleMuteAll(pool: PlayerPool) {
     val allMuted = MultiWindowStore.allStreams.all { MultiWindowStore.getVolume(it.id) == 0f }
     for (stream in MultiWindowStore.allStreams) {
         val vol = if (allMuted) 1f else 0f
-        pool.get(stream.slotIndex).volume = vol
+        pool.get(stream.id).volume = vol
         MultiWindowStore.setVolume(stream.id, vol)
         if (vol > 0f) MultiWindowStore.setAudioFocus(stream.id)
     }
@@ -243,7 +245,7 @@ private fun toggleMuteAll(pool: PlayerPool) {
 
 private fun refreshAll(pool: PlayerPool) {
     for (stream in MultiWindowStore.allStreams) {
-        val player = pool.get(stream.slotIndex)
+        val player = pool.get(stream.id)
         player.setMediaItem(MediaItem.fromUri(stream.url))
         player.volume = MultiWindowStore.getVolume(stream.id)
         player.playWhenReady = !MultiWindowStore.isPaused(stream.id)
@@ -401,35 +403,86 @@ private fun MultiViewContent(
         val loudestId = streams.maxByOrNull { MultiWindowStore.getVolume(it.id) }?.id
         var layoutMenuOpen by remember { mutableStateOf(false) }
 
-        // Fullscreen coordination: when entering fullscreen, pause all other
-        // grid players so only the fullscreen stream has audio.  When returning
-        // (the composable recomposes), resume them.
+        // Fullscreen coordination: pause the other tiles so only the fullscreen
+        // stream has audio, and resume only the ones we paused — never a tile
+        // the viewer had deliberately paused before entering fullscreen.
         val fullscreenStreamId = MultiWindowStore.fullscreenStreamId
+        val pausedByFullscreen = remember { mutableSetOf<String>() }
         LaunchedEffect(fullscreenStreamId) {
             if (fullscreenStreamId != null) {
-                // Pause every player except the one going fullscreen
                 for (s in MultiWindowStore.allStreams) {
-                    if (s.id != fullscreenStreamId) {
-                        val p = pool.get(s.slotIndex)
-                        p.pause()
+                    if (s.id != fullscreenStreamId && !MultiWindowStore.isPaused(s.id)) {
+                        pool.get(s.id).pause()
                         MultiWindowStore.setPaused(s.id, true)
+                        pausedByFullscreen += s.id
                     }
                 }
+            } else {
+                pausedByFullscreen.forEach { id ->
+                    pool.get(id).playWhenReady = true
+                    MultiWindowStore.setPaused(id, false)
+                }
+                pausedByFullscreen.clear()
             }
         }
 
         DisposableEffect(Unit) {
             onDispose {
-                // Returning from fullscreen — resume all paused players
-                for (s in MultiWindowStore.allStreams) {
-                    if (MultiWindowStore.isPaused(s.id)) {
-                        val p = pool.get(s.slotIndex)
-                        p.playWhenReady = true
-                        MultiWindowStore.setPaused(s.id, false)
-                    }
+                // Leaving the page: resume only the tiles fullscreen paused.
+                pausedByFullscreen.forEach { id ->
+                    pool.get(id).playWhenReady = true
+                    MultiWindowStore.setPaused(id, false)
                 }
+                pausedByFullscreen.clear()
                 MultiWindowStore.clearFullscreen()
             }
+        }
+
+        val fullscreenStream = streams.firstOrNull { it.id == fullscreenStreamId }
+        if (fullscreenStream != null) {
+            Box(Modifier.fillMaxSize().background(Color.Black)) {
+                VideoCell(
+                    stream = fullscreenStream,
+                    gridPosition = 0,
+                    isAudioFocused = true,
+                    onRemove = {
+                        pool.release(fullscreenStream.id)
+                        MultiWindowStore.remove(fullscreenStream.id)
+                        MultiWindowStore.clearFullscreen()
+                    },
+                    onFullscreen = { MultiWindowStore.clearFullscreen() },
+                    onCompletion = {
+                        pool.release(fullscreenStream.id)
+                        MultiWindowStore.remove(fullscreenStream.id)
+                        MultiWindowStore.clearFullscreen()
+                    },
+                    onSwap = {},
+                    onOptionsClick = {},
+                    pool = pool,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                // A remote can always get back to the wall: this is the one
+                // explicit "exit full screen" control on the page.
+                Box(
+                    Modifier
+                        .align(Alignment.TopStart)
+                        .padding(18.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(Color(0xCC000000))
+                        .border(1.dp, Color.White.copy(alpha = 0.5f), RoundedCornerShape(50))
+                        .mvClick { MultiWindowStore.clearFullscreen() }
+                        .padding(horizontal = 18.dp, vertical = 10.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "Exit full screen",
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+            return@BoxWithConstraints
         }
 
         Column(Modifier.fillMaxSize()) {
@@ -591,9 +644,10 @@ private fun MultiViewContent(
                                             stream = stream,
                                             gridPosition = gridPos,
                                             isAudioFocused = isAudioFocused,
-                                            onRemove = { MultiWindowStore.remove(stream.id) },
+                                            onRemove = { pool.release(stream.id); MultiWindowStore.remove(stream.id) },
                                             onFullscreen = { onFullscreen(stream) },
                                             onCompletion = {
+                                                pool.release(stream.id)
                                                 val next = MultiWindowStore.nextInSlot(stream.slotIndex)
                                                 if (next != null) {
                                                     MultiWindowStore.remove(stream.id)
@@ -631,13 +685,13 @@ private fun MultiViewContent(
             pool = pool,
             volume = MultiWindowStore.getVolume(stream.id),
             onVolumeChange = { vol ->
-                pool.get(stream.slotIndex).volume = vol
+                pool.get(stream.id).volume = vol
                 MultiWindowStore.setVolume(stream.id, vol)
                 if (vol > 0f) MultiWindowStore.setAudioFocus(stream.id)
             },
             onSwap = { targetSlot -> MultiWindowStore.swapSlots(stream.slotIndex, targetSlot) },
             onRefresh = {
-                val player = pool.get(stream.slotIndex)
+                val player = pool.get(stream.id)
                 player.setMediaItem(MediaItem.fromUri(stream.url))
                 player.volume = MultiWindowStore.getVolume(stream.id)
                 player.playWhenReady = !MultiWindowStore.isPaused(stream.id)
@@ -701,7 +755,7 @@ private fun VideoCell(
     val app = context.applicationContext as HikariApp
     val scope = rememberCoroutineScope()
     val player: ExoPlayer = remember(stream.id) {
-        pool.get(stream.slotIndex).also {
+        pool.get(stream.id).also {
             it.setMediaItem(MediaItem.fromUri(stream.url))
             it.volume = MultiWindowStore.getVolume(stream.id)
             it.playWhenReady = !MultiWindowStore.isPaused(stream.id)
@@ -731,8 +785,7 @@ private fun VideoCell(
 
     var isAudioActive by remember { mutableStateOf(MultiWindowStore.getVolume(stream.id) > 0f) }
     var isPlaying by remember(stream.id) { mutableStateOf(!MultiWindowStore.isPaused(stream.id)) }
-    var elapsedSeconds by remember { mutableStateOf(0) }
-    var seekProgress by remember { mutableStateOf(0f) }
+
     // Tracks whether a playback error / stall occurred while the cell was active.
     // Set to true by player listeners; reset to false by the reload loop once it
     // successfully starts playing again.
@@ -784,48 +837,14 @@ private fun VideoCell(
         Modifier.border(0.5.dp, OutlineVariant.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
     }
 
-    LaunchedEffect(isPlaying) {
-        while (isPlaying) {
-            kotlinx.coroutines.delay(1000)
-            elapsedSeconds++
-            seekProgress = (elapsedSeconds % 3600).toFloat() / 3600f
-        }
-    }
-
-    // Auto-refresh a frozen/paused cell, and also handle playback errors and
-    // buffering stalls via the needsReload flag. A stream that never
-    // re-establishes its session just sits on a dead socket; after a short
-    // grace period we re-seek so it comes back rather than staying grey.
-    LaunchedEffect(isPlaying, elapsedSeconds) {
-        if (isPlaying && !needsReload) return@LaunchedEffect
-        // Wait ~25s of accumulated freeze before the first refresh, then
-        // every ~60s after that so a truly dead stream keeps trying.
-        val firstRefreshAt = 25
-        val subsequentEvery = 60
-        while ((!isPlaying || needsReload) && isActive) {
-            if (needsReload) {
-                needsReload = false
-            }
-            val wait = if (elapsedSeconds < firstRefreshAt) 1000L else subsequentEvery * 1000L
-            delay(wait)
-            if (isPlaying && !needsReload) break
-            player.setMediaItem(MediaItem.fromUri(stream.url))
-            player.volume = MultiWindowStore.getVolume(stream.id)
-            player.playWhenReady = true
-            player.prepare()
-            MultiWindowStore.setPaused(stream.id, false)
-            isPlaying = true
-            elapsedSeconds = 0
-        }
-    }
-
-    // The reload lambda wired into the player error listener above. Calls the
-    // same reload logic as the LaunchedEffect so both paths stay in sync.
+    // Reload only on a real playback error. The old auto-refresh loop treated
+    // "not playing" (a pause, or a normal HLS buffer) as a dead socket and
+    // restarted every cell after 25 seconds — the "videos are in a loop"
+    // behaviour. A paused tile now stays paused; a healthy tile keeps playing.
     reloadOnError = {
         needsReload = true
-        // Give a short cooldown before reloading so we don't hammer a dead URL
         scope.launch {
-            delay(2000L)
+            delay(2_500L)
             player.setMediaItem(MediaItem.fromUri(stream.url))
             player.volume = MultiWindowStore.getVolume(stream.id)
             player.playWhenReady = true
@@ -833,7 +852,6 @@ private fun VideoCell(
             MultiWindowStore.setPaused(stream.id, false)
             isPlaying = true
             needsReload = false
-            elapsedSeconds = 0
         }
     }
 
@@ -911,14 +929,25 @@ private fun VideoCell(
 
             // Top-right fullscreen
             Box(
-                Modifier.align(Alignment.TopEnd).padding(6.dp)
-                    .size(28.dp).clip(CircleShape)
+                Modifier.align(Alignment.TopEnd).padding(end = 42.dp, top = 6.dp)
+                    .size(32.dp).clip(CircleShape)
                     .background(SurfaceContainerHighest.copy(alpha = 0.85f))
                     .border(0.5.dp, OutlineVariant.copy(alpha = 0.3f), CircleShape)
-                    .clickable { onFullscreen(); onInteraction() },
+                    .mvClick { onFullscreen(); onInteraction() },
                 contentAlignment = Alignment.Center,
             ) {
-                Text("⛶", color = OnSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text("⛶", color = OnSurface, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            }
+            // Close this window outright, beside fullscreen.
+            Box(
+                Modifier.align(Alignment.TopEnd).padding(6.dp)
+                    .size(32.dp).clip(CircleShape)
+                    .background(SurfaceContainerHighest.copy(alpha = 0.85f))
+                    .border(0.5.dp, OutlineVariant.copy(alpha = 0.3f), CircleShape)
+                    .mvClick { onRemove(); onInteraction() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("×", color = OnSurface, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             }
 
             // Center play/pause
@@ -926,7 +955,7 @@ private fun VideoCell(
                 Modifier.align(Alignment.Center).size(36.dp).clip(CircleShape)
                     .background(PrimaryContainer.copy(alpha = 0.2f))
                     .border(0.5.dp, Primary.copy(alpha = 0.4f), CircleShape)
-                    .clickable {
+                    .mvClick {
                         isPlaying = !isPlaying
                         if (isPlaying) {
                             player.play()
@@ -962,7 +991,7 @@ private fun VideoCell(
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
                         .background(SurfaceContainerHighest.copy(alpha = 0.85f))
-                        .clickable(onClick = { onOptionsClick(); onInteraction() })
+                        .mvClick { onOptionsClick(); onInteraction() }
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -977,7 +1006,7 @@ private fun VideoCell(
                             .clip(CircleShape)
                             .background(SurfaceContainerHighest.copy(alpha = 0.85f))
                             .border(0.5.dp, OutlineVariant.copy(alpha = 0.3f), CircleShape)
-                            .clickable { onSwap(prevSlot); onInteraction() },
+                            .mvClick { onSwap(prevSlot); onInteraction() },
                         contentAlignment = Alignment.Center,
                     ) {
                         Text("←", color = OnSurface, fontSize = 10.sp, fontWeight = FontWeight.Bold)
@@ -992,7 +1021,7 @@ private fun VideoCell(
                             .clip(CircleShape)
                             .background(SurfaceContainerHighest.copy(alpha = 0.85f))
                             .border(0.5.dp, OutlineVariant.copy(alpha = 0.3f), CircleShape)
-                            .clickable { onSwap(nextSlot); onInteraction() },
+                            .mvClick { onSwap(nextSlot); onInteraction() },
                         contentAlignment = Alignment.Center,
                     ) {
                         Text("→", color = OnSurface, fontSize = 10.sp, fontWeight = FontWeight.Bold)
@@ -1026,26 +1055,15 @@ private fun VideoCell(
                 }
             }
 
-            // Progress bar
-            Box(
-                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(3.dp)
-                    .background(SurfaceContainerHighest.copy(alpha = 0.6f)),
-            ) {
-                Box(
-                    Modifier.fillMaxHeight().fillMaxWidth(seekProgress.coerceIn(0f, 1f))
-                        .background(PrimaryContainer),
-                )
-                if (isPlaying) {
-                    Box(
-                        Modifier.align(Alignment.CenterEnd).size(6.dp).clip(CircleShape)
-                            .background(PrimaryContainer),
-                    )
-                }
-            }
         }
-
     }
 }
+
+/** A clickable that a television remote can focus and OK. */
+@Composable
+private fun Modifier.mvClick(onClick: () -> Unit): Modifier =
+    if (TvMode.isTv) tvPress(previewPass = true, onClick = onClick)
+    else clickable(onClick = onClick)
 
 /** Maps Lucid resize mode constants to PlayerView/AspectRatioFrameLayout values. */
 private fun lucidResizeModeToPlayerView(mode: Int): Int = when (mode) {

@@ -4201,7 +4201,7 @@ fun searchExceptionOnFlow(): Flow<Boolean> =
      * its own preferences.
      */
     fun subsDefaultOnFlow(): Flow<Boolean> =
-        store.data.map { it[K.SUBTITLES_DEFAULT_ON] ?: true }.distinctUntilChanged().flowOn(Dispatchers.Default)
+        store.data.map { it[K.SUBTITLES_DEFAULT_ON] ?: false }.distinctUntilChanged().flowOn(Dispatchers.Default)
 
     suspend fun subsDefaultOn(): Boolean = subsDefaultOnFlow().first()
 

@@ -176,10 +176,11 @@ fun HikariTheme(
     // density untouched (the previous behaviour).
     val base = LocalDensity.current
     val context = LocalContext.current
-    // 10-foot reading distance: the television keeps the same dp layout but
-    // every sp is 15% larger, which is the one global lift that reaches pages
-    // that have not grown a TV-specific type scale yet.
-    val tvText = if (TvMode.isTv) 1.15f else 1f
+    // Kept at 1.0: a blanket font lift made the dense IPTV page taller than a
+    // 540dp television and pushed the playlist grid off the bottom. The 10-foot
+    // work is done by the TV-specific pages/components instead (streaming
+    // service cards, poster grids, tour cards, PIP controls).
+    val tvText = 1f
     val density = remember(base, context, uiScaleEnabled, uiScale, tvText) {
         if (!uiScaleEnabled) {
             if (tvText == 1f) base

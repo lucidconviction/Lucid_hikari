@@ -719,14 +719,18 @@ fun PipHost() {
         val railPx = if (tvUi) with(density) { 104.dp.toPx() } else 0f
         val leftPx = marginPx + railPx
         val contentWidthPx = (maxWidthPx - leftPx - marginPx).coerceAtLeast(minWidthPx)
+        // The default floating-window size, not a second television: about a
+        // third of the content width, capped at 360dp, in the corner.
         val tvSingleWidth = minOf(
-            contentWidthPx * 0.52f,
-            with(density) { 500.dp.toPx() },
+            contentWidthPx * 0.34f,
+            with(density) { 360.dp.toPx() },
         ).coerceIn(minWidthPx, contentWidthPx)
         val tvSingleHeight = (
             tvSingleWidth * 9f / 16f + with(density) { 90.dp.toPx() }
             ).coerceIn(minHeightPx, (maxHeightPx - topPx - marginPx).coerceAtLeast(minHeightPx))
-        val maxPanes = if (tablet) 9 else 4
+        // One decoder on a television: a second floating stream is what made
+        // the whole page (and the player) sluggish on a 2 GB box.
+        val maxPanes = if (tvUi) 1 else if (tablet) 9 else 4
         val bubbleRadiusPx = with(density) { 27.dp.toPx() }
         var folderX by remember {
             mutableFloatStateOf(maxWidthPx - bubbleRadiusPx - with(density) { 16.dp.toPx() })
@@ -1396,7 +1400,12 @@ private fun PipWindow(
                     "PIP",
                     "playback error code=${e.errorCode} (${e.errorCodeName}) msg=${e.message} cause=${e.cause}",
                 )
-                if (pane.sourceIndex + 1 < pane.sources.size) onSourceFailed()
+                // Before the first frame a failed server is a bad server: try
+                // the next one. After the picture has started, switching a VOD
+                // source would restart the film from zero — let the player
+                // recover, and only surface the error if it cannot.
+                val canFailover = !hasFrame || source.isLive
+                if (canFailover && pane.sourceIndex + 1 < pane.sources.size) onSourceFailed()
                 else error = pipErrorMessage(e)
             }
         }
@@ -1406,7 +1415,7 @@ private fun PipWindow(
 
     LaunchedEffect(player) {
         val p = player ?: return@LaunchedEffect
-        val stallLimitMs = if (source.isLive) 25_000L else 15_000L
+        val stallLimitMs = if (source.isLive) 30_000L else 20_000L
         var bufferingSince = 0L
         var stalled = false
         while (true) {
@@ -1422,13 +1431,21 @@ private fun PipWindow(
                 val now = SystemClock.elapsedRealtime()
                 if (bufferingSince == 0L) bufferingSince = now
                 if (now - bufferingSince >= stallLimitMs) {
-                    stalled = true
-                    if (pane.sourceIndex + 1 < pane.sources.size) {
-                        onSourceFailed()
-                        return@LaunchedEffect
+                    // A VOD that has already drawn a frame must be allowed to
+                    // ride out a buffer dip all the way to the end; only a
+                    // live feed or a never-started window treats a long stall
+                    // as a bad server.
+                    if (hasFrame && !source.isLive) {
+                        bufferingSince = now
+                    } else {
+                        stalled = true
+                        if (pane.sourceIndex + 1 < pane.sources.size) {
+                            onSourceFailed()
+                            return@LaunchedEffect
+                        }
+                        p.pause()
+                        error = "This server is not responding. Tap to open the full player."
                     }
-                    p.pause()
-                    error = "This server is not responding. Tap to open the full player."
                 }
             } else {
                 bufferingSince = 0L
@@ -1442,14 +1459,11 @@ private fun PipWindow(
     var adjustMode by remember(pane.id) { mutableStateOf(PipAdjustMode.NONE) }
     val adjustStepPx = with(LocalDensity.current) { 24.dp.toPx() }
     val moveFocus = remember { FocusRequester() }
-    // A television has no tap to "enter" the floating window: when one opens,
-    // put the remote on its Move button so arrows/OK drive the PIP immediately.
-    LaunchedEffect(pane.id, tvInput, adjustMode) {
-        if (tvInput && adjustMode == PipAdjustMode.NONE) {
-            delay(350L)
-            runCatching { moveFocus.requestFocus() }
-        }
-    }
+    // Deliberately NO auto-focus. On a television that trapped the remote in
+    // the floating window, so the page could not be browsed or another title
+    // started while a PIP was playing. The PIP pill's controls sheet is the
+    // explicit way in; the window's own buttons stay focusable when the viewer
+    // navigates to them.
 
     Box(modifier = modifier) {
     Column(
@@ -1881,13 +1895,11 @@ private fun buildPipPlayer(
         .setLoadErrorHandlingPolicy(RetryFriendlyLoadErrorPolicy())
     val lowTv = isLowMemoryTv(context)
     val trackSelector = DefaultTrackSelector(context).apply {
+        val params = buildUponParameters().setPreferredAudioLanguage("en")
         if (lowTv) {
-            setParameters(
-                buildUponParameters()
-                    .setMaxVideoSize(1920, 1080)
-                    .setMaxVideoBitrate(8_000_000),
-            )
+            params.setMaxVideoSize(1920, 1080).setMaxVideoBitrate(8_000_000)
         }
+        setParameters(params)
     }
     val player = ExoPlayer.Builder(context)
         // The full player's decoder stack: nextlib registers FFmpeg software

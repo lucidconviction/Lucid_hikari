@@ -1,3 +1,27 @@
+## 0.15.9
+
+**21 November 2026**
+
+### Keep the IPTV page, make PIP small, and let a film finish
+
+- **The IPTV page fits a television again.** TV text returns to its designed size (the blanket 15% lift pushed the grid off a 540dp screen); the playlist area gets `weight(1f)` and a 96dp bottom gutter, so the last row is not swallowed by the bezel.
+- **Quick Channels is a proper TV page.** On television, the carousel moves into a full-screen **Quick Channels** sheet opened from the IPTV action row; the IPTV page then gives the playlist grid the whole screen. The sheet shows the region/cards at the top and the selected channel's results in the space below, at full height.
+- **Only working streams are listed.** The results list shows a stream only after its probe passes (`Offline hidden` = working, not merely unproven). The status line reports the live count while probing, and a "Searching playlists X/Y" progress line replaces the empty list. Matching scans every playlist, not just the first 60k channels, and the match set is cached for 12 hours so reopening a quick channel is instant.
+- **The results list takes the remote.** Every result row is a TV focus target (OK plays, hold opens a new PIP), as are the region tabs, quick-channel cards, filter chips and player tiles.
+- **The IPTV tab no longer downloads every playlist on open.** That eager 15 × 20k-channel prefetch was the sluggishness; channels are loaded when a quick channel or playlist is actually opened.
+- **PIP is the default floating size again**: about a third of the TV content width (capped at 360dp) in the corner, not a half-screen second television.
+- **A VOD plays to the end.** Once the first frame is up, a buffer dip is no longer treated as a dead server: the window rides it out instead of switching sources and restarting the film. Failover and the stall timer now only apply before the first frame (or to a live feed).
+- **Tours always close with Back**, and the Back key is consumed so the page behind does not exit.
+- **PIP never takes the remote hostage.** A television can browse every tab, open a title and start other content while the window keeps playing; the PIP controls sheet stays one deliberate tap away.
+- **English soundtrack first.** Files with several audio tracks default to the English one in both the full player and PIP; an explicit audio pick still overrides it.
+- **No search bars on streaming-service catalogues**: the service/genre walls are for browsing, and the field only pushed the artwork down and stole the remote's first focus.
+- **Captions are removed from the player.** The CC button is gone and the text track type is forced off at build and again on every track change, so a provider's embedded subtitle track cannot draw by itself. "Subtitles on by default" now starts off (Settings still exists for anyone who deliberately turns it back on).
+- **MultiView beside Play on the TV detail page**, matching the phone row: send the current stream to a chosen open multi-window slot without leaving the description page. It prefers a probe-verified mirror over a dead first row.
+- **MultiView no longer loops.** The automatic "reload if not playing" timer treated a pause or a normal HLS buffer as a dead stream and restarted every tile after 25 seconds; it now reloads only on a real player error. Four simultaneous streams is the TV ceiling, and each TV tile is capped at 720p/4 Mbps, so the 2 GB box is not asked for nine 1080p decoders.
+- **MultiView players are keyed by stream, not grid slot**, so swapping or removing a tile can no longer hand a cell the player already showing a different stream (the duplicate/looping picture). Tiles no longer request audio focus from each other, closing a tile frees its decoder, and exiting fullscreen resumes only the tiles fullscreen itself paused.
+- **MultiView controls are remote-sized and complete**: each tile has close (×), fullscreen (⛶), swap (←/→), options, play/pause and volume; fullscreen is in-page with an explicit **Exit full screen** button, and the floating MultiView count now overlays the MultiView page as well as every other screen (tapping it there exits fullscreen).
+- **A lighter television player**: one PIP decoder maximum, no corner "next episode" preview on 2 GB boxes (the last-12-seconds stutter), and the TV buffer/1080p caps from 0.15.8 kept in place.
+
 ## 0.15.8
 
 **21 November 2026**

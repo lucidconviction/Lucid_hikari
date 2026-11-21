@@ -4867,6 +4867,53 @@ fun DetailScreen(
                             // no icon" report).
                             Icon(Icons.Filled.Download, contentDescription = tr("Download"))
                         }
+                        // MultiView beside Play, exactly like the phone row: the
+                        // description page's stream goes straight into a chosen
+                        // open multi-window slot instead of making the viewer
+                        // navigate to the tab and search for it again.
+                        val sendToMultiView: () -> Unit = {
+                            val live = vm.liveStreams.value
+                            val stream = live.firstOrNull {
+                                it.url.isNotBlank() &&
+                                    !com.hikari.app.net.StreamProbe.knownBad(it.url) &&
+                                    com.hikari.app.net.StreamProbe.cached(it.url) != null
+                            } ?: live.firstOrNull {
+                                it.url.isNotBlank() && !com.hikari.app.net.StreamProbe.knownBad(it.url)
+                            } ?: live.firstOrNull()
+                                ?: if (isIptvPage && mediaId.startsWith("http")) {
+                                    com.hikari.app.data.StreamSource(
+                                        name = m?.title ?: title,
+                                        url = mediaId,
+                                    )
+                                } else {
+                                    null
+                                }
+                            if (stream != null) {
+                                val appCtx = context.applicationContext as HikariApp
+                                appCtx.slotPickerRequest.value = Pair(
+                                    Pair(stream.name, stream.url),
+                                    "GRID_2x3",
+                                )
+                            } else {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    I18n.t("Start a source first, then add it to MultiView"),
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        }
+                        FilledTonalButton(
+                            onClick = sendToMultiView,
+                            modifier = Modifier.tvPress(
+                                previewPass = true,
+                                onClick = sendToMultiView,
+                            ),
+                        ) {
+                            Icon(
+                                Icons.Filled.GridView,
+                                contentDescription = tr("MultiView"),
+                            )
+                        }
                         // Save, mirroring the phone row's library toggle below:
                         // the reference TV layout puts Play + Save side by
                         // side, and the TV hero only had Play + Download.

@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -97,6 +98,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.layout.heightIn
@@ -111,6 +114,7 @@ import com.hikari.app.data.QuickChannel
 import com.hikari.app.data.CustomRegion
 import com.hikari.app.data.QuickChannelList
 import com.hikari.app.data.IptvChannel
+import com.hikari.app.tv.tvPress
 import com.hikari.app.data.MediaItem
 import com.hikari.app.data.MediaType
 import com.hikari.app.data.NetworkStream
@@ -516,6 +520,10 @@ addStream = false
     // with pills as the only switcher, like MyStuffScreen does.
     var section by rememberSaveable { mutableStateOf(IptvSection.PLAYLIST) }
     var showPortalGenerator by remember { mutableStateOf(false) }
+    // On a television the Quick Channels carousel is moved into its own
+    // full-screen sheet; leaving it inline pushed the playlist grid off the
+    // bottom of a 540dp screen.
+    var showQuickChannels by remember { mutableStateOf(false) }
     val tvNow = com.hikari.app.tv.TvMode.current()
     val pager = androidx.compose.foundation.pager.rememberPagerState(
         initialPage = 0,
@@ -654,8 +662,12 @@ addStream = false
     }
 
     Column(Modifier.fillMaxSize()) {
-        // Quick Channels section at the TOP of IPTV tab (no separate tab)
-        QuickChannelsSection(nav, playlists, refreshKey)
+        // Quick Channels section at the TOP of IPTV tab (no separate tab).
+        // Television gets a compact launcher instead; the full carousel lives
+        // in a sheet so the playlist grid keeps the screen.
+        if (!tvNow) {
+            QuickChannelsSection(nav, playlists, refreshKey)
+        }
 
         // Xtream accounts quick access row
         XtreamAccountRow(app = app)
@@ -671,6 +683,9 @@ addStream = false
         IptvPortalActions(
             onChWall = { Routes.safeNavigate(nav, Routes.CHANNEL_WALL) },
             onGenerate = { showPortalGenerator = true },
+            onQuickChannels = if (tvNow) {
+                { showQuickChannels = true }
+            } else null,
         )
 
         Spacer(Modifier.height(8.dp))
@@ -679,12 +694,15 @@ addStream = false
             current = section,
             onPick = { section = it },
         )
+        // weight, not fillMaxSize: the quick-channel header, actions and strip
+        // are measured first; the playlist page must get whatever height is
+        // left instead of claiming the whole screen and being clipped.
         if (tvNow) {
-            Box(Modifier.fillMaxSize()) { SectionPage(section) }
+            Box(Modifier.weight(1f).fillMaxWidth()) { SectionPage(section) }
         } else {
             androidx.compose.foundation.pager.HorizontalPager(
                 state = pager,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.weight(1f).fillMaxWidth(),
             ) { page ->
                 SectionPage(sectionAt(page))
             }
@@ -696,6 +714,23 @@ addStream = false
             app = app,
             onDismiss = { showPortalGenerator = false },
         )
+    }
+
+    if (showQuickChannels) {
+        Dialog(
+            onDismissRequest = { showQuickChannels = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                QuickChannelsSection(nav, playlists, refreshKey)
+                IconButton(
+                    onClick = { showQuickChannels = false },
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(24.dp),
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                }
+            }
+        }
     }
 
     if (showAdd) {
@@ -1642,7 +1677,10 @@ fun IptvPlaylistScreen(nav: NavHostController, providerId: String) {
                 start = 12.dp,
                 end = 12.dp,
                 top = 4.dp,
-                bottom = LocalTaskbarInset.current + 24.dp,
+                // A television has no taskbar inset; the last playlist row
+                // was being swallowed by the bottom bezel.
+                bottom = LocalTaskbarInset.current +
+                    if (com.hikari.app.tv.TvMode.current()) 96.dp else 24.dp,
             ),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -1806,7 +1844,10 @@ fun IptvAllPlaylistsScreen(nav: NavHostController) {
                 start = 12.dp,
                 end = 12.dp,
                 top = 4.dp,
-                bottom = LocalTaskbarInset.current + 24.dp,
+                // A television has no taskbar inset; the last playlist row
+                // was being swallowed by the bottom bezel.
+                bottom = LocalTaskbarInset.current +
+                    if (com.hikari.app.tv.TvMode.current()) 96.dp else 24.dp,
             ),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -2086,6 +2127,104 @@ private object IptvCardCache {
 }
 
 
+/**
+ * Quick Channels' match results, remembered per channel + playlist set.
+ *
+ * Scanning every playlist for a US channel is a one-time cost per library, not
+ * something the viewer should pay again every time they open the sheet. The
+ * matches are tiny (usually a few hundred rows), so they live in one JSON file.
+ */
+private object QuickMatchCache {
+    private const val TTL_MS = 12 * 60 * 60 * 1000L
+    private const val VERSION = 1
+    private val mem = HashMap<String, List<IptvChannel>>()
+    private var diskLoaded = false
+    private val disk = HashMap<String, Pair<Long, List<IptvChannel>>>()
+
+    private fun file(): File? = runCatching {
+        File(HikariApp.instance.filesDir, "iptv/quick_matches.json")
+    }.getOrNull()
+
+    private fun loadDisk() {
+        if (diskLoaded) return
+        diskLoaded = true
+        val f = file() ?: return
+        if (!f.exists() || f.length() == 0L) return
+        runCatching {
+            val root = org.json.JSONObject(f.readText())
+            if (root.optInt("v") != VERSION) return@runCatching
+            val entries = root.optJSONObject("entries") ?: return@runCatching
+            val keys = entries.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                val e = entries.optJSONObject(key) ?: continue
+                val arr = e.optJSONArray("channels") ?: continue
+                val list = ArrayList<IptvChannel>(arr.length())
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val url = o.optString("url")
+                    if (url.isBlank()) continue
+                    list += IptvChannel(
+                        name = o.optString("name"),
+                        url = url,
+                        logo = o.optString("logo").takeIf { it.isNotBlank() },
+                        group = o.optString("group"),
+                        providerId = o.optString("providerId"),
+                    )
+                }
+                disk[key] = e.optLong("at") to list
+            }
+        }
+    }
+
+    @Synchronized
+    fun get(key: String, fingerprint: String): List<IptvChannel>? {
+        loadDisk()
+        mem["$key|$fingerprint"]?.let { return it }
+        val hit = disk[key] ?: return null
+        if (System.currentTimeMillis() - hit.first > TTL_MS) return null
+        mem["$key|$fingerprint"] = hit.second
+        return hit.second
+    }
+
+    @Synchronized
+    fun put(key: String, fingerprint: String, list: List<IptvChannel>) {
+        loadDisk()
+        val at = System.currentTimeMillis()
+        mem["$key|$fingerprint"] = list
+        disk[key] = at to list
+        val snapshot = disk.mapValues { it.value }
+        Thread({
+            val f = file() ?: return@Thread
+            runCatching {
+                val entries = org.json.JSONObject()
+                for ((k, v) in snapshot) {
+                    val arr = org.json.JSONArray()
+                    v.second.forEach { ch ->
+                        arr.put(
+                            org.json.JSONObject()
+                                .put("name", ch.name)
+                                .put("url", ch.url)
+                                .put("logo", ch.artwork.orEmpty())
+                                .put("group", ch.group)
+                                .put("providerId", ch.providerId),
+                        )
+                    }
+                    entries.put(k, org.json.JSONObject().put("at", v.first).put("channels", arr))
+                }
+                val root = org.json.JSONObject().put("v", VERSION).put("entries", entries)
+                val tmp = File(f.parentFile, f.name + ".tmp")
+                tmp.writeText(root.toString())
+                if (f.exists()) f.delete()
+                if (!tmp.renameTo(f)) {
+                    tmp.copyTo(f, overwrite = true)
+                    tmp.delete()
+                }
+            }
+        }, "iptv-quick-matches").apply { isDaemon = true }.start()
+    }
+}
+
 /** One group inside a playlist. */
 private data class IptvGroupTile(
     val name: String,
@@ -2177,6 +2316,7 @@ private object IptvSection {
 private fun IptvPortalActions(
     onChWall: () -> Unit,
     onGenerate: () -> Unit,
+    onQuickChannels: (() -> Unit)? = null,
 ) {
     Row(
         Modifier
@@ -2185,6 +2325,15 @@ private fun IptvPortalActions(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (onQuickChannels != null) {
+            IptvSectionPill(
+                label = "Quick Channels",
+                icon = Icons.Filled.LiveTv,
+                selected = false,
+                modifier = Modifier.weight(1f),
+                onClick = onQuickChannels,
+            )
+        }
         IptvSectionPill(
             label = "CH Wall",
             icon = Icons.Filled.GridView,
@@ -2469,7 +2618,10 @@ private fun IptvKindGrid(
                 start = 12.dp,
                 end = 12.dp,
                 top = 4.dp,
-                bottom = LocalTaskbarInset.current + 24.dp,
+                // A television has no taskbar inset; the last playlist row
+                // was being swallowed by the bottom bezel.
+                bottom = LocalTaskbarInset.current +
+                    if (com.hikari.app.tv.TvMode.current()) 96.dp else 24.dp,
             ),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -3374,6 +3526,7 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
     var aliveByUrl by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
     var qcLoading by remember { mutableStateOf(false) }
     var qcValidating by remember { mutableStateOf(false) }
+    var qcProgress by remember { mutableStateOf(0 to 0) }
     var hideDead by remember { mutableStateOf(true) }
     var sheetExpanded by remember { mutableStateOf(false) }
     // Full playlist channels — fetched once and shared by every quick search,
@@ -3395,15 +3548,15 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
     }
 
     LaunchedEffect(playlists, refreshKey) {
-        allChannels = emptyList()
+        // Do NOT download every playlist's channels here. Fifteen 20k-channel
+        // playlists were fetched (and parsed) the moment the IPTV tab opened,
+        // which is what made the page sluggish and starved the grid of its
+        // layout time on a 2 GB television. The deferred is created on demand
+        // when a quick channel or a playlist is actually opened.
+        channelsJob.value?.cancel()
         channelsJob.value = null
+        allChannels = emptyList()
         channelsKey++
-        if (playlists.isEmpty()) return@LaunchedEffect
-        val list = requestChannels(force = false).await()
-        allChannels = list
-        if (list.isNotEmpty()) {
-            com.hikari.app.sports.SportsRepository.matchChannels(list)
-        }
     }
 
     fun runQcValidation() {
@@ -3460,11 +3613,29 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
         qcLoading = true
         qcMatches = emptyList()
         aliveByUrl = emptyMap()
+        qcProgress = 0 to playlists.size
 
-        val channels = if (allChannels.isNotEmpty()) allChannels else requestChannels().await()
-        if (allChannels.isEmpty()) allChannels = channels
-        val matches = withContext(Dispatchers.Default) {
-            channels.filter { ch -> QuickChannelList.matches(qc, ch) }
+        // Scan every playlist for a match instead of taking the first 60k
+        // channels: a US-only channel often lives far past that cap. The result
+        // is cached for 12 hours, so only the first open pays the scan.
+        val fingerprint = playlists.joinToString("|") {
+            it.config.id + ":" + (IptvProvider.channelCounts[it.config.id] ?: 0)
+        }
+        val cachedMatches = QuickMatchCache.get(qc.displayName, fingerprint)
+        val matches = if (cachedMatches != null) {
+            cachedMatches
+        } else if (playlists.isNotEmpty()) {
+            com.hikari.app.providers.gatherIptvMatches(
+                playlists = playlists,
+                onProgress = { done, total -> qcProgress = done to total },
+                predicate = { ch -> QuickChannelList.matches(qc, ch) },
+            ).also { QuickMatchCache.put(qc.displayName, fingerprint, it) }
+        } else {
+            val channels = if (allChannels.isNotEmpty()) allChannels else requestChannels().await()
+            if (allChannels.isEmpty()) allChannels = channels
+            withContext(Dispatchers.Default) {
+                channels.filter { ch -> QuickChannelList.matches(qc, ch) }
+            }
         }
         qcMatches = matches
         qcLoading = false
@@ -3540,8 +3711,12 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                             .clip(CircleShape)
                             .background(if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
                             .then(
-                                if (isCustomRegion) {
-                                    Modifier.combinedClickable(
+                                when {
+                                    com.hikari.app.tv.TvMode.isTv -> Modifier.tvPress(
+                                        previewPass = true,
+                                        onClick = { selectedQcRegion = tab },
+                                    )
+                                    isCustomRegion -> Modifier.combinedClickable(
                                         onClick = { selectedQcRegion = tab },
                                         onLongClick = {
                                             regionForTab?.let {
@@ -3550,8 +3725,7 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                                             }
                                         },
                                     )
-                                } else {
-                                    Modifier.clickable { selectedQcRegion = tab }
+                                    else -> Modifier.clickable { selectedQcRegion = tab }
                                 },
                             )
                             .padding(start = 12.dp, end = if (isCustomRegion) 8.dp else 12.dp, top = 6.dp, bottom = 6.dp),
@@ -3615,11 +3789,15 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
             containerColor = MaterialTheme.colorScheme.surface,
             tonalElevation = 8.dp,
         ) {
+            val tvSheet = com.hikari.app.tv.TvMode.current()
             Column(
                 modifier = Modifier
                     .padding(horizontal = 20.dp, vertical = 12.dp)
                     .fillMaxWidth()
-                    .heightIn(max = 500.dp),
+                    .then(
+                        if (tvSheet) Modifier.fillMaxHeight(0.92f)
+                        else Modifier.heightIn(max = 500.dp),
+                    ),
             ) {
                 // Header
                 Row(
@@ -3675,7 +3853,14 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             CircularProgressIndicator()
                             Spacer(Modifier.height(8.dp))
-                            Text("Checking channels...", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                if (qcProgress.second > 0) {
+                                    "Searching playlists ${qcProgress.first}/${qcProgress.second}…"
+                                } else {
+                                    "Checking channels..."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                            )
                         }
                     }
                 } else if (qcMatches.isEmpty()) {
@@ -3734,38 +3919,58 @@ private fun QuickChannelsSection(nav: NavHostController, playlists: List<IptvPro
                     }
                     Spacer(Modifier.height(4.dp))
 
-                    FeedFilterRows(
-                        channels = qcMatches,
-                        filter = feedFilter,
-                        onChange = { feedFilter = it },
-                    )
-                    Spacer(Modifier.height(6.dp))
+                    if (!tvSheet) {
+                        FeedFilterRows(
+                            channels = qcMatches,
+                            filter = feedFilter,
+                            onChange = { feedFilter = it },
+                        )
+                        Spacer(Modifier.height(6.dp))
+                    }
 
                     // Channel list — working/live channels float to the top, most relevant first.
                     val sortedMatches = remember(qcMatches, aliveByUrl, hideDead, selectedQc, feedFilter) {
                         qcMatches
                             .filter { feedFilter.matches(FeedTagsParser.parse(it.name)) }
                             .filter { ch ->
+                                // "Offline hidden" means WORKING only, not
+                                // "not yet proven dead": the sheet is a list of
+                                // streams that actually answered, so a row
+                                // appears when its probe passes.
                                 if (!hideDead) true
-                                else aliveByUrl[ch.url] != false
+                                else aliveByUrl[ch.url] == true
                             }
                             .sortedWith(compareByDescending<IptvChannel> { aliveByUrl[it.url] == true }
                                 .thenByDescending { aliveByUrl[it.url] == null }
                                 .thenByDescending { selectedQc?.let { qc -> relevanceScore(qc, it) } ?: 0 })
                     }
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        if (sortedMatches.isEmpty() && hideDead) {
+                            item {
+                                Text(
+                                    if (qcValidating) "Checking streams — showing only working ones…"
+                                    else "No working streams found for this channel.",
+                                    color = Color.White.copy(alpha = 0.65f),
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.padding(vertical = 16.dp),
+                                )
+                            }
+                        }
                         items(sortedMatches) { ch ->
                             val isWorking = aliveByUrl[ch.url]
                             ChannelListItem(
                                 channel = ch,
                                 isAlive = isWorking,
                                 onClick = {
-                                    playChannel(ctx, ch, nav, allChannels)
+                                    playChannel(ctx, ch, nav, qcMatches)
                                     showSheet = false
                                     selectedQc = null
                                 },
                                 onLongClick = {
-                                    playChannelInNewPip(ctx, ch, allChannels)
+                                    playChannelInNewPip(ctx, ch, qcMatches)
                                 },
                             )
                         }
@@ -4036,7 +4241,17 @@ private fun QuickChannelCardBig(
     Card(
         modifier = Modifier
             .width(160.dp)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+            .then(
+                if (com.hikari.app.tv.TvMode.isTv) {
+                    Modifier.tvPress(
+                        previewPass = true,
+                        onHold = onLongClick,
+                        onClick = onClick,
+                    )
+                } else {
+                    Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                },
+            ),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isActive) MaterialTheme.colorScheme.primaryContainer 
@@ -4083,10 +4298,15 @@ private fun ChannelListItem(
             .clip(RoundedCornerShape(10.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
             .then(
-                if (onLongClick != null) {
-                    Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
-                } else {
-                    Modifier.clickable(onClick = onClick)
+                when {
+                    com.hikari.app.tv.TvMode.isTv -> Modifier.tvPress(
+                        previewPass = true,
+                        onHold = onLongClick,
+                        onClick = onClick,
+                    )
+                    onLongClick != null ->
+                        Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                    else -> Modifier.clickable(onClick = onClick)
                 },
             )
             .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -4551,6 +4771,7 @@ private fun QuickChannelsSectionEmbedded(playlists: List<IptvProvider>, onChanne
     var aliveByUrl by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
     var qcLoading by remember { mutableStateOf(false) }
     var qcValidating by remember { mutableStateOf(false) }
+    var qcProgress by remember { mutableStateOf(0 to 0) }
     var hideDead by remember { mutableStateOf(true) }
     
     // Cache: QuickChannel.displayName -> filtered channels (persisted across selections)
@@ -4767,12 +4988,26 @@ private fun QuickChannelsSectionEmbedded(playlists: List<IptvProvider>, onChanne
 
                     val sortedMatches = remember(qcMatches, aliveByUrl, hideDead, selectedQc) {
                         qcMatches
-                            .filter { ch -> if (!hideDead) true else aliveByUrl[ch.url] != false }
+                            .filter { ch -> if (!hideDead) true else aliveByUrl[ch.url] == true }
                             .sortedWith(compareByDescending<IptvChannel> { aliveByUrl[it.url] == true }
                                 .thenByDescending { aliveByUrl[it.url] == null }
                                 .thenByDescending { selectedQc?.let { qc -> relevanceScore(qc, it) } ?: 0 })
                     }
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        if (sortedMatches.isEmpty() && hideDead) {
+                            item {
+                                Text(
+                                    if (qcValidating) "Checking streams — showing only working ones…"
+                                    else "No working streams found for this channel.",
+                                    color = Color.White.copy(alpha = 0.65f),
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.padding(vertical = 16.dp),
+                                )
+                            }
+                        }
                         items(sortedMatches) { ch ->
                             val isWorking = aliveByUrl[ch.url]
                             ChannelListItem(

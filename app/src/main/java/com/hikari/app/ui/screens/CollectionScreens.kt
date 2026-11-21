@@ -4882,25 +4882,9 @@ fun TmdbGridScreen(
     // hidden title survived.
     val gridItems = rememberVisibleItems(items)
 
-    // ---- This catalog's own search box ----
-    //
-    // A production, a network, a public list and a person are all one PAGED TMDB
-    // query (20 titles a page), and the title a reader came for can be dozens of
-    // pages in. Typing a name here must therefore filter what is loaded AND keep
-    // walking the catalog until it is found — but it must NOT hand the name to
-    // the app's own Search tab: that searches every source in the app and would
-    // leave this catalog entirely, which is exactly what was reported ("search
-    // inside a production sends me to Hikari search"). Nothing here leaves the
-    // page.
-    var filterText by rememberSaveable(specJson, presetKey) { mutableStateOf("") }
-    val needle = filterText.trim()
-    val matched = remember(gridItems, needle) {
-        if (needle.isBlank()) gridItems
-        else gridItems.filter {
-            it.title.contains(needle, ignoreCase = true) ||
-                (it.originalTitle?.contains(needle, ignoreCase = true) == true)
-        }
-    }
+    // Streaming-service catalogues are a browsing wall, not a search page: the
+    // search field only pushed the artwork down and stole the remote's first
+    // focus. The app's Search tab remains the place to look for a name.
     // ---- What KIND of title to show ------------------------------------
     //
     // The genre a reader taps on Home ("Action") is ONE TMDB query that answers
@@ -4914,28 +4898,25 @@ fun TmdbGridScreen(
     // asking for a kind this catalog has not reached yet still finds it instead
     // of dead-ending on "nothing here".
     var kindKey by rememberSaveable(specJson, presetKey) { mutableStateOf(KIND_ALL) }
-    val shown = remember(matched, kindKey) {
+    val shown = remember(gridItems, kindKey) {
         when (kindKey) {
-            KIND_MOVIE -> matched.filter { it.type == MediaType.MOVIE && !it.looksAnime() }
-            KIND_SERIES -> matched.filter { it.type == MediaType.SERIES && !it.looksAnime() }
-            KIND_ANIME -> matched.filter { it.looksAnime() }
-            KIND_MOVIE_SERIES -> matched.filter {
+            KIND_MOVIE -> gridItems.filter { it.type == MediaType.MOVIE && !it.looksAnime() }
+            KIND_SERIES -> gridItems.filter { it.type == MediaType.SERIES && !it.looksAnime() }
+            KIND_ANIME -> gridItems.filter { it.looksAnime() }
+            KIND_MOVIE_SERIES -> gridItems.filter {
                 (it.type == MediaType.MOVIE || it.type == MediaType.SERIES) && !it.looksAnime()
             }
-            else -> matched
+            else -> gridItems
         }
     }
     // The walk. Eight pages (160 titles) is the bound: far enough that a studio's
-    // catalogue is genuinely searched for a name, bounded enough that a typo does
-    // not sit there pulling the whole catalogue over the network. The counter
-    // resets whenever the query changes, so a second search gets its own budget.
+    // catalogue is genuinely searched for a kind, bounded enough that an empty
+    // kind does not sit there pulling the whole catalogue over the network.
     var deepened by remember { mutableIntStateOf(0) }
-    LaunchedEffect(needle, kindKey) { deepened = 0 }
-    // "The reader has narrowed this catalog" — by a name, by a kind, or both.
-    // Only then is an empty list worth walking the catalog for; a catalog that
-    // is simply still loading its first page is not.
-    val narrowed = needle.isNotBlank() || kindKey != KIND_ALL
-    LaunchedEffect(needle, kindKey, shown.isEmpty(), loading, done) {
+    LaunchedEffect(kindKey) { deepened = 0 }
+    // A picked kind is the only narrowing left now that the search bar is gone.
+    val narrowed = kindKey != KIND_ALL
+    LaunchedEffect(kindKey, shown.isEmpty(), loading, done) {
         if (narrowed && shown.isEmpty() && !loading && !done && deepened < 8) {
             deepened++
             vm.loadNext()
@@ -4948,7 +4929,7 @@ fun TmdbGridScreen(
     // is not loaded yet.
     val tmdbKeys = remember(shown) { shown.map { it.uniqueId } }
     val gridState = com.hikari.app.ui.components.keptGridState(
-        "tmdbGrid:$presetKey|$specJson|$needle|$kindKey",
+        "tmdbGrid:$presetKey|$specJson|$kindKey",
         itemKeys = tmdbKeys,
         onNeedMore = { if (!done && !loading) vm.loadNext() },
     )
@@ -4974,22 +4955,6 @@ fun TmdbGridScreen(
                 else -> "TMDB"
             },
             onBack = { nav.popBackStack() },
-        )
-        GlassSearchField(
-            value = filterText,
-            onValueChange = { filterText = it },
-            placeholder = tr("Search this catalog"),
-            // A 10-foot page needs a field a viewer can actually see and land
-            // on with a remote; the phone-sized 46dp pill read as a hairline
-            // from the sofa.
-            height = if (tv) 62.dp else 46.dp,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(
-                    start = if (tv) 30.dp else 12.dp,
-                    end = if (tv) 30.dp else 12.dp,
-                    bottom = if (tv) 14.dp else 8.dp,
-                ),
         )
         // All · Movies · Series · Anime · Movies & series — the same split the
         // Search tab's kind chips offer, applied to what this page has already

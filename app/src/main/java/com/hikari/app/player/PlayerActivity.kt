@@ -1354,7 +1354,7 @@ class PlayerActivity : ComponentActivity() {
      *  (Settings → Player → Subtitles; ON until the stored answer lands).
      *  OFF starts every video with captions hidden; an explicit pick (a track,
      *  Auto, an added file) still shows, because it outranks this default. */
-    private var subsDefaultOn = true
+    private var subsDefaultOn = false
 
     /** The live gain stage of the current player, or null before the player is
      *  built. Toggling the booster only ever sets its [gain]: the stage rides
@@ -2124,6 +2124,8 @@ class PlayerActivity : ComponentActivity() {
         autoplayBtn = findViewById(R.id.autoplay_btn)
         autoNextBtn = findViewById(R.id.auto_next_btn)
         subsBtn = findViewById(R.id.subs_btn)
+        // Closed captions are not offered in this build.
+        subsBtn?.visibility = View.GONE
         audioBtn = findViewById(R.id.audio_btn)
         lockBtn = findViewById(R.id.lock_btn)
         resizeBtn = findViewById(R.id.resize_btn)
@@ -9742,6 +9744,10 @@ class PlayerActivity : ComponentActivity() {
 
     /** Starts the muted corner player. Video only: no audio focus, no sound. */
     private fun showNextPlaybackPreview() {
+        // A 2 GB television cannot spare a second decoder/connection for the
+        // corner "next episode" preview while the current video is still
+        // playing; it was the last-12-seconds stutter. High-memory TVs keep it.
+        if (TvMode.isTv && tvHasTinyMemory()) return
         if (nextPreviewStarted) return
         val preview = nextPreview ?: return
         val view = nextPreviewView ?: return
@@ -15437,8 +15443,30 @@ class PlayerActivity : ComponentActivity() {
                 if (tinyTv) 1080 else Int.MAX_VALUE,
             )
             .setMaxVideoBitrate(if (tinyTv) 8_000_000 else Int.MAX_VALUE)
+            // Default to the English soundtrack when a file carries several
+            // audio tracks. An explicit pick in the audio sheet still wins via
+            // its TrackSelectionOverride.
+            .setPreferredAudioLanguage("en")
             .build()
         player.addListener(listener)
+        // Captions are off for this player by request. A provider's media item
+        // can still carry a text track that media3 selects on its own, and
+        // re-attaching subtitles rebuilds the item; this listener turns the
+        // text type back off every time a track set appears, so no caption
+        // ever draws. (Burned-in captions in the video itself are not a track.)
+        player.addListener(object : Player.Listener {
+            override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+                val selectedText = tracks.groups.any { group ->
+                    group.type == C.TRACK_TYPE_TEXT && group.isSelected
+                }
+                if (selectedText) {
+                    player.trackSelectionParameters = player.trackSelectionParameters
+                        .buildUpon()
+                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                        .build()
+                }
+            }
+        })
         playerView?.player = player
         // A dual-audio pairing survives an effects-pipeline re-arm (which
         // bypasses [playSource]): the rebuilt video player is muted again here

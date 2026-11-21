@@ -2091,7 +2091,9 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
         // the page leaves the page alone.
         val mwStreams = MultiWindowStore.allStreams
         val isOnMultiView = tabRoute == Routes.MULTI_VIEW
-        if (mwStreams.isNotEmpty() && tabRoute == Routes.MULTI_VIEW) {
+        // Overlays the MultiView page too, not only every other screen; on the
+        // page itself it doubles as the way out of a fullscreen cell.
+        if (mwStreams.isNotEmpty()) {
             val mwCount = mwStreams.size
             Box(
                 modifier = Modifier
@@ -2107,7 +2109,8 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
                         shape = CircleShape,
                     )
                     .clickable {
-                        if (!isOnMultiView) Routes.navigateTab(nav, Routes.MULTI_VIEW)
+                        if (isOnMultiView) MultiWindowStore.clearFullscreen()
+                        else Routes.navigateTab(nav, Routes.MULTI_VIEW)
                     },
                 contentAlignment = Alignment.Center,
             ) {

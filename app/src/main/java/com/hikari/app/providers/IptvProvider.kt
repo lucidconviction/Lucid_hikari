@@ -1056,6 +1056,42 @@ class IptvProvider(override val config: ProviderConfig) : ContentProvider {
  *  as long. [force] re-downloads every playlist regardless of cache — the
  *  multi-view picker's "refresh" path.
  */
+/**
+ * Scans every playlist for channels matching [predicate], keeping only the
+ * matches.
+ *
+ * Quick Channels used [gatherIptvChannels], which caps at the first 60k
+ * channels. A viewer with fifteen 20k-channel playlists could therefore get
+ * "no matching channels" for a US channel that lives in playlist 12. This
+ * walks them all two at a time and never retains more than one playlist's
+ * channel list plus the matches.
+ */
+suspend fun gatherIptvMatches(
+    playlists: List<IptvProvider>,
+    force: Boolean = false,
+    limit: Int = 5_000,
+    onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
+    predicate: (IptvChannel) -> Boolean,
+): List<IptvChannel> = withContext(Dispatchers.IO) {
+    val out = ArrayList<IptvChannel>(minOf(limit, 1_024))
+    var done = 0
+    for (chunk in playlists.chunked(2)) {
+        if (out.size >= limit) break
+        val fresh = chunk.map { p ->
+            async { runCatching { p.channels(force = force) }.getOrNull().orEmpty() }
+        }.awaitAll()
+        for (list in fresh) {
+            for (ch in list) {
+                if (out.size >= limit) break
+                if (runCatching { predicate(ch) }.getOrDefault(false)) out += ch
+            }
+        }
+        done += chunk.size
+        onProgress(done.coerceAtMost(playlists.size), playlists.size)
+    }
+    out
+}
+
 suspend fun gatherIptvChannels(
     playlists: List<IptvProvider>,
     force: Boolean = false,

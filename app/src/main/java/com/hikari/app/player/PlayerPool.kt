@@ -1,54 +1,64 @@
 package com.hikari.app.player
 
 import android.content.Context
-import androidx.media3.common.MediaItem
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.RenderersFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
-import androidx.media3.exoplayer.trackselection.TrackSelector
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 
 /**
- * F4 — pool of ExoPlayer instances for the multi-view screen. At most [MAX_PLAYERS]
- * players are kept alive; excess players are released back to the pool.
- * Each player is configured with the app's shared HTTP client so probe results
- * and cached resolutions are reused across windows.
+ * F4 — pool of ExoPlayer instances for the multi-view screen.
+ *
+ * Keyed by SLOT, not by list position: swapping two tiles or removing one used
+ * to shift the list and hand a cell the player that was already playing a
+ * different stream, which showed up as the same video looping. A removed slot
+ * now leaves the other players exactly where they were.
  */
 class PlayerPool(private val context: Context) {
     companion object {
         const val MAX_PLAYERS = 9
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val players = mutableListOf<ExoPlayer>()
-    private val trackSelector: TrackSelector by lazy { DefaultTrackSelector(context) }
+    private val players = HashMap<String, ExoPlayer>()
+    private val trackSelector: DefaultTrackSelector by lazy {
+        DefaultTrackSelector(context).apply {
+            val params = buildUponParameters()
+                .setPreferredAudioLanguage("en")
+            // Four tiles on a 2 GB television cannot all pull 1080p at once.
+            if (com.hikari.app.tv.TvMode.isTv) {
+                params.setMaxVideoSize(1280, 720)
+                    .setMaxVideoBitrate(4_000_000)
+            }
+            setParameters(params)
+        }
+    }
     private val renderersFactory: RenderersFactory by lazy {
         NextRenderersFactory(context)
             .setEnableDecoderFallback(true)
     }
 
-    /** Returns a player at [index], creating it if needed. */
-    fun get(index: Int): ExoPlayer {
-        while (players.size <= index) {
-            players.add(
-                ExoPlayer.Builder(context)
-                    .setRenderersFactory(renderersFactory)
-                    .setTrackSelector(trackSelector)
-                    .build()
+    /** Returns the player for [key] (a stable stream id), creating it if needed. */
+    fun get(key: String): ExoPlayer = players.getOrPut(key) {
+        ExoPlayer.Builder(context)
+            .setRenderersFactory(renderersFactory)
+            .setTrackSelector(trackSelector)
+            // Each tile owns its own volume; requesting audio focus here would
+            // make the platform pause a different window every time one starts.
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                    .build(),
+                /* handleAudioFocus = */ false,
             )
-        }
-        return players[index]
+            .build()
     }
 
-    /** Releases the player at [index] and shrinks the pool. */
-    fun release(index: Int) {
-        if (index < players.size) {
-            players[index].release()
-            players.removeAt(index)
-        }
+    /** Releases only [key]'s player; every other stream keeps playing. */
+    fun release(key: String) {
+        players.remove(key)?.release()
     }
 
     /** Number of players currently in the pool. */
@@ -56,7 +66,7 @@ class PlayerPool(private val context: Context) {
 
     /** Releases all players. */
     fun releaseAll() {
-        players.forEach { it.release() }
+        players.values.forEach { it.release() }
         players.clear()
     }
 }
