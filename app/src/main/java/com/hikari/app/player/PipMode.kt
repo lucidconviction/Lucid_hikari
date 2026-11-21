@@ -1,6 +1,7 @@
 package com.hikari.app.player
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -15,6 +16,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -26,15 +28,21 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.OpenWith
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.DragIndicator
 import androidx.compose.material.icons.rounded.Fullscreen
@@ -50,6 +58,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -68,6 +77,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.positionChanged
@@ -92,8 +108,11 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.lifecycle.Lifecycle
@@ -107,6 +126,7 @@ import com.hikari.app.net.Http
 import com.hikari.app.net.IptvPlaybackForklift
 import com.hikari.app.net.PlayerHttp
 import com.hikari.app.net.StreamProbe
+import com.hikari.app.tv.tvPress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -167,6 +187,9 @@ internal data class PipSource(
     val providerId: String = "",
 )
 
+/** Remote-driven bounds adjustment (a television has no drag gesture). */
+private enum class PipAdjustMode { NONE, MOVE, RESIZE }
+
 /** One floating preview window and where it sits on screen. */
 internal data class PipPane(
     val id: Long,
@@ -201,6 +224,18 @@ internal object PipWindowStore {
     /** Windows folded away into the floating bubble, with their last timestamp. */
     private val _minimized = MutableStateFlow<List<PipPane>>(emptyList())
     val minimized: StateFlow<List<PipPane>> = _minimized.asStateFlow()
+
+    /** The television's remote-control sheet (MENU/PIP pill). */
+    private val _remoteMenu = MutableStateFlow(false)
+    val remoteMenu: StateFlow<Boolean> = _remoteMenu.asStateFlow()
+
+    fun openRemoteMenu() {
+        if (_panes.value.isNotEmpty()) _remoteMenu.value = true
+    }
+
+    fun closeRemoteMenu() {
+        _remoteMenu.value = false
+    }
 
     private var nextId = 1L
 
@@ -539,13 +574,6 @@ object PipLauncher {
         val subtitle = extras.getString("histEpisodeName")?.takeIf { it.isNotBlank() }
             ?: intro.name.takeIf { it.isNotBlank() && it != title }
         val startIndex = bestPipSourceIndex(sources)
-        com.hikari.app.data.Logs.log(
-            "PIP",
-            "open '$title' servers=${sources.size} start=$startIndex " +
-                "live=${extras.getString("streamsLiveId")} " +
-                "url=${sources.getOrNull(startIndex)?.url?.take(140)} " +
-                "torrent=${sources.getOrNull(startIndex)?.isTorrent}",
-        )
         val pane = PipPane(
             id = 0L,
             title = title,
@@ -593,7 +621,13 @@ fun PipModeChip(modifier: Modifier = Modifier) {
     val count = panes.size + minimized.size
     val accent = MaterialTheme.colorScheme.primary
     Surface(
-        onClick = { PipModeSettings.toggle(context) },
+        onClick = {
+            if (com.hikari.app.tv.TvMode.isTv && count > 0) {
+                PipWindowStore.openRemoteMenu()
+            } else {
+                PipModeSettings.toggle(context)
+            }
+        },
         shape = RoundedCornerShape(50),
         color = if (enabled) accent.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
         border = androidx.compose.foundation.BorderStroke(
@@ -657,6 +691,7 @@ fun PipModeChip(modifier: Modifier = Modifier) {
 fun PipHost() {
     val panes by PipWindowStore.panes.collectAsState()
     val minimized by PipWindowStore.minimized.collectAsState()
+    val remoteMenu by PipWindowStore.remoteMenu.collectAsState()
     val context = LocalContext.current
     if (panes.isEmpty() && minimized.isEmpty()) return
     var folderOpen by remember { mutableStateOf(false) }
@@ -678,6 +713,19 @@ fun PipHost() {
         val minWidthPx = minOf(with(density) { 150.dp.toPx() }, maxWidthPx)
         val minHeightPx = minOf(with(density) { 100.dp.toPx() }, maxHeightPx)
         val tablet = maxWidth >= 600.dp
+        val tvUi = com.hikari.app.tv.TvMode.isTv
+        // The television's navigation rail is drawn over the left edge; the
+        // old x=8dp placement put the whole PIP underneath it.
+        val railPx = if (tvUi) with(density) { 104.dp.toPx() } else 0f
+        val leftPx = marginPx + railPx
+        val contentWidthPx = (maxWidthPx - leftPx - marginPx).coerceAtLeast(minWidthPx)
+        val tvSingleWidth = minOf(
+            contentWidthPx * 0.52f,
+            with(density) { 500.dp.toPx() },
+        ).coerceIn(minWidthPx, contentWidthPx)
+        val tvSingleHeight = (
+            tvSingleWidth * 9f / 16f + with(density) { 90.dp.toPx() }
+            ).coerceIn(minHeightPx, (maxHeightPx - topPx - marginPx).coerceAtLeast(minHeightPx))
         val maxPanes = if (tablet) 9 else 4
         val bubbleRadiusPx = with(density) { 27.dp.toPx() }
         var folderX by remember {
@@ -695,19 +743,32 @@ fun PipHost() {
             PipWindowStore.trimTo(maxPanes)
             val list = PipWindowStore.panes.value
             if (list.isEmpty()) return@LaunchedEffect
-            val columns = if (tablet) 3 else 2
+            val columns = if (tvUi) 3 else if (tablet) 3 else 2
             val count = list.size
             val grid = count > 1
             val rows = ((count + columns - 1) / columns).coerceAtLeast(1)
-            val largeWidth = (maxWidthPx - marginPx * 2f).coerceIn(minWidthPx, maxWidthPx)
-            val largeHeight = with(density) { 240.dp.toPx() }
-                .coerceIn(minHeightPx, (maxHeightPx - topPx - marginPx).coerceAtLeast(minHeightPx))
+            val largeWidth = if (tvUi) {
+                tvSingleWidth
+            } else {
+                (maxWidthPx - marginPx * 2f).coerceIn(minWidthPx, maxWidthPx)
+            }
+            val largeHeight = if (tvUi) {
+                tvSingleHeight
+            } else {
+                with(density) { 240.dp.toPx() }
+                    .coerceIn(minHeightPx, (maxHeightPx - topPx - marginPx).coerceAtLeast(minHeightPx))
+            }
+            val gridWidth = if (tvUi) contentWidthPx else maxWidthPx - marginPx * 2f
             val cellWidth = (
-                (maxWidthPx - marginPx * 2f - gapPx * (columns - 1)) / columns
+                (gridWidth - gapPx * (columns - 1)) / columns
                 ).coerceIn(minWidthPx, maxWidthPx)
-            val cellHeight = (
-                (maxHeightPx * 0.58f - gapPx * (rows - 1)) / rows
-                ).coerceIn(minHeightPx, with(density) { 220.dp.toPx() }.coerceAtLeast(minHeightPx))
+            val cellHeight = if (tvUi) {
+                (cellWidth * 9f / 16f + with(density) { 90.dp.toPx() })
+                    .coerceIn(minHeightPx, (maxHeightPx - topPx - marginPx).coerceAtLeast(minHeightPx))
+            } else {
+                ((maxHeightPx * 0.58f - gapPx * (rows - 1)) / rows)
+                    .coerceIn(minHeightPx, with(density) { 220.dp.toPx() }.coerceAtLeast(minHeightPx))
+            }
             var slot = 0
             list.forEach { pane ->
                 if (pane.manual) {
@@ -726,7 +787,11 @@ fun PipHost() {
                 if (!grid) {
                     PipWindowStore.setBounds(
                         id = pane.id,
-                        x = if (tablet) marginPx else ((maxWidthPx - largeWidth) / 2f).coerceAtLeast(0f),
+                        x = when {
+                            tvUi -> (maxWidthPx - largeWidth - marginPx * 2f).coerceAtLeast(leftPx)
+                            tablet -> marginPx
+                            else -> ((maxWidthPx - largeWidth) / 2f).coerceAtLeast(0f)
+                        },
                         y = topPx,
                         width = largeWidth,
                         height = largeHeight,
@@ -738,7 +803,7 @@ fun PipHost() {
                     slot++
                     PipWindowStore.setBounds(
                         id = pane.id,
-                        x = marginPx + column * (cellWidth + gapPx),
+                        x = (if (tvUi) leftPx else marginPx) + column * (cellWidth + gapPx),
                         y = topPx + row * (cellHeight + gapPx),
                         width = cellWidth,
                         height = cellHeight,
@@ -831,6 +896,10 @@ fun PipHost() {
             }
         }
 
+        if (remoteMenu) {
+            PipRemoteMenu { PipWindowStore.closeRemoteMenu() }
+        }
+
         if (minimized.isNotEmpty()) {
             Box(
                 Modifier
@@ -840,11 +909,14 @@ fun PipHost() {
                             (folderY - bubbleRadiusPx).roundToInt(),
                         )
                     }
-                    .size(54.dp)
+                    .size(if (tvUi) 62.dp else 54.dp)
                     .clip(CircleShape)
                     .background(Color.Black.copy(alpha = 0.84f))
                     .border(1.dp, Color.White.copy(alpha = 0.28f), CircleShape)
-                    .clickable { folderOpen = !folderOpen }
+                    .then(
+                        if (tvUi) Modifier.tvPress(previewPass = true, onClick = { folderOpen = !folderOpen })
+                        else Modifier.clickable { folderOpen = !folderOpen },
+                    )
                     .pointerInput(maxWidthPx, maxHeightPx) {
                         detectDragGestures { change, drag ->
                             change.consume()
@@ -887,16 +959,236 @@ fun PipHost() {
     }
 }
 
+/**
+ * Television remote sheet for the active floating window. Reached from the
+ * Home PIP pill (its count opens this instead of toggling the mode) and offers
+ * every touch feature without a finger: move by arrows, resize by arrows, lock,
+ * minimize, full player and close.
+ */
+@Composable
+private fun PipRemoteMenu(onDismiss: () -> Unit) {
+    val panes by PipWindowStore.panes.collectAsState()
+    val context = LocalContext.current
+    val pane = panes.lastOrNull() ?: return
+    var mode by remember { mutableStateOf(PipAdjustMode.NONE) }
+    val firstFocus = remember { FocusRequester() }
+    val adjustFocus = remember { FocusRequester() }
+    LaunchedEffect(mode) {
+        // Let the remote's OK that OPENED this sheet go by before a row takes
+        // focus, or that same press would immediately run Move.
+        delay(if (mode == PipAdjustMode.NONE) 450L else 250L)
+        if (mode == PipAdjustMode.NONE) {
+            runCatching { firstFocus.requestFocus() }
+        } else {
+            runCatching { adjustFocus.requestFocus() }
+        }
+    }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnClickOutside = false,
+        ),
+    ) {
+        BoxWithConstraints(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.62f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            val density = LocalDensity.current
+            val step = with(density) { 24.dp.toPx() }
+            val maxW = with(density) { maxWidth.toPx() }
+            val maxH = with(density) { maxHeight.toPx() }
+            val minW = with(density) { 150.dp.toPx() }
+            val minH = with(density) { 100.dp.toPx() }
+
+            fun moveBy(dx: Float, dy: Float) {
+                PipWindowStore.setBounds(
+                    id = pane.id,
+                    x = (pane.x + dx).coerceIn(0f, (maxW - pane.width).coerceAtLeast(0f)),
+                    y = (pane.y + dy).coerceIn(0f, (maxH - pane.height).coerceAtLeast(0f)),
+                    width = pane.width,
+                    height = pane.height,
+                    manual = true,
+                )
+            }
+
+            fun resizeBy(dx: Float, dy: Float) {
+                val w = (pane.width + dx).coerceIn(minW, maxW)
+                val h = (pane.height + dy).coerceIn(minH, maxH)
+                PipWindowStore.setBounds(
+                    id = pane.id,
+                    x = pane.x.coerceIn(0f, (maxW - w).coerceAtLeast(0f)),
+                    y = pane.y.coerceIn(0f, (maxH - h).coerceAtLeast(0f)),
+                    width = w,
+                    height = h,
+                    manual = true,
+                )
+            }
+
+            Column(
+                Modifier
+                    .widthIn(max = 620.dp)
+                    // A full list of seven rows is taller than a 1080p screen;
+                    // keep the card on screen and let the focused row scroll
+                    // itself into view.
+                    .heightIn(max = maxHeight * 0.84f)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(Color(0xF21A1A1A))
+                    .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(24.dp))
+                    .verticalScroll(rememberScrollState())
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    tr("PIP controls"),
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    pane.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = Color.White.copy(alpha = 0.7f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (mode == PipAdjustMode.NONE) {
+                    PipMenuRow(
+                        label = tr("Move window with arrows"),
+                        focus = firstFocus,
+                    ) {
+                        PipWindowStore.setLocked(pane.id, false)
+                        mode = PipAdjustMode.MOVE
+                    }
+                    PipMenuRow(tr("Resize window with arrows")) {
+                        PipWindowStore.setLocked(pane.id, false)
+                        mode = PipAdjustMode.RESIZE
+                    }
+                    PipMenuRow(if (pane.locked) tr("Unlock position") else tr("Lock position")) {
+                        PipWindowStore.setLocked(pane.id, !pane.locked)
+                    }
+                    PipMenuRow(tr("Minimize to folder")) {
+                        PipWindowStore.minimize(pane.id, 0L)
+                        onDismiss()
+                    }
+                    PipMenuRow(tr("Open full player")) {
+                        PipLauncher.expand(context, pane, 0L)
+                        onDismiss()
+                    }
+                    PipMenuRow(tr("Close window")) {
+                        PipWindowStore.remove(pane.id)
+                        onDismiss()
+                    }
+                    PipMenuRow(tr("Turn PIP Mode off")) {
+                        PipModeSettings.setEnabled(context, false)
+                        PipWindowStore.hide()
+                        onDismiss()
+                    }
+                    TextButton(onClick = onDismiss) {
+                        Text(tr("Done"), style = MaterialTheme.typography.titleMedium)
+                    }
+                } else {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(120.dp)
+                            .focusRequester(adjustFocus)
+                            .focusable()
+                            .onPreviewKeyEvent { event ->
+                                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                                when (event.key) {
+                                    Key.DirectionLeft -> {
+                                        if (mode == PipAdjustMode.MOVE) moveBy(-step, 0f)
+                                        else resizeBy(-step, 0f)
+                                        true
+                                    }
+                                    Key.DirectionRight -> {
+                                        if (mode == PipAdjustMode.MOVE) moveBy(step, 0f)
+                                        else resizeBy(step, 0f)
+                                        true
+                                    }
+                                    Key.DirectionUp -> {
+                                        if (mode == PipAdjustMode.MOVE) moveBy(0f, -step)
+                                        else resizeBy(0f, -step)
+                                        true
+                                    }
+                                    Key.DirectionDown -> {
+                                        if (mode == PipAdjustMode.MOVE) moveBy(0f, step)
+                                        else resizeBy(0f, step)
+                                        true
+                                    }
+                                    Key.DirectionCenter, Key.Enter, Key.Back, Key.Escape -> {
+                                        mode = PipAdjustMode.NONE
+                                        true
+                                    }
+                                    else -> false
+                                }
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            if (mode == PipAdjustMode.MOVE) {
+                                tr("Move: arrows · OK to finish")
+                            } else {
+                                tr("Resize: arrows · OK to finish")
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            color = Color.White,
+                            fontWeight = FontWeight.SemiBold,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                    TextButton(onClick = { mode = PipAdjustMode.NONE }) {
+                        Text(tr("Done"), style = MaterialTheme.typography.titleMedium)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PipMenuRow(
+    label: String,
+    focus: FocusRequester? = null,
+    onClick: () -> Unit,
+) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 54.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color.White.copy(alpha = 0.08f))
+            .then(if (focus != null) Modifier.focusRequester(focus) else Modifier)
+            .tvPress(previewPass = true, onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 14.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.titleMedium,
+            color = Color.White,
+            fontWeight = FontWeight.Medium,
+        )
+    }
+}
+
 @Composable
 private fun MinimizedPaneButton(pane: PipPane, onClick: () -> Unit) {
     val image = pane.artwork ?: pane.logo
+    val tv = com.hikari.app.tv.TvMode.isTv
     Box(
         Modifier
-            .size(48.dp)
+            .size(if (tv) 64.dp else 48.dp)
             .clip(CircleShape)
             .background(Color(0xFF2A2A2A))
             .border(1.dp, Color.White.copy(alpha = 0.2f), CircleShape)
-            .clickable(onClick = onClick),
+            .then(
+                if (tv) Modifier.tvPress(previewPass = true, onClick = onClick)
+                else Modifier.clickable(onClick = onClick),
+            ),
         contentAlignment = Alignment.Center,
     ) {
         if (image != null) {
@@ -977,7 +1269,11 @@ private fun PipWindow(
     var volume by remember(pane.id) { mutableFloatStateOf(1f) }
     val locked = pane.locked
     val started = positionMs > 0L || isPlaying
-    val showControls = controlsVisible && !locked
+    val tvInput = com.hikari.app.tv.TvMode.isTv
+    // A television has no tap to bring the top bar back, so its controls stay
+    // composed (and focusable) for the remote; a phone still gets the clean
+    // auto-hiding strip.
+    val showControls = !locked && (controlsVisible || tvInput)
     // The transport row is the one thing that must never vanish under a
     // finger. It stays put while the window is unlocked; only the title bar
     // times out, and a tap brings it back.
@@ -1031,7 +1327,11 @@ private fun PipWindow(
             if (cached != null) {
                 resolvedMime = cached.mime
                 resolvedUrl = cached.url
-            } else if (isDirectMediaUrl(source)) {
+            } else if (isDirectMediaUrl(source) || source.isLive) {
+                // IPTV channels are often bare gateway paths with no file
+                // extension (`/user/pass/12345`) but they are still the live
+                // media URL; walking a wrapper page here only added a 14 s
+                // "Finding stream…" wait before playback.
                 resolvedUrl = source.url
             } else {
                 // A provider link that is not a media file itself (a Plavio /
@@ -1139,9 +1439,22 @@ private fun PipWindow(
 
     val moveByNow by rememberUpdatedState(onMoveBy)
     val resizeByNow by rememberUpdatedState(onResizeBy)
+    var adjustMode by remember(pane.id) { mutableStateOf(PipAdjustMode.NONE) }
+    val adjustStepPx = with(LocalDensity.current) { 24.dp.toPx() }
+    val moveFocus = remember { FocusRequester() }
+    // A television has no tap to "enter" the floating window: when one opens,
+    // put the remote on its Move button so arrows/OK drive the PIP immediately.
+    LaunchedEffect(pane.id, tvInput, adjustMode) {
+        if (tvInput && adjustMode == PipAdjustMode.NONE) {
+            delay(350L)
+            runCatching { moveFocus.requestFocus() }
+        }
+    }
 
+    Box(modifier = modifier) {
     Column(
-        modifier = modifier
+        modifier = Modifier
+            .fillMaxSize()
             .clip(RoundedCornerShape(12.dp))
             .background(Color.Black)
             .border(1.dp, Color.White.copy(alpha = 0.24f), RoundedCornerShape(12.dp))
@@ -1157,7 +1470,9 @@ private fun PipWindow(
         // Fixed strip above the video: when controls time out it stays black,
         // so showing them again never resizes or shifts the video.
         Box(
-            Modifier.fillMaxWidth().height(42.dp).background(Color.Black),
+            Modifier.fillMaxWidth()
+                .height(if (tvInput) 52.dp else 42.dp)
+                .background(Color.Black),
             contentAlignment = Alignment.Center,
         ) {
             if (locked) {
@@ -1193,6 +1508,10 @@ private fun PipWindow(
                     onExpand = { interacted(); onExpand(positionMs) },
                     onClose = onClose,
                     onMinimizeClick = { interacted(); onMinimize(positionMs) },
+                    tv = tvInput,
+                    moveFocus = moveFocus,
+                    onMoveMode = { interacted(); adjustMode = PipAdjustMode.MOVE },
+                    onResizeMode = { interacted(); adjustMode = PipAdjustMode.RESIZE },
                 )
             }
         }
@@ -1387,7 +1706,7 @@ private fun PipWindow(
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(48.dp)
+                .height(if (tvInput) 58.dp else 48.dp)
                 .background(Color.Black)
                 .then(
                     if (locked) {
@@ -1444,6 +1763,72 @@ private fun PipWindow(
             }
         }
     }
+
+    // Remote move/resize mode. A television has no drag, so the two title-bar
+    // buttons above put the window into a bounds mode: arrows nudge it, OK or
+    // Back finishes. The overlay takes focus so the page's own D-pad handling
+    // cannot consume the arrows.
+    if (adjustMode != PipAdjustMode.NONE) {
+        val focus = remember { FocusRequester() }
+        LaunchedEffect(adjustMode) {
+            runCatching { focus.requestFocus() }
+        }
+        Box(
+            Modifier
+                .fillMaxSize()
+                .focusRequester(focus)
+                .focusable()
+                .onPreviewKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    when (event.key) {
+                        Key.DirectionLeft -> {
+                            if (adjustMode == PipAdjustMode.MOVE) moveByNow(-adjustStepPx, 0f)
+                            else resizeByNow(-adjustStepPx, 0f)
+                            true
+                        }
+                        Key.DirectionRight -> {
+                            if (adjustMode == PipAdjustMode.MOVE) moveByNow(adjustStepPx, 0f)
+                            else resizeByNow(adjustStepPx, 0f)
+                            true
+                        }
+                        Key.DirectionUp -> {
+                            if (adjustMode == PipAdjustMode.MOVE) moveByNow(0f, -adjustStepPx)
+                            else resizeByNow(0f, -adjustStepPx)
+                            true
+                        }
+                        Key.DirectionDown -> {
+                            if (adjustMode == PipAdjustMode.MOVE) moveByNow(0f, adjustStepPx)
+                            else resizeByNow(0f, adjustStepPx)
+                            true
+                        }
+                        Key.DirectionCenter, Key.Enter, Key.Back, Key.Escape -> {
+                            adjustMode = PipAdjustMode.NONE
+                            true
+                        }
+                        else -> false
+                    }
+                }
+                .background(Color.Black.copy(alpha = 0.55f)),
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            Text(
+                if (adjustMode == PipAdjustMode.MOVE) {
+                    tr("Move: arrows · OK to finish")
+                } else {
+                    tr("Resize: arrows · OK to finish")
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = Color.White,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .padding(8.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.Black.copy(alpha = 0.82f))
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+            )
+        }
+    }
+    }
 }
 
 /** Builds the ExoPlayer used inside one PIP window. */
@@ -1494,7 +1879,28 @@ private fun buildPipPlayer(
     }
     val mediaSourceFactory = DefaultMediaSourceFactory(playbackSource)
         .setLoadErrorHandlingPolicy(RetryFriendlyLoadErrorPolicy())
+    val lowTv = isLowMemoryTv(context)
+    val trackSelector = DefaultTrackSelector(context).apply {
+        if (lowTv) {
+            setParameters(
+                buildUponParameters()
+                    .setMaxVideoSize(1920, 1080)
+                    .setMaxVideoBitrate(8_000_000),
+            )
+        }
+    }
     val player = ExoPlayer.Builder(context)
+        // The full player's decoder stack: nextlib registers FFmpeg software
+        // decoders for the audio/video tracks this TV's MediaCodec cannot
+        // handle (E-AC-3, some HEVC profiles), and decoder fallback turns a
+        // choking hardware codec into a software one instead of the "use the
+        // full player" error. The bare builder here was why many channels
+        // showed that message in PIP.
+        .setRenderersFactory(
+            NextRenderersFactory(context).setEnableDecoderFallback(true),
+        )
+        .setTrackSelector(trackSelector)
+        .setLoadControl(pipLoadControl(lowTv = lowTv, live = source.isLive))
         .setMediaSourceFactory(mediaSourceFactory)
         .setAudioAttributes(
             AudioAttributes.Builder()
@@ -1527,6 +1933,45 @@ private fun buildPipPlayer(
 private fun isPipLoopback(url: String): Boolean =
     runCatching { java.net.URI(url).host?.lowercase() }.getOrNull()
         ?.let { it == "localhost" || it == "127.0.0.1" || it == "::1" || it == "[::1]" } == true
+
+/** 2 GB television boxes (the onn 4K class) cannot decode 4K and hold a deep
+ *  buffer at once. Cap them at the panel's 1080p and a sane bitrate instead of
+ *  dropping frames while the network fills a bank they will never watch. */
+private fun isLowMemoryTv(context: Context): Boolean {
+    if (!com.hikari.app.tv.TvMode.isTv) return false
+    val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return true
+    val info = ActivityManager.MemoryInfo()
+    runCatching { am.getMemoryInfo(info) }
+    return info.totalMem in 1L..(3L * 1024 * 1024 * 1024)
+}
+
+/** PiP's own buffer policy: enough to ride a CDN dip, far short of the full
+ *  player's three-minute VOD bank. A television has one decoder budget shared
+ *  by every floating window, so this is deliberately leaner than the phone
+ *  path as well. */
+private fun pipLoadControl(lowTv: Boolean, live: Boolean): DefaultLoadControl {
+    val minMs = when {
+        live && lowTv -> 10_000
+        live -> 15_000
+        lowTv -> 15_000
+        else -> 20_000
+    }
+    val maxMs = when {
+        live && lowTv -> 30_000
+        live -> 45_000
+        lowTv -> 60_000
+        else -> 90_000
+    }
+    val startMs = if (live) 2_000 else if (lowTv) 1_500 else 1_000
+    val rebufferMs = if (lowTv) 4_000 else 3_000
+    return DefaultLoadControl.Builder()
+        .setBufferDurationsMs(minMs, maxMs, startMs, rebufferMs)
+        .setPrioritizeTimeOverSizeThresholds(true)
+        .setTargetBufferBytes(
+            if (lowTv) 24 * 1024 * 1024 else 40 * 1024 * 1024,
+        )
+        .build()
+}
 
 private fun pipLoopbackHeaders(proxyUrl: String): Map<String, String> {
     val query = runCatching { java.net.URI(proxyUrl).query }.getOrNull().orEmpty()
@@ -1612,6 +2057,10 @@ private fun PipTopBar(
     onExpand: () -> Unit,
     onClose: () -> Unit,
     onMinimizeClick: () -> Unit,
+    tv: Boolean = false,
+    moveFocus: FocusRequester? = null,
+    onMoveMode: () -> Unit = {},
+    onResizeMode: () -> Unit = {},
 ) {
     val moveByNow by rememberUpdatedState(onMoveBy)
     val touchNow by rememberUpdatedState(onTouch)
@@ -1680,6 +2129,18 @@ private fun PipTopBar(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+            }
+        }
+        if (tv) {
+            PipButton(
+                Icons.Filled.OpenWith,
+                tr("Move window with arrows"),
+                modifier = if (moveFocus != null) Modifier.focusRequester(moveFocus) else Modifier,
+            ) {
+                onTouch(); onMoveMode()
+            }
+            PipButton(Icons.Filled.AspectRatio, tr("Resize window with arrows")) {
+                onTouch(); onResizeMode()
             }
         }
         PipButton(Icons.Rounded.LockOpen, tr("Lock position")) {
@@ -1842,20 +2303,25 @@ private fun PipBottomBar(
 private fun PipButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     description: String,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
+    val tv = com.hikari.app.tv.TvMode.isTv
     Box(
-        Modifier
-            .size(34.dp)
+        modifier
+            .size(if (tv) 42.dp else 34.dp)
             .clip(CircleShape)
-            .clickable(onClick = onClick),
+            .then(
+                if (tv) Modifier.tvPress(previewPass = true, onClick = onClick)
+                else Modifier.clickable(onClick = onClick),
+            ),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
             icon,
             contentDescription = description,
             tint = Color.White.copy(alpha = 0.92f),
-            modifier = Modifier.size(17.dp),
+            modifier = Modifier.size(if (tv) 20.dp else 17.dp),
         )
     }
 }

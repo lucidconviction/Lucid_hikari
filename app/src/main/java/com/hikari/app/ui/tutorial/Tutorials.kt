@@ -2,6 +2,8 @@ package com.hikari.app.ui.tutorial
 
 import android.content.Context
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,8 +11,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -31,6 +35,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -38,6 +44,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.hikari.app.tv.TvMode
 import com.hikari.app.ui.navigation.Routes
 import kotlinx.coroutines.delay
 
@@ -359,24 +366,86 @@ fun FirstVisitTutorial(route: String?) {
     }
 }
 
+/**
+ * The one open tour, for the Activity's key dispatcher.
+ *
+ * A Compose Dialog on a television can open without its window taking focus
+ * (the page behind keeps it), which left the first-run tour impossible to
+ * dismiss with a remote: Skip never focused, and Back went to the page. The
+ * Activity asks this before its normal key handling, so Back always closes the
+ * tour even in that state.
+ */
+object TutorialDismiss {
+    @Volatile
+    private var current: (() -> Unit)? = null
+    @Volatile
+    private var closedAt = 0L
+
+    fun register(dismiss: () -> Unit) {
+        current = dismiss
+    }
+
+    fun unregister() {
+        current = null
+        closedAt = android.os.SystemClock.uptimeMillis()
+    }
+
+    fun close(): Boolean {
+        val dismiss = current ?: return false
+        current = null
+        closedAt = android.os.SystemClock.uptimeMillis()
+        runCatching { dismiss() }
+        return true
+    }
+
+    /** True while a tour is open, and for a moment after it closes: the same
+     *  Back that dismissed the dialog must not also exit the page behind it. */
+    fun shouldSwallowBack(): Boolean =
+        current != null ||
+            android.os.SystemClock.uptimeMillis() - closedAt < 1_200L
+}
+
 /** The tour card itself, also used by the replay buttons in Settings. */
 @Composable
 fun TutorialDialog(tutorial: Tutorial, onDismiss: () -> Unit) {
     var page by remember(tutorial.id) { mutableIntStateOf(0) }
     val current = tutorial.pages.getOrNull(page) ?: tutorial.pages.first()
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        TutorialDismiss.register(onDismiss)
+        onDispose { TutorialDismiss.unregister() }
+    }
+    val tv = TvMode.current()
+    val firstFocus = remember { FocusRequester() }
+    LaunchedEffect(tv, tutorial.id) {
+        if (tv) {
+            // The Dialog window attaches a frame after the composition; asking
+            // before that left Skip unfocused and the tour un-closable.
+            delay(450L)
+            runCatching { firstFocus.requestFocus() }
+        }
+    }
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
         Surface(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp),
+                // The phone card stretched the full 1080p width and pushed its
+                // buttons off a television; a 10-foot card is a centred column,
+                // not a banner.
+                .fillMaxWidth(if (tv) 0.66f else 1f)
+                .widthIn(max = if (tv) 980.dp else 1200.dp)
+                .padding(horizontal = if (tv) 0.dp else 20.dp),
             shape = RoundedCornerShape(26.dp),
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 6.dp,
         ) {
-            Column(Modifier.padding(22.dp)) {
+            Column(
+                Modifier
+                    .heightIn(max = if (tv) 760.dp else 2000.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(if (tv) 34.dp else 22.dp),
+            ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         Modifier
@@ -411,19 +480,29 @@ fun TutorialDialog(tutorial: Tutorial, onDismiss: () -> Unit) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    TextButton(onClick = onDismiss) { Text("Skip") }
+                    TextButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .then(if (tv) Modifier.focusRequester(firstFocus) else Modifier)
+                            .heightIn(min = if (tv) 52.dp else 0.dp),
+                    ) {
+                        Text("Skip", style = if (tv) MaterialTheme.typography.titleMedium
+                        else MaterialTheme.typography.labelLarge)
+                    }
                 }
-                Spacer(Modifier.height(18.dp))
+                Spacer(Modifier.height(if (tv) 26.dp else 18.dp))
                 Text(
                     current.title,
-                    style = MaterialTheme.typography.titleLarge,
+                    style = if (tv) MaterialTheme.typography.headlineSmall
+                    else MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Start,
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
                     current.body,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = if (tv) MaterialTheme.typography.bodyLarge
+                    else MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(20.dp))
@@ -448,13 +527,24 @@ fun TutorialDialog(tutorial: Tutorial, onDismiss: () -> Unit) {
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     if (page > 0) {
-                        TextButton(onClick = { page-- }) { Text("Back") }
+                        TextButton(
+                            onClick = { page-- },
+                            modifier = Modifier.heightIn(min = if (tv) 52.dp else 0.dp),
+                        ) { Text("Back") }
                     }
                     Spacer(Modifier.weight(1f))
                     if (page < tutorial.pages.lastIndex) {
-                        Button(onClick = { page++ }) { Text("Next") }
+                        Button(
+                            onClick = { page++ },
+                            modifier = Modifier.heightIn(min = if (tv) 54.dp else 0.dp),
+                        ) { Text("Next", style = if (tv) MaterialTheme.typography.titleMedium
+                        else MaterialTheme.typography.labelLarge) }
                     } else {
-                        Button(onClick = onDismiss) { Text("Got it") }
+                        Button(
+                            onClick = onDismiss,
+                            modifier = Modifier.heightIn(min = if (tv) 54.dp else 0.dp),
+                        ) { Text("Got it", style = if (tv) MaterialTheme.typography.titleMedium
+                        else MaterialTheme.typography.labelLarge) }
                     }
                 }
             }

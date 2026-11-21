@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mouse
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -43,6 +44,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -53,6 +55,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -83,6 +86,65 @@ import com.hikari.app.i18n.tr
  * profile pill (avatar + name, opens the profile menu). Row is right-aligned
  * so it hugs the screen's top-right corner above the feed.
  */
+/**
+ * The TV copy of the Home PIP switch. The phone layout puts it beside the
+ * provider chip; the television header is the same idea, so the mode is
+ * reachable with the remote before any title is opened.
+ */
+@Composable
+fun TvPipPill(modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val enabled by com.hikari.app.player.PipModeSettings.enabled.collectAsState()
+    val panes by com.hikari.app.player.PipWindowStore.panes.collectAsState()
+    val accent = MaterialTheme.colorScheme.primary
+    val toggle = {
+        if (panes.isNotEmpty()) {
+            com.hikari.app.player.PipWindowStore.openRemoteMenu()
+        } else {
+            com.hikari.app.player.PipModeSettings.toggle(context)
+        }
+    }
+    Surface(
+        onClick = toggle,
+        shape = RoundedCornerShape(50),
+        color = if (enabled) accent.copy(alpha = 0.18f) else TvDesktop.SurfaceCard,
+        modifier = modifier
+            .tvPress(previewPass = true, onClick = toggle)
+            .border(
+                if (enabled) 1.5.dp else 1.dp,
+                if (enabled) accent.copy(alpha = 0.75f) else TvDesktop.GlassEdge,
+                RoundedCornerShape(50),
+            ),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 16.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Filled.PictureInPictureAlt,
+                contentDescription = tr("PIP Mode/Ch Preview"),
+                tint = if (enabled) accent else TvDesktop.TextMuted,
+                modifier = Modifier.size(22.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                tr("PIP Mode"),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = if (enabled) accent else TvDesktop.TextPrimary,
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                if (panes.isNotEmpty()) panes.size.toString()
+                else if (enabled) tr("On") else tr("Off"),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = if (enabled) accent else TvDesktop.TextMuted,
+            )
+        }
+    }
+}
+
 @Composable
 fun TvHomeTopBar(
     providerName: String?,
@@ -99,6 +161,10 @@ fun TvHomeTopBar(
         horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // PIP sits directly left of the provider/addon selector, mirroring the
+        // phone header's "beside the addon chip" placement.
+        TvPipPill()
+        Spacer(Modifier.width(10.dp))
         TvProviderPill(
             name = providerName,
             iconUrl = providerIconUrl,
@@ -289,6 +355,8 @@ fun TvHomeHeaderBar(
                 )
             }
         }
+        TvPipPill()
+        Spacer(Modifier.width(10.dp))
         TvProviderPill(
             name = providerName,
             iconUrl = providerIconUrl,

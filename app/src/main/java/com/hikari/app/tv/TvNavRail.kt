@@ -207,11 +207,12 @@ fun TvNavRail(
             Text(
                 "HIKARI",
                 style = MaterialTheme.typography.labelMedium,
+                fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
-                letterSpacing = 1.sp,
+                letterSpacing = 0.6.sp,
                 maxLines = 1,
                 color = primary,
-                modifier = Modifier.padding(start = 20.dp),
+                modifier = Modifier.padding(start = 14.dp),
             )
             Spacer(Modifier.height(14.dp))
             LazyColumn(

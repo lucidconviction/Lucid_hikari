@@ -2133,6 +2133,7 @@ internal fun playIptvChannel(context: Context, channel: IptvChannel) {
             .put("headers", headers)
             .put("isM3u8", isM3u8)
             .put("isMpd", isMpd)
+            .put("isLive", true)
             .put("provider", "IPTV")
             .put("providerId", channel.providerId)
             .put("providerName", "")

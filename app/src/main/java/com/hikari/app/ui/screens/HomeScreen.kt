@@ -4391,7 +4391,9 @@ private fun StreamingServicesRow(
     onOpen: (com.hikari.app.data.StreamingPlatforms.Platform) -> Unit,
 ) {
     val tv = TvMode.current()
-    val tile = if (tv) 96.dp else 72.dp
+    // A 10-foot rail: the service marks have to read from the sofa, so a TV
+    // tile is a third larger than the phone one and carries its name below it.
+    val tile = if (tv) 132.dp else 72.dp
     // VyseTV's full featured set (36 services), starting from the offline
     // names so the row is populated on the first frame; the catalogue then
     // replaces them with TMDB's names and artwork.
@@ -4406,39 +4408,51 @@ private fun StreamingServicesRow(
         HikariSectionHeader(
             title = tr("Streaming services"),
             subtitle = tr("What is on each service"),
+            modifier = if (tv) Modifier.padding(horizontal = 12.dp) else Modifier,
         )
         LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 2.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(
+                horizontal = if (tv) 28.dp else 16.dp,
+                vertical = if (tv) 6.dp else 2.dp,
+            ),
+            horizontalArrangement = Arrangement.spacedBy(if (tv) 18.dp else 12.dp),
         ) {
             items(platforms, key = { it.id }) { platform ->
                 // TMDB's own provider logo is the service's real brand mark;
                 // the initial underneath is the fallback, so a tile is never
                 // an empty square.
                 val iconModel = platform.logoPath?.let { "https://image.tmdb.org/t/p/w185" + it }
+                val open = { onOpen(platform) }
                 Column(
                     Modifier
-                        .width(tile + 20.dp)
+                        .width(tile + if (tv) 34.dp else 20.dp)
                         .clip(RoundedCornerShape(16.dp))
-                        .clickable { onOpen(platform) }
-                        .padding(vertical = 4.dp),
+                        // A remote cannot tap: the tile must be focusable and
+                        // answered by OK, or the whole streaming row is dead
+                        // on a television.
+                        .then(
+                            if (tv) Modifier.tvPress(previewPass = true, onClick = open)
+                            else Modifier.clickable(onClick = open),
+                        )
+                        .padding(vertical = if (tv) 6.dp else 4.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Box(
                         Modifier
                             .size(tile)
-                            .clip(RoundedCornerShape(18.dp))
+                            .clip(RoundedCornerShape(if (tv) 24.dp else 18.dp))
                             .background(MaterialTheme.colorScheme.surfaceVariant)
                             .border(
-                                1.dp,
-                                MaterialTheme.colorScheme.outline.copy(alpha = 0.18f),
-                                RoundedCornerShape(18.dp),
+                                if (tv) 2.dp else 1.dp,
+                                MaterialTheme.colorScheme.outline.copy(alpha = if (tv) 0.28f else 0.18f),
+                                RoundedCornerShape(if (tv) 24.dp else 18.dp),
                             ),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
                             platform.name.take(1).uppercase(),
-                            style = MaterialTheme.typography.headlineMedium,
+                            style = if (tv) MaterialTheme.typography.displaySmall
+                            else MaterialTheme.typography.headlineMedium,
                             color = MaterialTheme.colorScheme.primary,
                         )
                         if (iconModel != null) {
@@ -4448,9 +4462,19 @@ private fun StreamingServicesRow(
                                 contentScale = ContentScale.Fit,
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .padding(if (tv) 12.dp else 9.dp),
+                                    .padding(if (tv) 18.dp else 9.dp),
                             )
                         }
+                    }
+                    if (tv) {
+                        Text(
+                            platform.name,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 8.dp, start = 2.dp, end = 2.dp),
+                        )
                     }
                 }
             }

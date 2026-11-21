@@ -281,7 +281,10 @@ object TvUi {
         val scalePct by (app?.store?.tvPosterScaleFlow()
             ?: kotlinx.coroutines.flow.flowOf(100)).collectAsState(initial = 100)
         val scale = (scalePct.coerceIn(70, 150)) / 100f
-        return (h * 0.15f * scale).coerceIn(40f, 150f).dp
+        // 10-foot baseline: ~130dp on a 1080p panel, five columns of posters
+        // across the content area. The old 0.15 factor produced ~81dp cells
+        // and nine unreadable thumbnails per row.
+        return (h * 0.24f * scale).coerceIn(72f, 190f).dp
     }
 
     /** [gridMin], but sized from the screen rather than a constant — see

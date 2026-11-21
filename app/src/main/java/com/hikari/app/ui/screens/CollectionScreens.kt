@@ -2,6 +2,7 @@ package com.hikari.app.ui.screens
 
 import com.hikari.app.ui.components.LocalHideHelp
 import com.hikari.app.tv.TvUi
+import com.hikari.app.tv.tvPress
 import com.hikari.app.i18n.tr
 import com.hikari.app.i18n.I18n
 
@@ -4875,6 +4876,7 @@ fun TmdbGridScreen(
     val preset = remember(presetKey) { TmdbPresets.byKey(presetKey) }
     val name = title.ifBlank { spec?.let { TmdbSources.fallbackName(it) } ?: preset?.name ?: presetKey }
     val style = rememberPosterStyle()
+    val tv = com.hikari.app.tv.TvMode.current()
     // The adult-content switch filters this grid too (see [NsfwGate]): a catalog
     // page is a grid of items, and it would otherwise be the one screen where a
     // hidden title survived.
@@ -4977,10 +4979,17 @@ fun TmdbGridScreen(
             value = filterText,
             onValueChange = { filterText = it },
             placeholder = tr("Search this catalog"),
-            height = 46.dp,
+            // A 10-foot page needs a field a viewer can actually see and land
+            // on with a remote; the phone-sized 46dp pill read as a hairline
+            // from the sofa.
+            height = if (tv) 62.dp else 46.dp,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
+                .padding(
+                    start = if (tv) 30.dp else 12.dp,
+                    end = if (tv) 30.dp else 12.dp,
+                    bottom = if (tv) 14.dp else 8.dp,
+                ),
         )
         // All · Movies · Series · Anime · Movies & series — the same split the
         // Search tab's kind chips offer, applied to what this page has already
@@ -4990,16 +4999,27 @@ fun TmdbGridScreen(
             Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
-                .padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                .padding(
+                    start = if (tv) 30.dp else 12.dp,
+                    end = if (tv) 30.dp else 12.dp,
+                    bottom = if (tv) 14.dp else 8.dp,
+                ),
+            horizontalArrangement = Arrangement.spacedBy(if (tv) 12.dp else 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             for ((key, label) in KIND_CHIPS) {
                 FilterChip(
                     selected = kindKey == key,
                     onClick = { kindKey = key },
-                    label = { Text(tr(label)) },
+                    label = {
+                        Text(
+                            tr(label),
+                            style = if (tv) MaterialTheme.typography.labelLarge
+                            else MaterialTheme.typography.labelMedium,
+                        )
+                    },
                     shape = RoundedCornerShape(24.dp),
+                    modifier = if (tv) Modifier.height(44.dp) else Modifier,
                     colors = FilterChipDefaults.filterChipColors(
                         containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
                         selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
@@ -5011,7 +5031,8 @@ fun TmdbGridScreen(
             if (shown.isNotEmpty()) {
                 Text(
                     tr("%s shown").replace("%s", shown.size.toString()),
-                    style = MaterialTheme.typography.labelSmall,
+                    style = if (tv) MaterialTheme.typography.labelLarge
+                    else MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -5053,8 +5074,14 @@ fun TmdbGridScreen(
                 )
             }
         } else {
+            // 10-foot wall: four 16:9 cinema cards across a 1080p television
+            // (about 210dp each) or five portrait posters. The old adaptive
+            // 84dp minimum packed nine tiny thumbnails into one row, which is
+            // unreadable from a sofa.
+            val tvColumns = if (style.isCinema(true)) 4 else 5
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = TvUi.gridMinFor(84)),
+                columns = if (tv) GridCells.Fixed(tvColumns)
+                else GridCells.Adaptive(minSize = TvUi.gridMinFor(84)),
                 state = gridState,
                 modifier = Modifier
                     .fillMaxSize()
@@ -5084,9 +5111,13 @@ fun TmdbGridScreen(
                             onDragCancel = { total = 0f },
                         ) { _, amount -> total += amount }
                     },
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = if (tv) {
+                    PaddingValues(horizontal = 28.dp, vertical = 18.dp)
+                } else {
+                    PaddingValues(horizontal = 10.dp, vertical = 10.dp)
+                },
+                horizontalArrangement = Arrangement.spacedBy(if (tv) 20.dp else 8.dp),
+                verticalArrangement = Arrangement.spacedBy(if (tv) 24.dp else 12.dp),
             ) {
                 items(shown, key = { it.uniqueId }) { item ->
                     TmdbGridCard(item, style) {
@@ -5124,14 +5155,18 @@ fun TmdbGridScreen(
 @Composable
 private fun TmdbGridCard(item: MediaItem, style: PosterStyle, onClick: () -> Unit) {
     val badge = rememberPosterScore(item, style)
-    val cinema = style.isCinema(com.hikari.app.tv.TvMode.current())
+    val onTv = com.hikari.app.tv.TvMode.current()
+    val cinema = style.isCinema(onTv)
     val hero = if (cinema) Artwork.heroModel(item) else null
     Column(
         Modifier
             // Not clipped to the poster rounding: at high corner values the
             // curve cut into the title's first and last letters. The artwork
             // rounds itself.
-            .clickable(onClick = onClick)
+            .then(
+                if (onTv) Modifier.tvPress(previewPass = true, onClick = onClick)
+                else Modifier.clickable(onClick = onClick),
+            )
     ) {
         PosterArt(
             model = if (cinema) hero?.first else Artwork.model(item),
@@ -5151,13 +5186,19 @@ private fun TmdbGridCard(item: MediaItem, style: PosterStyle, onClick: () -> Uni
                 .aspectRatio(if (cinema) 16f / 9f else 2f / 3f),
         )
         if (style.showTitles) {
+            val onTv = com.hikari.app.tv.TvMode.current()
             Text(
                 item.title,
-                style = MaterialTheme.typography.bodySmall,
+                style = if (onTv) MaterialTheme.typography.titleSmall
+                else MaterialTheme.typography.bodySmall,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(top = 6.dp, start = 2.dp, end = 2.dp),
+                modifier = Modifier.padding(
+                    top = if (onTv) 10.dp else 6.dp,
+                    start = 2.dp,
+                    end = 2.dp,
+                ),
             )
         }
     }

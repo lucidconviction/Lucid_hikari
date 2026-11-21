@@ -11,6 +11,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import com.hikari.app.tv.TvMode
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Density
 
@@ -175,16 +176,21 @@ fun HikariTheme(
     // density untouched (the previous behaviour).
     val base = LocalDensity.current
     val context = LocalContext.current
-    val density = remember(base, context, uiScaleEnabled, uiScale) {
+    // 10-foot reading distance: the television keeps the same dp layout but
+    // every sp is 15% larger, which is the one global lift that reaches pages
+    // that have not grown a TV-specific type scale yet.
+    val tvText = if (TvMode.isTv) 1.15f else 1f
+    val density = remember(base, context, uiScaleEnabled, uiScale, tvText) {
         if (!uiScaleEnabled) {
-            base
+            if (tvText == 1f) base
+            else Density(density = base.density, fontScale = base.fontScale * tvText)
         } else {
             val stable = runCatching { DisplayMetrics.DENSITY_DEVICE_STABLE / 160f }
                 .getOrDefault(0f)
             val unit = if (stable > 0f) stable else base.density
             Density(
                 density = unit * uiScale.coerceIn(0.7f, 1.3f),
-                fontScale = 1f,
+                fontScale = tvText,
             )
         }
     }

@@ -1,3 +1,17 @@
+## 0.15.8
+
+**21 November 2026**
+
+### A 10-foot television layout, and PIP the remote can drive
+
+- **The whole TV layout reads from the sofa.** TV text is 15% larger app-wide, poster grids use ~130dp cells instead of ~81dp (five columns instead of nine), and the side rail no longer clips its wordmark.
+- **Streaming services are shelves, not thumbnails.** Home's service rail uses 132dp brand tiles with names underneath, and each service page shows four large 16:9 cards per row with readable titles, a taller search field and remote-sized filter chips.
+- **The tour cards fit a TV, and can always be closed.** First-visit tours are a centred 66%-wide card with larger type, a scrollable body and Skip/Next where the remote can reach them, rather than a full-width banner whose buttons sat off-screen. Back dismisses the tour (and is consumed) even when the TV dialog did not take focus, so it cannot strand the page.
+- **PIP is fully remote-controllable.** The Home PIP pill shows the number of open windows and opens a large **PIP controls** sheet: Move with arrows, Resize with arrows, Lock, Minimize to folder, Open full player, Close or Turn PIP off. The floating window's own top bar has Move/Resize/Lock/Minimize/Fullscreen/Close buttons wired to the TV focus ring, and the window opens on the right of the rail instead of underneath it.
+- **A lighter TV pipeline.** 2 GB TV boxes are capped at 1080p/8 Mbps and get a shorter VOD/live buffer (15/12 s minimum, 60/30 s ceiling) instead of the phone's three-minute bank, which removes the constant refill/decoder stutter.
+- **PIP playback uses the full player's decoder stack.** Nextlib's FFmpeg fallback, decoder fallback, the shared retry policy, CS3 playback client/interceptor, hotlink referrers and wrapper-link resolution are all used in the floating window; IPTV gateway paths skip the wrapper walk. That is what removes the "use the full player" message for the formats the television can decode.
+- **No fullscreen loading cover behind a PIP**, and a stream that accepts the connection but never sends a frame now fails over to the next server after a realistic buffer window.
+
 ## 0.15.7
 
 **21 November 2026**

@@ -502,6 +502,17 @@ class MainActivity : AppCompatActivity() {
      * consumed or altered: the event goes on to the rest of the app unchanged.
      */
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        // A tour's Dialog can open without taking focus on a television; Back
+        // must still dismiss it instead of leaving the page. Handle the pair
+        // here, before the page sees either half of the press.
+        if (event.keyCode == android.view.KeyEvent.KEYCODE_BACK &&
+            com.hikari.app.ui.tutorial.TutorialDismiss.shouldSwallowBack()
+        ) {
+            if (event.action == android.view.KeyEvent.ACTION_DOWN) {
+                com.hikari.app.ui.tutorial.TutorialDismiss.close()
+            }
+            return true
+        }
         com.hikari.app.tv.TvInput.noteKey(event)
         return super.dispatchKeyEvent(event)
     }

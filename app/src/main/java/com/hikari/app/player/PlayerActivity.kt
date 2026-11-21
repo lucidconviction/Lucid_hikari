@@ -14781,23 +14781,29 @@ class PlayerActivity : ComponentActivity() {
      * The TD policy keeps the 1 s start but resumes on a 4 s cushion inside a
      * 60 s bank, so one dip costs one pause instead of ten.
      */
-    private fun buildLoadControl(isTd: Boolean = false, isLive: Boolean = false): DefaultLoadControl =
-        DefaultLoadControl.Builder()
+    private fun buildLoadControl(isTd: Boolean = false, isLive: Boolean = false): DefaultLoadControl {
+        // Television, and especially a 2 GB stick, cannot afford the phone's
+        // three-minute VOD bank: filling it keeps every socket busy competing
+        // with the segment being watched, and the byte/time ceilings plus the
+        // decoder ceiling are what made the picture stutter. Keep a useful
+        // cushion, not a cinema-sized one.
+        val tv = TvMode.isTv
+        return DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 when {
                     isTd -> 60_000                         // minBufferMs — MTProto-tuned bank
-                    isLive -> 20_000                       // minBufferMs — IPTV live: enough to ride a dip, not a minute of latency
-                    else -> 30_000                         // minBufferMs — default VOD bank
+                    isLive -> if (tv) 12_000 else 20_000   // IPTV live: ride a dip, not a minute of latency
+                    else -> if (tv) 15_000 else 30_000     // VOD bank
                 },
                 when {
                     isTd -> 180_000                        // maxBufferMs — MTProto ceiling
-                    isLive -> 60_000                       // maxBufferMs — IPTV live ceiling
-                    else -> 180_000                        // maxBufferMs — VOD: bank three minutes
+                    isLive -> if (tv) 30_000 else 60_000   // IPTV live ceiling
+                    else -> if (tv) 60_000 else 180_000    // VOD ceiling
                 },
                 when {
                     isTd -> 1_000                          // bufferForPlaybackMs — MTProto
-                    isLive -> 1_500                        // bufferForPlaybackMs — IPTV: start after ~1.5 s, not 2.5
-                    else -> 500                            // bufferForPlaybackMs — VOD: first frame sooner
+                    isLive -> if (tv) 2_000 else 1_500     // IPTV: first frame soon
+                    else -> if (tv) 1_000 else 500         // VOD: first frame sooner
                 },
                 when {
                     isTd -> 4_000                          // bufferForPlaybackAfterRebufferMs — MTProto
@@ -14808,19 +14814,34 @@ class PlayerActivity : ComponentActivity() {
             // Hold the bank for a short back-buffer too: a seek backwards or a
             // quick resume after the next-episode hand-off should not hit the
             // network again. Time wins over the byte ceiling so the configured
-            // minutes are actually used on a slow link.
-            .setBackBuffer(30_000, true)
+            // seconds are actually used on a slow link.
+            .setBackBuffer(if (tv) 15_000 else 30_000, true)
             .setPrioritizeTimeOverSizeThresholds(true)
             .setTargetBufferBytes(
-                // The time ceilings above already cap what a fast link can bank;
-                // this byte ceiling keeps that bank from becoming hundreds of
-                // megabytes of Java heap on a mid-range phone. Large heaps still
-                // get a useful 64 MB runway, small ones are left alone.
-                (Runtime.getRuntime().maxMemory() / 8)
-                    .coerceIn(24L * 1024 * 1024, 64L * 1024 * 1024)
-                    .toInt()
+                if (tv) {
+                    24 * 1024 * 1024
+                } else {
+                    // The time ceilings above already cap what a fast link can
+                    // bank; this byte ceiling keeps that bank from becoming
+                    // hundreds of megabytes of Java heap on a mid-range phone.
+                    (Runtime.getRuntime().maxMemory() / 8)
+                        .coerceIn(24L * 1024 * 1024, 64L * 1024 * 1024)
+                        .toInt()
+                },
             )
             .build()
+    }
+
+    /** 2 GB television boxes: the panel is 1080p-capable but the decoder and
+     *  heap are not a 4K budget. Used by the track cap below. */
+    private fun tvHasTinyMemory(): Boolean {
+        if (!TvMode.isTv) return false
+        val am = getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
+            ?: return true
+        val info = android.app.ActivityManager.MemoryInfo()
+        runCatching { am.getMemoryInfo(info) }
+        return info.totalMem in 1L..(3L * 1024 * 1024 * 1024)
+    }
 
     /** Small buffer for the corner preview: enough to start smoothly, not
      *  another deep VOD bank next to the one already playing. */
@@ -15405,9 +15426,17 @@ class PlayerActivity : ComponentActivity() {
         // with software fallback armed (see the renderers factory above), so
         // every codec the device or FFmpeg can handle plays without a lag
         // penalty and nothing is ever stepped down for being heavy.
+        // No ceiling on a phone: it can show what the manifest offers. A small
+        // television box cannot — 4K decode is where the dropped-frame stutter
+        // and the decoder OOM came from — so cap it at the panel's 1080p and a
+        // comfortable bitrate, and let adaptive switching stay on.
+        val tinyTv = tvHasTinyMemory()
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
-            .setMaxVideoSize(Int.MAX_VALUE, Int.MAX_VALUE)
-            .setMaxVideoBitrate(Int.MAX_VALUE)
+            .setMaxVideoSize(
+                if (tinyTv) 1920 else Int.MAX_VALUE,
+                if (tinyTv) 1080 else Int.MAX_VALUE,
+            )
+            .setMaxVideoBitrate(if (tinyTv) 8_000_000 else Int.MAX_VALUE)
             .build()
         player.addListener(listener)
         playerView?.player = player

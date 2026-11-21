@@ -4221,6 +4221,7 @@ private fun channelPlayerIntent(
             .put("url", channel.url)
             .put("isM3u8", isM3u8)
             .put("isMpd", isMpd)
+            .put("isLive", true)
             .put("provider", "IPTV")
             .put("providerId", providerId)
             .put("providerName", "")
