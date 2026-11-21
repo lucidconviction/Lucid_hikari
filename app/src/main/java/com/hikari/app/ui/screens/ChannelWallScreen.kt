@@ -1,0 +1,1775 @@
+@file:OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.foundation.ExperimentalFoundationApi::class,
+)
+
+package com.hikari.app.ui.screens
+
+import android.content.Context
+import android.widget.Toast
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.navigation.NavHostController
+import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
+import coil.compose.SubcomposeAsyncImageContent
+import com.hikari.app.HikariApp
+import com.hikari.app.data.IptvChannel
+import com.hikari.app.data.XtreamCredentials
+import com.hikari.app.iptv.ChannelWallChannels
+import com.hikari.app.iptv.FeedFilter
+import com.hikari.app.iptv.FeedFilterRows
+import com.hikari.app.iptv.FeedTagsParser
+import com.hikari.app.iptv.WallChannel
+import com.hikari.app.net.StreamProbe
+import com.hikari.app.providers.IptvProvider
+import com.hikari.app.providers.gatherIptvChannels
+import com.hikari.app.ui.navigation.Routes
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+
+private const val WALL_PREFS = "channel_wall"
+private const val WALL_CUSTOM = "custom_channels"
+private const val WALL_COUNTRIES = "countries"
+private const val WALL_LISTS = "lists"
+private const val WALL_FAVORITES = "favorites"
+private const val WALL_PINNED = "pinned_sources"
+
+private data class WallCountryOption(val label: String, val category: String)
+
+private val WallCountryOptions = listOf(
+    WallCountryOption("United States", "US"),
+    WallCountryOption("United Kingdom", "UK"),
+    WallCountryOption("Canada", "CA"),
+    WallCountryOption("Bay Area", "Bay Area"),
+    WallCountryOption("Arab", "Arabic"),
+    WallCountryOption("Africa", "Africa"),
+    WallCountryOption("Jamaica", "Jamaica"),
+    WallCountryOption("Italy", "Italy"),
+    WallCountryOption("France", "France"),
+    WallCountryOption("China", "China"),
+    WallCountryOption("Japan", "Japan"),
+    WallCountryOption("Cuba", "Cuba"),
+    WallCountryOption("India", "India"),
+    WallCountryOption("Brazil", "Brazil"),
+    WallCountryOption("Mexico", "Mexico"),
+    WallCountryOption("Germany", "Germany"),
+    WallCountryOption("Spain", "Spain"),
+    WallCountryOption("South Korea", "South Korea"),
+    WallCountryOption("Philippines", "Philippines"),
+    WallCountryOption("Ireland", "Ireland"),
+    WallCountryOption("Australia", "Australia"),
+    WallCountryOption("New Zealand", "New Zealand"),
+    WallCountryOption("Portugal", "Portugal"),
+    WallCountryOption("Netherlands", "Netherlands"),
+    WallCountryOption("Sweden", "Sweden"),
+    WallCountryOption("Norway", "Norway"),
+    WallCountryOption("Denmark", "Denmark"),
+    WallCountryOption("Poland", "Poland"),
+    WallCountryOption("Turkey", "Turkey"),
+    WallCountryOption("Greece", "Greece"),
+    WallCountryOption("Pakistan", "Pakistan"),
+    WallCountryOption("Bangladesh", "Bangladesh"),
+    WallCountryOption("Indonesia", "Indonesia"),
+    WallCountryOption("Malaysia", "Malaysia"),
+    WallCountryOption("Thailand", "Thailand"),
+    WallCountryOption("Vietnam", "Vietnam"),
+    WallCountryOption("Singapore", "Singapore"),
+    WallCountryOption("UAE", "UAE"),
+    WallCountryOption("Saudi Arabia", "Saudi Arabia"),
+    WallCountryOption("Israel", "Israel"),
+    WallCountryOption("Argentina", "Argentina"),
+    WallCountryOption("Colombia", "Colombia"),
+    WallCountryOption("Chile", "Chile"),
+    WallCountryOption("Peru", "Peru"),
+    WallCountryOption("Venezuela", "Venezuela"),
+    WallCountryOption("Dominican Republic", "Dominican Republic"),
+)
+
+private val DefaultWallCountries = setOf("US", "UK", "CA", "France", "Italy", "Japan", "China", "Cuba", "Africa", "Jamaica")
+
+private val WallListOptions = listOf(
+    "Soccer",
+    "Combat",
+    "Racing",
+    "Movies & Premium",
+    "Music",
+    "Anime",
+    "Lifestyle",
+    "Black Media",
+    "Adult (18+)",
+    "News",
+    "Discovery & Documentaries",
+    "Kids & Family",
+    "International Sports",
+    "More Sports",
+)
+private val DefaultWallLists = WallListOptions.toSet()
+
+/** A stream the user added themselves to the Channel Wall. */
+private data class WallCustomChannel(
+    val id: String,
+    val name: String,
+    val url: String,
+    val logo: String?,
+    /** Same kind of search words the Quick Channels menu keeps: handy when
+     *  the tile is matched against playlist names later. */
+    val aliases: List<String> = emptyList(),
+    /** The Quick Channels-style region group, shown on the tile. */
+    val region: String = "Custom",
+)
+
+private fun parseCustomChannels(raw: String?): List<WallCustomChannel> {
+    if (raw.isNullOrBlank()) return emptyList()
+    val arr = runCatching { JSONArray(raw) }.getOrNull() ?: return emptyList()
+    val out = ArrayList<WallCustomChannel>(arr.length())
+    for (i in 0 until arr.length()) {
+        val o = arr.optJSONObject(i) ?: continue
+        val name = o.optString("name")
+        val url = o.optString("url")
+        if (name.isBlank() || url.isBlank()) continue
+        val aliases = o.optString("aliases").split(",")
+            .map { it.trim() }.filter { it.isNotEmpty() }
+        out += WallCustomChannel(
+            id = o.optString("id").ifBlank { "custom_$i" },
+            name = name,
+            url = url,
+            logo = o.optString("logo").takeIf { it.isNotBlank() },
+            aliases = aliases,
+            region = o.optString("region").ifBlank { "Custom" },
+        )
+    }
+    return out
+}
+
+private fun encodeCustomChannels(list: List<WallCustomChannel>): String =
+    JSONArray().apply {
+        list.forEach { channel ->
+            put(
+                JSONObject()
+                    .put("id", channel.id)
+                    .put("name", channel.name)
+                    .put("url", channel.url)
+                    .put("logo", channel.logo.orEmpty())
+                    .put("aliases", channel.aliases.joinToString(", "))
+                    .put("region", channel.region),
+            )
+        }
+    }.toString()
+
+/** Artwork found for a wall channel in the user's own playlists/portals,
+ *  keyed by curated channel id. Updated after a channel scan so the wall
+ *  cards get a real thumbnail even when the curated icon URL is dead. */
+private object ChannelWallArt {
+    val byChannel = androidx.compose.runtime.mutableStateMapOf<String, String>()
+}
+
+/** Per-match health, filled as probes finish. [probed] is separate from
+ *  [results] because a dead stream is stored as a null result. */
+private class WallProbeState {
+    var probed by mutableStateOf<Set<String>>(emptySet())
+    var results by mutableStateOf<Map<String, StreamProbe.ProbeResult?>>(emptyMap())
+    var job: Job? = null
+}
+
+private fun probeHeaders(ch: IptvChannel): Map<String, String> = buildMap {
+    putAll(ch.headers)
+    ch.cookie?.takeIf { it.isNotBlank() }?.let { put("Cookie", it) }
+}
+
+/**
+ * Validates every match in the background, four at a time. Cached results
+ * (including cached failures) paint immediately; only the unknown URLs hit
+ * the network. Dead rows are filtered by the sheet, so a source that cannot
+ * answer never gets a Play button.
+ */
+private fun startWallProbes(
+    scope: kotlinx.coroutines.CoroutineScope,
+    state: WallProbeState,
+    matches: List<IptvChannel>,
+    force: Boolean,
+) {
+    state.job?.cancel()
+    val seed = LinkedHashMap<String, StreamProbe.ProbeResult?>()
+    if (!force) {
+        matches.forEach { ch ->
+            if (IptvProbeCache.has(ch.url)) seed[ch.url] = IptvProbeCache.get(ch.url)
+        }
+    }
+    state.results = seed
+    state.probed = seed.keys
+    val pending = matches.filter { it.url !in seed }
+    if (pending.isEmpty()) return
+    state.job = scope.launch {
+        val gate = Semaphore(4)
+        coroutineScope {
+            pending.forEach { ch ->
+                launch(Dispatchers.IO) {
+                    gate.withPermit {
+                        val result = StreamProbe.probeVerdict(ch.url, probeHeaders(ch))
+                        IptvProbeCache.put(ch.url, result)
+                        withContext(Dispatchers.Main) {
+                            state.results = state.results + (ch.url to result)
+                            state.probed = state.probed + ch.url
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The Live TV directory from PlayTorrio, rebuilt as Hikari's Channel Wall.
+ *
+ * The wall itself is a curated set of channel *searches* (ESPN, UFC, HBO…).
+ * Tapping one asks every installed M3U playlist, Xtream portal and addon
+ * playlist for matching channels and plays the chosen stream in Hikari's
+ * player. The Sources sheet manages those portals/playlists through Hikari's
+ * own IPTV provider — the same Xtream validation and M3U parser the IPTV tab
+ * uses — so nothing is duplicated here.
+ */
+@Composable
+fun ChannelWallScreen(nav: NavHostController) {
+    val context = LocalContext.current
+    val app = context.applicationContext as HikariApp
+    val scope = rememberCoroutineScope()
+    val allProviders by app.providers.providers.collectAsState()
+    val playlists = remember(allProviders) { allProviders.filterIsInstance<IptvProvider>() }
+    val prefs = remember { context.getSharedPreferences(WALL_PREFS, Context.MODE_PRIVATE) }
+    val nsfwOn = com.hikari.app.ui.rememberNsfwEnabled()
+
+    var query by rememberSaveable { mutableStateOf("") }
+    var searchOpen by rememberSaveable { mutableStateOf(false) }
+    var customChannels by remember { mutableStateOf<List<WallCustomChannel>>(emptyList()) }
+    var favoriteIds by remember {
+        mutableStateOf(
+            prefs.getString(WALL_FAVORITES, null)
+                ?.split(',')
+                ?.map { it.trim() }
+                ?.filter { it.isNotBlank() }
+                ?.toSet()
+                .orEmpty()
+        )
+    }
+    var showAddCustom by remember { mutableStateOf(false) }
+    var showCountries by remember { mutableStateOf(false) }
+    var selectedCountries by remember {
+        mutableStateOf(
+            prefs.getString(WALL_COUNTRIES, null)
+                ?.split(',')
+                ?.filter { it.isNotBlank() }
+                ?.toSet()
+                ?: DefaultWallCountries
+        )
+    }
+    var selectedLists by remember {
+        mutableStateOf(
+            prefs.getString(WALL_LISTS, null)
+                ?.split(',')
+                ?.filter { it.isNotBlank() }
+                ?.toSet()
+                ?: DefaultWallLists
+        )
+    }
+    var selectedWall by remember { mutableStateOf<WallChannel?>(null) }
+    var wallMatches by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
+    var wallLoading by remember { mutableStateOf(false) }
+    // Pinned sources are per wall tile and per URL, so the same channel on two
+    // portals is two pins. Stored as "wallId|url" lines.
+    var pinnedSources by remember {
+        mutableStateOf(
+            prefs.getString(WALL_PINNED, null)
+                ?.split('\n')
+                ?.filter { it.isNotBlank() }
+                ?.toSet()
+                .orEmpty()
+        )
+    }
+    var customTarget by remember { mutableStateOf<WallCustomChannel?>(null) }
+    var customMatches by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
+    var customLoading by remember { mutableStateOf(false) }
+    val wallProbes = remember { WallProbeState() }
+    val customProbes = remember { WallProbeState() }
+    var allChannels by remember { mutableStateOf<List<IptvChannel>>(emptyList()) }
+    var channelsLoading by remember { mutableStateOf(false) }
+    var channelsJob by remember { mutableStateOf<Deferred<List<IptvChannel>>?>(null) }
+    var reloadKey by remember { mutableIntStateOf(0) }
+
+    // Premium network artwork rotates on each visit instead of a fixed list.
+    val heroChannels = remember {
+        ChannelWallChannels.all
+            .filter { !it.backdropUrl.isNullOrBlank() }
+            .shuffled()
+            .take(8)
+            .ifEmpty { ChannelWallChannels.featured }
+    }
+
+    fun toast(message: String) {
+        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+    }
+
+    fun saveCustomChannels(list: List<WallCustomChannel>) {
+        customChannels = list
+        prefs.edit().putString(WALL_CUSTOM, encodeCustomChannels(list)).apply()
+    }
+
+    fun toggleFavorite(channel: WallChannel) {
+        val next = if (channel.id in favoriteIds) favoriteIds - channel.id else favoriteIds + channel.id
+        favoriteIds = next
+        prefs.edit().putString(WALL_FAVORITES, next.joinToString(",")).apply()
+        toast(
+            if (channel.id in next) {
+                "\"${channel.name}\" added to favorites"
+            } else {
+                "\"${channel.name}\" removed from favorites"
+            }
+        )
+    }
+
+    fun togglePinnedSource(wallId: String, url: String) {
+        val key = "$wallId|$url"
+        val next = if (key in pinnedSources) pinnedSources - key else pinnedSources + key
+        pinnedSources = next
+        prefs.edit().putString(WALL_PINNED, next.joinToString("\n")).apply()
+    }
+
+    LaunchedEffect(Unit) {
+        customChannels = parseCustomChannels(prefs.getString(WALL_CUSTOM, null))
+        // Favorites are stored by id. Prune ids whose channel disappeared in an
+        // update so the shelf never points at a tile that cannot be drawn.
+        val known = ChannelWallChannels.all.mapTo(HashSet()) { it.id }
+        val cleaned = favoriteIds.intersect(known)
+        if (cleaned != favoriteIds) {
+            favoriteIds = cleaned
+            prefs.edit().putString(WALL_FAVORITES, cleaned.joinToString(",")).apply()
+        }
+    }
+
+    fun requestChannels(force: Boolean = false): Deferred<List<IptvChannel>> {
+        val existing = channelsJob
+        if (!force && existing != null) return existing
+        val next = scope.async(Dispatchers.IO) { gatherIptvChannels(playlists, force) }
+        channelsJob = next
+        return next
+    }
+
+    LaunchedEffect(playlists, reloadKey) {
+        allChannels = emptyList()
+        channelsJob = null
+        if (playlists.isEmpty()) {
+            channelsLoading = false
+            return@LaunchedEffect
+        }
+        channelsLoading = true
+        val loaded = requestChannels(force = reloadKey > 0).await()
+        allChannels = loaded
+        channelsLoading = false
+        // A wall channel often has a curated logo that has gone stale; the
+        // user's own playlist already carries the live logo/thumbnail. Scan
+        // once per load and use it as the card/hero image.
+        val art = withContext(Dispatchers.Default) {
+            val out = HashMap<String, String>()
+            for (wall in ChannelWallChannels.all) {
+                val match = loaded.firstOrNull { channel ->
+                    !channel.artwork.isNullOrBlank() && ChannelWallChannels.matches(wall, channel.name)
+                } ?: continue
+                match.artwork?.let { out[wall.id] = it }
+            }
+            out
+        }
+        ChannelWallArt.byChannel.clear()
+        ChannelWallArt.byChannel.putAll(art)
+    }
+
+    fun openWall(channel: WallChannel) {
+        selectedWall = channel
+        wallMatches = emptyList()
+        wallLoading = true
+        wallProbes.job?.cancel()
+        wallProbes.probed = emptySet()
+        wallProbes.results = emptyMap()
+        scope.launch {
+            val channels = if (allChannels.isNotEmpty()) allChannels else requestChannels().await()
+            if (allChannels.isEmpty()) allChannels = channels
+            val found = withContext(Dispatchers.Default) {
+                channels
+                    .filter { ChannelWallChannels.matches(channel, it.name) || ChannelWallChannels.matches(channel, it.group) }
+                    .distinctBy { it.url }
+            }
+            wallMatches = found
+            found.firstOrNull()?.artwork?.takeIf { it.isNotBlank() }?.let {
+                ChannelWallArt.byChannel[channel.id] = it
+            }
+            wallLoading = false
+            startWallProbes(scope, wallProbes, found, force = false)
+        }
+    }
+
+    fun playChannel(channel: IptvChannel) {
+        selectedWall = null
+        customTarget = null
+        wallProbes.job?.cancel()
+        customProbes.job?.cancel()
+        playIptvChannel(context, channel)
+    }
+
+    /** A custom wall tile either points at one stream or, when its URL is left
+     *  empty, behaves like a Quick Channel: search every playlist for its
+     *  display name and aliases and let the user pick the source. */
+    fun openCustomChannel(custom: WallCustomChannel) {
+        if (custom.url.isNotBlank()) {
+            playIptvChannel(
+                context,
+                IptvChannel(
+                    name = custom.name,
+                    url = custom.url,
+                    logo = custom.logo,
+                    providerId = "channel-wall",
+                ),
+            )
+            return
+        }
+        customTarget = custom
+        customMatches = emptyList()
+        customLoading = true
+        customProbes.job?.cancel()
+        customProbes.probed = emptySet()
+        customProbes.results = emptyMap()
+        scope.launch {
+            val channels = if (allChannels.isNotEmpty()) allChannels else requestChannels().await()
+            if (allChannels.isEmpty()) allChannels = channels
+            val aliases = custom.aliases.ifEmpty { listOf(custom.name) }
+                .map { it.trim().lowercase() }
+                .filter { it.isNotEmpty() }
+            val found = withContext(Dispatchers.Default) {
+                channels.filter { ch ->
+                    val hay = (ch.name + " " + ch.group).lowercase()
+                    aliases.any { hay.contains(it) }
+                }.distinctBy { it.url }
+            }
+            customMatches = found
+            customLoading = false
+            startWallProbes(scope, customProbes, found, force = false)
+        }
+    }
+
+    val wallQuery = query.trim()
+    val searchResults = remember(wallQuery, nsfwOn) {
+        if (wallQuery.isBlank()) emptyList()
+        else ChannelWallChannels.all.filter { channel ->
+            (nsfwOn || channel.category != "Adult") &&
+                (channel.name.contains(wallQuery, ignoreCase = true) ||
+                    channel.category.contains(wallQuery, ignoreCase = true) ||
+                    channel.keywords.any { it.contains(wallQuery, ignoreCase = true) })
+        }
+    }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0xFF080A0F))
+            .statusBarsPadding(),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = { nav.popBackStack() }) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
+            }
+            Spacer(Modifier.weight(1f))
+            IconButton(onClick = { searchOpen = !searchOpen; if (!searchOpen) query = "" }) {
+                Icon(Icons.Filled.Search, contentDescription = "Search channels", tint = Color.White.copy(alpha = 0.85f))
+            }
+            IconButton(onClick = { showCountries = true }) {
+                Icon(Icons.Filled.Public, contentDescription = "Wall countries", tint = Color.White.copy(alpha = 0.85f))
+            }
+            IconButton(onClick = { showAddCustom = true }) {
+                Icon(Icons.Filled.Add, contentDescription = "Add a channel", tint = Color.White.copy(alpha = 0.85f))
+            }
+            IconButton(onClick = { reloadKey++ }) {
+                if (channelsLoading) {
+                    CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                } else {
+                    Icon(Icons.Filled.Refresh, contentDescription = "Refresh channels", tint = Color.White.copy(alpha = 0.85f))
+                }
+            }
+        }
+
+        if (searchOpen) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 2.dp),
+                placeholder = { Text("Search the wall…") },
+                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                trailingIcon = {
+                    if (query.isNotBlank()) {
+                        IconButton(onClick = { query = "" }) {
+                            Icon(Icons.Filled.Close, contentDescription = "Clear")
+                        }
+                    }
+                },
+                singleLine = true,
+                shape = RoundedCornerShape(18.dp),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = {}),
+            )
+        }
+
+        if (wallQuery.isNotBlank()) {
+            if (searchResults.isEmpty()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("No curated channel matches \"$wallQuery\".", color = Color.White.copy(alpha = 0.6f))
+                }
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    gridItems(searchResults, key = { it.id }) { channel ->
+                        WallGridCard(
+                            channel = channel,
+                            favorite = channel.id in favoriteIds,
+                            onClick = { openWall(channel) },
+                            onLongClick = { toggleFavorite(channel) },
+                        )
+                    }
+                }
+            }
+        } else {
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(top = 4.dp, bottom = 26.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                item {
+                    WallHero(heroChannels) { openWall(it) }
+                }
+                val favoriteChannels = ChannelWallChannels.all.filter {
+                    it.id in favoriteIds && (nsfwOn || it.category != "Adult")
+                }
+                if (favoriteChannels.isNotEmpty()) {
+                    item(key = "wall:favorites") {
+                        WallSection(
+                            "Favorites",
+                            "Long-press any channel to add it here, or to remove it",
+                            favoriteChannels,
+                            ::openWall,
+                            favoriteIds,
+                            ::toggleFavorite,
+                        )
+                    }
+                }
+                item {
+                    WallQuickRow(
+                        custom = customChannels,
+                        onPlay = { custom -> openCustomChannel(custom) },
+                        onAdd = { showAddCustom = true },
+                        onRemove = { custom -> saveCustomChannels(customChannels - custom) },
+                    )
+                }
+
+                val espnIds = listOf(
+                    "espn_plus", "espn", "espn2", "espnu", "ncaa_cbb",
+                    "ncaa_mens_cbb", "ncaa_womens_cbb", "sec_network",
+                    "acc_network", "big_ten_network", "pac_12_network",
+                    "espnews", "espn_deportes", "longhorn_network", "bally_sports",
+                )
+                val usLeagueIds = listOf(
+                    "nba", "nfl", "nfl_redzone", "mlb", "nhl",
+                    "fox_sports", "cbs_sports", "nbc_sports", "dazn", "eurosport",
+                )
+                val espn = espnIds.mapNotNull(ChannelWallChannels::byId)
+                val usLeagues = usLeagueIds.mapNotNull(ChannelWallChannels::byId)
+                if (espn.isNotEmpty()) {
+                    item { WallSection("ESPN & College", "Every ESPN feed, NCAA and the conference networks", espn, ::openWall, favoriteIds, ::toggleFavorite) }
+                }
+                if (usLeagues.isNotEmpty()) {
+                    item { WallSection("US Major Leagues", "NBA, NFL, MLB, NHL and the national sports networks", usLeagues, ::openWall, favoriteIds, ::toggleFavorite) }
+                }
+                val categories = listOf(
+                    Triple("Soccer", "Champions League, Premier League, beIN and more", "Soccer"),
+                    Triple("Combat", "UFC, WWE, AEW, boxing and PPV", "Combat"),
+                    Triple("Racing", "Formula 1, MotoGP, NASCAR and rally", "Racing"),
+                    Triple("Movies & Premium", "HBO, Showtime, Starz and the movie channels", "Movies"),
+                    Triple("Music", "MTV, VH1, BET, CMT and the music channels", "Music"),
+                    Triple("Anime", "Adult Swim, Toonami, Animax and animation", "Anime"),
+                    Triple("Lifestyle", "Food, home, travel and reality", "Lifestyle"),
+                    Triple("Black Media", "TV One, Aspire, ALLBLK, TheGrio and more", "Black Media"),
+                    Triple("Adult (18+)", "Premium adult networks — hidden when NSFW is off", "Adult"),
+                    Triple("News", "CNN, BBC, Sky News and the world's newsrooms", "News"),
+                    Triple("Discovery & Documentaries", "Nat Geo, Discovery, History and more", "Discovery"),
+                    Triple("Kids & Family", "Cartoon Network, Disney, Nickelodeon and more", "Kids"),
+                    Triple("International Sports", "Cricket, rugby, international feeds and more", "Int. Sports"),
+                    Triple("More Sports", "The rest of the sports directory", "Sports"),
+                )
+                categories.forEach { (title, subtitle, category) ->
+                    if (title !in selectedLists) return@forEach
+                    if (category == "Adult" && !nsfwOn) return@forEach
+                    val channels = ChannelWallChannels.byCategory(category)
+                    if (channels.isNotEmpty()) {
+                        item(key = "cat:$category") {
+                            WallSection(title, subtitle, channels, ::openWall, favoriteIds, ::toggleFavorite)
+                        }
+                    }
+                }
+                WallCountryOptions
+                    .filter { it.category in selectedCountries }
+                    .forEach { country ->
+                        val channels = ChannelWallChannels.byCategory(country.category)
+                        if (channels.isNotEmpty()) {
+                            item(key = "country:${country.category}") {
+                                WallSection(
+                                    country.label,
+                                    "Popular and premium networks from ${country.label}",
+                                    channels,
+                                    ::openWall,
+                                    favoriteIds,
+                                    ::toggleFavorite,
+                                )
+                            }
+                        }
+                    }
+            }
+        }
+    }
+
+    selectedWall?.let { channel ->
+        WallMatchSheet(
+            channel = channel,
+            matches = wallMatches,
+            loading = wallLoading,
+            probes = wallProbes,
+            onDismiss = {
+                selectedWall = null
+                wallProbes.job?.cancel()
+            },
+            onPlay = { playChannel(it) },
+            onRecheck = { startWallProbes(scope, wallProbes, wallMatches, force = true) },
+            pinned = pinnedSources
+                .asSequence()
+                .filter { it.startsWith(channel.id + "|") }
+                .map { it.substringAfter('|') }
+                .toSet(),
+            onTogglePin = { ch -> togglePinnedSource(channel.id, ch.url) },
+        )
+    }
+
+    customTarget?.let { custom ->
+        WallCustomMatchSheet(
+            channel = custom,
+            matches = customMatches,
+            loading = customLoading,
+            probes = customProbes,
+            onDismiss = {
+                customTarget = null
+                customProbes.job?.cancel()
+            },
+            onPlay = { playChannel(it) },
+            onRecheck = { startWallProbes(scope, customProbes, customMatches, force = true) },
+        )
+    }
+
+    if (showCountries) {
+        var draft by remember(showCountries) { mutableStateOf(selectedCountries) }
+        var draftLists by remember(showCountries) { mutableStateOf(selectedLists) }
+        val listOptions = remember(nsfwOn) {
+            WallListOptions.filter { it != "Adult (18+)" || nsfwOn }
+        }
+        AlertDialog(
+            onDismissRequest = { showCountries = false },
+            title = { Text("Countries & lists on the wall") },
+            text = {
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
+                    item {
+                        Text(
+                            "Countries",
+                            color = MaterialTheme.colorScheme.primary,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(top = 2.dp, bottom = 4.dp),
+                        )
+                    }
+                    items(WallCountryOptions, key = { "c:${it.category}" }) { option ->
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clickable {
+                                    draft = if (option.category in draft) draft - option.category
+                                    else draft + option.category
+                                }
+                                .padding(vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                option.label,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontSize = 13.sp,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (option.category in draft) {
+                                Icon(
+                                    Icons.Filled.Check,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    }
+                    item {
+                        Text(
+                            "Lists",
+                            color = MaterialTheme.colorScheme.primary,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
+                        )
+                    }
+                    items(listOptions, key = { "l:$it" }) { title ->
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clickable {
+                                    draftLists = if (title in draftLists) draftLists - title
+                                    else draftLists + title
+                                }
+                                .padding(vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                title,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontSize = 13.sp,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (title in draftLists) {
+                                Icon(
+                                    Icons.Filled.Check,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    selectedCountries = draft
+                    selectedLists = draftLists
+                    prefs.edit()
+                        .putString(WALL_COUNTRIES, draft.joinToString(","))
+                        .putString(WALL_LISTS, draftLists.joinToString(","))
+                        .apply()
+                    showCountries = false
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCountries = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (showAddCustom) {
+        AddCustomChannelDialog(
+            onAdd = { name, url, aliases, logo ->
+                saveCustomChannels(
+                    customChannels + WallCustomChannel(
+                        id = "custom_" + System.currentTimeMillis(),
+                        name = name,
+                        url = url,
+                        logo = logo.takeIf { it.isNotBlank() },
+                        aliases = aliases,
+                    ),
+                )
+                showAddCustom = false
+            },
+            onDismiss = { showAddCustom = false },
+        )
+    }
+}
+
+@Composable
+private fun WallHero(channels: List<WallChannel>, onOpen: (WallChannel) -> Unit) {
+    if (channels.isEmpty()) return
+    val pager = rememberPagerState(pageCount = { channels.size })
+    Box(Modifier.fillMaxWidth()) {
+        HorizontalPager(state = pager, modifier = Modifier.fillMaxWidth().height(230.dp)) { page ->
+            val channel = channels[page]
+            val colors = remember(channel.gradient) { channel.gradient.map(::Color) }
+            val pageOffset = ((pager.currentPage - page) + pager.currentPageOffsetFraction).let { if (it < 0f) -it else it }
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 12.dp)
+                    .graphicsLayer {
+                        // A neighbour peeks in slightly smaller and dimmer than
+                        // the page in front, so swiping reads as a carousel
+                        // rather than a row of unrelated images.
+                        val p = pageOffset.coerceIn(0f, 1f)
+                        alpha = 1f - p * 0.35f
+                        scaleX = 1f - p * 0.05f
+                        scaleY = 1f - p * 0.05f
+                    }
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(Brush.linearGradient(colors.ifEmpty { listOf(Color(0xFF24104F), Color(0xFF0B0B10)) })),
+            ) {
+                // Full-bleed hero art: a backdrop/promo first, then the icon the
+                // playlist carries, then a generated initials poster. No hero is
+                // ever just a flat gradient with a small logo in the corner.
+                WallFullBleedArt(channel)
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color.Transparent, Color(0x66000000), Color(0xF2080A0F)),
+                            ),
+                        ),
+                )
+                Row(
+                    Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    WallLogo(channel, 62)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(channel.category.uppercase(), color = Color(0xFF8FE3FF), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                        Text(channel.name, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Spacer(Modifier.height(7.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                            Surface(onClick = { onOpen(channel) }, shape = RoundedCornerShape(50), color = Color.White) {
+                                Row(Modifier.padding(horizontal = 13.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color(0xFF080A0F), modifier = Modifier.size(17.dp))
+                                    Text("Watch now", color = Color(0xFF080A0F), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Row(
+            Modifier.align(Alignment.TopEnd).padding(top = 10.dp, end = 24.dp),
+        ) {
+            repeat(channels.size) { index ->
+                Box(
+                    Modifier
+                        .padding(start = 4.dp)
+                        .size(if (index == pager.currentPage) 7.dp else 5.dp)
+                        .clip(CircleShape)
+                        .background(if (index == pager.currentPage) Color.White else Color.White.copy(alpha = 0.35f)),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WallQuickRow(
+    custom: List<WallCustomChannel>,
+    onPlay: (WallCustomChannel) -> Unit,
+    onAdd: () -> Unit,
+    onRemove: (WallCustomChannel) -> Unit,
+) {
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        items(custom, key = { "custom:${it.id}" }) { channel ->
+            Box(Modifier.width(138.dp)) {
+                WallCustomCard(channel) { onPlay(channel) }
+                Box(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .size(22.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xCCCC0000))
+                        .clickable { onRemove(channel) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Filled.Close, contentDescription = "Remove channel", tint = Color.White, modifier = Modifier.size(13.dp))
+                }
+            }
+        }
+        item {
+            Box(
+                Modifier
+                    .width(138.dp)
+                    .height(168.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color(0xFF0C0F17))
+                    .clickable(onClick = onAdd),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Filled.Add, contentDescription = null, tint = Color(0xFF7C5CFF), modifier = Modifier.size(32.dp))
+                    Spacer(Modifier.height(5.dp))
+                    Text("Add Channel", color = Color(0xFF7C5CFF), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+/** A user-added stream: the wall's Add Channel writes one of these. */
+@Composable
+private fun WallCustomCard(channel: WallCustomChannel, onClick: () -> Unit) {
+    val palettes = listOf(
+        listOf(Color(0xFF2A155C), Color(0xFF0B0B10)),
+        listOf(Color(0xFF0B4F4F), Color(0xFF0B0B10)),
+        listOf(Color(0xFF5C2A15), Color(0xFF0B0B10)),
+        listOf(Color(0xFF1B3A6B), Color(0xFF0B0B10)),
+    )
+    val colors = remember(channel.id) { palettes[(channel.id.hashCode() and Int.MAX_VALUE) % palettes.size] }
+    Box(
+        Modifier
+            .width(138.dp)
+            .height(168.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(Brush.linearGradient(colors))
+            .clickable(onClick = onClick),
+    ) {
+        // User tiles follow the same rule as curated ones: the channel's icon
+        // (or a generated initials promo) fills the whole card, not a small
+        // inset square.
+        val logo = channel.logo
+        if (!logo.isNullOrBlank()) {
+            SubcomposeAsyncImage(
+                model = logo,
+                contentDescription = channel.name,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+                loading = { WallPromoFallback(channel.name, Modifier.fillMaxSize()) },
+                error = { WallPromoFallback(channel.name, Modifier.fillMaxSize()) },
+                success = { SubcomposeAsyncImageContent() },
+            )
+        } else {
+            WallPromoFallback(channel.name)
+        }
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color.Transparent,
+                        0.45f to Color(0x22000000),
+                        1f to Color(0xF2080A0F),
+                    ),
+                ),
+        )
+        Column(Modifier.align(Alignment.BottomStart).padding(10.dp)) {
+            Text(channel.name, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(
+                if (channel.url.isBlank()) "Custom search" else "Custom stream",
+                color = Color.White.copy(alpha = 0.65f),
+                fontSize = 10.sp,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
+private fun WallSection(
+    title: String,
+    subtitle: String,
+    channels: List<WallChannel>,
+    onOpen: (WallChannel) -> Unit,
+    favoriteIds: Set<String> = emptySet(),
+    onToggleFavorite: (WallChannel) -> Unit = {},
+) {
+    Column {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Every shelf header wears a poster from its own first channel, so
+            // a country/list is recognisable before the rail is read.
+            Box(
+                Modifier
+                    .width(46.dp)
+                    .height(62.dp)
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(
+                        Brush.linearGradient(
+                            channels.firstOrNull()?.gradient?.map(::Color)
+                                ?: listOf(Color(0xFF24104F), Color(0xFF0B0B10))
+                        )
+                    ),
+            ) {
+                channels.firstOrNull()?.let { first ->
+                    WallFullBleedArt(first)
+                    Box(
+                        Modifier.fillMaxSize().background(
+                            Brush.verticalGradient(
+                                listOf(Color.Transparent, Color(0xAA080A0F))
+                            )
+                        )
+                    )
+                }
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Black)
+                Text(subtitle, color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            itemsIndexed(channels, key = { _, channel -> channel.id }) { index, channel ->
+                RiseIn(index) {
+                    Box(Modifier.width(138.dp)) {
+                        WallCard(
+                            channel = channel,
+                            favorite = channel.id in favoriteIds,
+                            onClick = { onOpen(channel) },
+                            onLongClick = { onToggleFavorite(channel) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The artwork that fills an entire wall tile.
+ *
+ * A backdrop/promo is preferred, then whatever artwork the user's own playlist
+ * was found to carry for this channel, then the curated icon. All three are
+ * drawn edge-to-edge: there is no inset logo panel anywhere on the wall, and a
+ * channel with no image at all gets a generated initials poster rather than an
+ * empty gradient.
+ */
+@Composable
+private fun WallFullBleedArt(channel: WallChannel, modifier: Modifier = Modifier) {
+    val art = channel.backdropUrl
+        ?: ChannelWallArt.byChannel[channel.id]
+        ?: channel.iconUrl
+    if (!art.isNullOrBlank()) {
+        SubcomposeAsyncImage(
+            model = art,
+            contentDescription = channel.name,
+            modifier = modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop,
+            loading = { WallPromoFallback(channel.name, Modifier.fillMaxSize()) },
+            error = { WallPromoFallback(channel.name, Modifier.fillMaxSize()) },
+            success = { SubcomposeAsyncImageContent() },
+        )
+    } else {
+        WallPromoFallback(channel.name, modifier.fillMaxSize())
+    }
+}
+
+/** A generated poster for a channel that shipped no artwork: its initials fill
+ *  the tile, so every tile still reads as a full-bleed promo rather than a gap. */
+@Composable
+private fun WallPromoFallback(name: String, modifier: Modifier = Modifier) {
+    val initials = name.trim().split(' ').take(2)
+        .mapNotNull { it.firstOrNull()?.uppercaseChar() }
+        .joinToString("")
+        .ifBlank { name.take(3).uppercase() }
+    Box(
+        modifier,
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            initials,
+            color = Color.White.copy(alpha = 0.22f),
+            fontSize = 58.sp,
+            fontWeight = FontWeight.Black,
+            letterSpacing = 2.sp,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun WallCard(
+    channel: WallChannel,
+    favorite: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
+    val colors = remember(channel.gradient) { channel.gradient.map(::Color) }
+    Box(
+        Modifier
+            .width(138.dp)
+            .height(168.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(Brush.linearGradient(colors.ifEmpty { listOf(Color(0xFF1A1A1A), Color(0xFF0B0B10)) }))
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+    ) {
+        // The artwork is the tile: edge to edge, no inset logo panel. Channels
+        // with no image at all get a generated initials poster (see
+        // WallFullBleedArt) so they still read as part of the same wall.
+        WallFullBleedArt(channel)
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color.Transparent,
+                        0.45f to Color(0x22000000),
+                        1f to Color(0xF2080A0F),
+                    ),
+                ),
+        )
+        Box(
+            Modifier
+                .align(Alignment.TopEnd)
+                .padding(5.dp)
+                .size(28.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.45f))
+                .clickable(onClick = onLongClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                if (favorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                contentDescription = if (favorite) "Remove favorite" else "Add favorite",
+                tint = if (favorite) Color(0xFFFF5A7A) else Color.White.copy(alpha = 0.8f),
+                modifier = Modifier.size(17.dp),
+            )
+        }
+        Column(Modifier.align(Alignment.BottomStart).padding(10.dp)) {
+            Text(channel.name, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(channel.category, color = Color.White.copy(alpha = 0.65f), fontSize = 10.sp, maxLines = 1)
+        }
+    }
+}
+
+@Composable
+private fun WallGridCard(
+    channel: WallChannel,
+    favorite: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
+    val colors = remember(channel.gradient) { channel.gradient.map(::Color) }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .aspectRatio(0.82f)
+            .clip(RoundedCornerShape(14.dp))
+            .background(Brush.linearGradient(colors.ifEmpty { listOf(Color(0xFF1A1A1A), Color(0xFF0B0B10)) }))
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+    ) {
+        WallFullBleedArt(channel)
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color.Transparent,
+                        0.45f to Color(0x22000000),
+                        1f to Color(0xF2080A0F),
+                    ),
+                ),
+        )
+        Box(
+            Modifier
+                .align(Alignment.TopEnd)
+                .padding(4.dp)
+                .size(24.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.45f))
+                .clickable(onClick = onLongClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                if (favorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                contentDescription = if (favorite) "Remove favorite" else "Add favorite",
+                tint = if (favorite) Color(0xFFFF5A7A) else Color.White.copy(alpha = 0.8f),
+                modifier = Modifier.size(14.dp),
+            )
+        }
+        Column(Modifier.align(Alignment.BottomStart).padding(8.dp)) {
+            Text(channel.name, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(channel.category, color = Color.White.copy(alpha = 0.65f), fontSize = 9.sp, maxLines = 1)
+        }
+    }
+}
+
+/**
+ * A short staggered rise used by the wall's horizontal rails.
+ *
+ * Lazy rows create their items as they scroll into range, so every card that
+ * arrives from the right gets the same small lift-and-fade — a scrolling
+ * effect that is felt rather than a layout animation that reflows the rail.
+ */
+@Composable
+private fun RiseIn(index: Int, content: @Composable () -> Unit) {
+    var entered by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        delay((index % 8) * 42L)
+        entered = true
+    }
+    val progress by animateFloatAsState(
+        targetValue = if (entered) 1f else 0f,
+        animationSpec = tween(durationMillis = 420, easing = FastOutSlowInEasing),
+        label = "wallRise",
+    )
+    Box(
+        Modifier.graphicsLayer {
+            alpha = progress
+            translationY = (1f - progress) * 38.dp.toPx()
+            scaleX = 0.96f + 0.04f * progress
+            scaleY = 0.96f + 0.04f * progress
+        },
+    ) { content() }
+}
+
+@Composable
+private fun WallLogo(channel: WallChannel, size: Int) {
+    val icon = ChannelWallArt.byChannel[channel.id] ?: channel.iconUrl
+    if (!icon.isNullOrBlank()) {
+        SubcomposeAsyncImage(
+            model = icon,
+            contentDescription = channel.name,
+            modifier = Modifier.size(size.dp),
+            contentScale = ContentScale.Fit,
+            loading = { WallLogoFallback(channel, size) },
+            error = { WallLogoFallback(channel, size) },
+            success = { SubcomposeAsyncImageContent() },
+        )
+    } else {
+        WallLogoFallback(channel, size)
+    }
+}
+
+/** Every wall channel has a visible tile even when its logo URL is missing or dead. */
+@Composable
+private fun WallLogoFallback(channel: WallChannel, size: Int) {
+    val label = channel.short.ifBlank {
+        channel.name.trim().split(' ').take(2)
+            .mapNotNull { it.firstOrNull()?.uppercaseChar() }
+            .joinToString("")
+    }.ifBlank { channel.name.take(3).uppercase() }
+    Box(
+        Modifier
+            .size(size.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color.White.copy(alpha = 0.12f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            color = Color.White,
+            fontSize = (size / 3).coerceAtLeast(11).sp,
+            fontWeight = FontWeight.Black,
+            maxLines = 1,
+        )
+    }
+}
+
+/** A user tile with no direct URL: the channels its aliases matched across
+ *  every playlist. */
+@Composable
+private fun WallCustomMatchSheet(
+    channel: WallCustomChannel,
+    matches: List<IptvChannel>,
+    loading: Boolean,
+    probes: WallProbeState,
+    onDismiss: () -> Unit,
+    onPlay: (IptvChannel) -> Unit,
+    onRecheck: () -> Unit,
+) {
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
+        Column(Modifier.fillMaxWidth().heightIn(max = 620.dp).padding(horizontal = 16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (!channel.logo.isNullOrBlank()) {
+                    AsyncImage(
+                        model = channel.logo,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.size(52.dp).clip(RoundedCornerShape(10.dp)),
+                    )
+                } else {
+                    WallPromoFallback(channel.name, Modifier.size(52.dp))
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(channel.name, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text("Custom search channel", color = Color.White.copy(alpha = 0.55f), fontSize = 12.sp)
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            when {
+                loading -> Box(Modifier.fillMaxWidth().height(150.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = Color(0xFF7C5CFF))
+                }
+                matches.isEmpty() -> {
+                    Text(
+                        "No channel in your playlists matches ${channel.aliases.joinToString(", ").ifBlank { channel.name }} yet.",
+                        color = Color.White.copy(alpha = 0.65f),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "Add a playlist in Live TV, or edit this tile's aliases.",
+                        color = Color.White.copy(alpha = 0.45f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                else -> WallSourceRows(
+                    matches = matches,
+                    probes = probes,
+                    onPlay = onPlay,
+                    onRecheck = onRecheck,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onDismiss) { Text("Close") }
+            }
+            Spacer(Modifier.height(10.dp))
+        }
+    }
+}
+
+@Composable
+private fun WallMatchSheet(
+    channel: WallChannel,
+    matches: List<IptvChannel>,
+    loading: Boolean,
+    probes: WallProbeState,
+    pinned: Set<String>,
+    onTogglePin: (IptvChannel) -> Unit,
+    onDismiss: () -> Unit,
+    onPlay: (IptvChannel) -> Unit,
+    onRecheck: () -> Unit,
+) {
+    var filter by remember(channel.id) { mutableStateOf(FeedFilter()) }
+    val visibleMatches = remember(matches, filter) {
+        matches.filter { filter.matches(FeedTagsParser.parse(it.name)) }
+    }
+    val best = matches
+        .filter { probes.probed.contains(it.url) && probes.results[it.url]?.isPlayable == true }
+        .minByOrNull { probes.results[it.url]?.latencyMs ?: Long.MAX_VALUE }
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
+        Column(Modifier.fillMaxWidth().heightIn(max = 620.dp).padding(horizontal = 16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                WallLogo(channel, 58)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(channel.name, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(channel.category, color = Color.White.copy(alpha = 0.55f), fontSize = 12.sp)
+                }
+                best?.let { play ->
+                    IconButton(onClick = { onPlay(play) }) {
+                        Icon(Icons.Filled.PlayArrow, contentDescription = "Play best match", tint = Color(0xFF00D2EF), modifier = Modifier.size(32.dp))
+                    }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            when {
+                loading -> Box(Modifier.fillMaxWidth().height(150.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = Color(0xFF7C5CFF))
+                }
+                matches.isEmpty() -> {
+                    Text(
+                        "No channel in your playlists or portals matches \"${channel.name}\" yet.",
+                        color = Color.White.copy(alpha = 0.65f),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "Add an Xtream portal or an M3U playlist in the IPTV tab, then tap refresh.",
+                        color = Color.White.copy(alpha = 0.45f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                else -> {
+                    FeedFilterRows(
+                        channels = matches,
+                        filter = filter,
+                        onChange = { filter = it },
+                    )
+                    if (visibleMatches.isEmpty()) {
+                        Text(
+                            "No sources match these filters.",
+                            color = Color.White.copy(alpha = 0.6f),
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(vertical = 12.dp),
+                        )
+                    } else {
+                        WallSourceRows(
+                            matches = visibleMatches,
+                            probes = probes,
+                            pinned = pinned,
+                            onTogglePin = onTogglePin,
+                            onPlay = onPlay,
+                            onRecheck = onRecheck,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onDismiss) { Text("Close") }
+            }
+            Spacer(Modifier.height(10.dp))
+        }
+    }
+}
+
+/**
+ * The validated source list shared by both wall sheets. Only sources that
+ * answered the health check are playable; dead rows are removed entirely.
+ * While probes are still running the unknown rows stay visible with a
+ * "Checking…" label, then disappear if they fail.
+ */
+@Composable
+private fun ColumnScope.WallSourceRows(
+    matches: List<IptvChannel>,
+    probes: WallProbeState,
+    pinned: Set<String> = emptySet(),
+    onTogglePin: (IptvChannel) -> Unit = {},
+    onPlay: (IptvChannel) -> Unit,
+    onRecheck: () -> Unit,
+) {
+    val alive = matches
+        .filter { probes.probed.contains(it.url) && probes.results[it.url]?.isPlayable == true }
+        .sortedWith(
+            compareByDescending<IptvChannel> { it.url in pinned }
+                .thenBy { probes.results[it.url]?.latencyMs ?: Long.MAX_VALUE }
+        )
+    val pending = matches
+        .filter { it.url !in probes.probed }
+        .sortedByDescending { it.url in pinned }
+    val dead = (matches.size - alive.size - pending.size).coerceAtLeast(0)
+    val rows = alive + pending
+
+    if (rows.isEmpty()) {
+        Column(
+            Modifier.fillMaxWidth().weight(1f, fill = false),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                "No working streams found",
+                color = Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "${matches.size} matching source${if (matches.size == 1) "" else "s"} did not answer the health check.",
+                color = Color.White.copy(alpha = 0.6f),
+                fontSize = 12.sp,
+            )
+            Spacer(Modifier.height(14.dp))
+            OutlinedButton(onClick = onRecheck) {
+                Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Re-check")
+            }
+        }
+        return
+    }
+
+    Text(
+        buildString {
+            append(if (alive.isEmpty()) "Checking ${pending.size} source" else "${alive.size} working source")
+            if (alive.isEmpty() && pending.size != 1) append("s")
+            if (alive.isNotEmpty() && alive.size != 1) append("s")
+            if (pending.isNotEmpty() && alive.isNotEmpty()) append(" · ${pending.size} still checking")
+            if (dead > 0) append(" · $dead offline hidden")
+        },
+        color = Color.White.copy(alpha = 0.55f),
+        fontSize = 11.sp,
+    )
+    LazyColumn(
+        Modifier.fillMaxWidth().weight(1f),
+        contentPadding = PaddingValues(vertical = 6.dp),
+    ) {
+        items(rows, key = { it.url }) { match ->
+            val checking = match.url !in probes.probed
+            val result = probes.results[match.url]
+            val playable = !checking && result?.isPlayable == true
+            val rowContext = LocalContext.current
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .combinedClickable(
+                        enabled = playable,
+                        onClick = { onPlay(match) },
+                        onLongClick = {
+                            // Holding a working source sends it to a new PIP
+                            // window without disturbing the one playing.
+                            val headers = buildMap {
+                                putAll(match.headers)
+                                match.cookie?.takeIf { it.isNotBlank() }?.let { put("Cookie", it) }
+                            }
+                            val added = com.hikari.app.player.PipLauncher.addChannel(
+                                context = rowContext,
+                                name = match.name,
+                                url = match.url,
+                                headers = headers,
+                                logo = match.artwork,
+                                providerId = match.providerId,
+                            )
+                            android.widget.Toast.makeText(
+                                rowContext,
+                                if (added) com.hikari.app.i18n.I18n.t("Added to a new PIP")
+                                else com.hikari.app.i18n.I18n.t("Turn on PIP Mode/Ch Preview first"),
+                                android.widget.Toast.LENGTH_SHORT,
+                            ).show()
+                        },
+                    )
+                    .alpha(if (playable) 1f else 0.68f)
+                    .padding(vertical = 7.dp, horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                val logo = match.artwork
+                if (!logo.isNullOrBlank()) {
+                    AsyncImage(
+                        model = logo,
+                        contentDescription = null,
+                        modifier = Modifier.size(42.dp).clip(RoundedCornerShape(8.dp)),
+                        contentScale = ContentScale.Fit,
+                    )
+                } else {
+                    Box(Modifier.size(42.dp), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Filled.LiveTv, contentDescription = null, tint = Color.White.copy(alpha = 0.5f))
+                    }
+                }
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(match.name, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        listOfNotNull(match.group.takeIf { it.isNotBlank() }, match.providerId.takeIf { it.isNotBlank() })
+                            .joinToString(" · "),
+                        color = Color.White.copy(alpha = 0.5f),
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (checking) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(13.dp),
+                        color = Color.White.copy(alpha = 0.7f),
+                        strokeWidth = 1.5.dp,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text("Checking", color = Color.White.copy(alpha = 0.55f), fontSize = 10.sp)
+                } else {
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF34D399)))
+                    Spacer(Modifier.width(6.dp))
+                    Text("${result?.latencyMs ?: 0} ms", color = Color.White.copy(alpha = 0.55f), fontSize = 10.sp)
+                    Spacer(Modifier.width(6.dp))
+                    Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color(0xFF00D2EF))
+                }
+                val isPinned = match.url in pinned
+                IconButton(
+                    onClick = { onTogglePin(match) },
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        imageVector = if (isPinned) Icons.Filled.Star else Icons.Filled.StarBorder,
+                        contentDescription = if (isPinned) "Unpin source" else "Pin source",
+                        tint = if (isPinned) Color(0xFFFFC857) else Color.White.copy(alpha = 0.45f),
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AddCustomChannelDialog(
+    onAdd: (name: String, url: String, aliases: List<String>, logo: String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    var url by remember { mutableStateOf("") }
+    var logo by remember { mutableStateOf("") }
+    var aliasText by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    fun normalized(): String? {
+        var value = url.trim()
+        if (value.isBlank()) return null
+        if (!value.startsWith("http://", true) && !value.startsWith("https://", true)) {
+            value = "https://$value"
+        }
+        val host = runCatching { java.net.URI(value).host }.getOrNull().orEmpty()
+        if (host.isBlank()) return null
+        return value
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add channel") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Display name and aliases are the only required fields: they
+                // let the tile search every playlist. A stream URL is optional
+                // when the user already knows the exact channel.
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Display name") },
+                    placeholder = { Text("e.g. My Channel") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = aliasText,
+                    onValueChange = { aliasText = it },
+                    label = { Text("Search aliases (required)") },
+                    placeholder = { Text("e.g. CNN, ESPN") },
+                    singleLine = false,
+                    maxLines = 3,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = { Text("Stream URL (optional — leave blank to search aliases)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = logo,
+                    onValueChange = { logo = it },
+                    label = { Text("Logo / thumbnail URL (optional)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                error?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val aliases = aliasText.split(",")
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                    // A blank URL is allowed: the tile then searches all
+                    // playlists using its display name and aliases.
+                    val address = if (url.isBlank()) "" else normalized()
+                    when {
+                        name.isBlank() -> error = "Give the channel a name."
+                        aliases.isEmpty() -> error = "Add at least one search alias."
+                        url.isNotBlank() && address == null ->
+                            error = "Enter a valid stream address, or leave it blank to search."
+                        else -> onAdd(name.trim(), address.orEmpty(), aliases, logo.trim())
+                    }
+                },
+            ) { Text("Add") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}

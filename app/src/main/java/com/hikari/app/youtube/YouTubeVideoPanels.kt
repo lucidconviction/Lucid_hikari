@@ -1,0 +1,579 @@
+package com.hikari.app.youtube
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Comment
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
+import com.liskovsoft.sharedutils.prefs.GlobalPreferences
+import com.liskovsoft.youtubeapi.service.YouTubeServiceManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/** Which right-side YouTube panel the player should show. */
+enum class YtPanelMode { INFO, COMMENTS }
+
+data class YtVideoInfo(
+    val title: String,
+    val author: String,
+    val views: String,
+    val published: String,
+    val likes: String,
+    val description: String,
+    val thumbnail: String?,
+    /** 0 none, 1 like, 2 dislike — YouTube's own state for this account. */
+    val likeStatus: Int = 0,
+    val channelId: String? = null,
+    val isSubscribed: Boolean = false,
+)
+
+data class YtComment(
+    val id: String,
+    val author: String,
+    val avatar: String?,
+    val message: String,
+    val published: String,
+    val likes: String,
+    val replies: String,
+    val nestedKey: String?,
+)
+
+data class YtCommentPage(val comments: List<YtComment>, val nextKey: String?)
+
+/** Reads the current video's info and comments through the same engine as the YouTube tab. */
+object YouTubeVideoDetails {
+
+    private fun service(context: android.content.Context): com.liskovsoft.mediaserviceinterfaces.ServiceManager {
+        GlobalPreferences.instance(context)
+        YouTubeContentRegion.apply(context)
+        return YouTubeServiceManager.instance()
+    }
+
+    suspend fun info(context: android.content.Context, videoId: String): YtVideoInfo? =
+        withContext(Dispatchers.IO) {
+            val meta = runCatching {
+                service(context).mediaItemService.getMetadataObserve(videoId).blockingFirst()
+            }.getOrNull() ?: return@withContext null
+            YtVideoInfo(
+                title = meta.title.orEmpty(),
+                author = meta.author.orEmpty(),
+                views = meta.viewCount.orEmpty(),
+                published = meta.publishedDate.orEmpty(),
+                likes = meta.likeCount.orEmpty(),
+                description = meta.description.orEmpty(),
+                thumbnail = videoId.takeIf { it.isNotBlank() }
+                    ?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" },
+                likeStatus = meta.likeStatus,
+                channelId = meta.channelId,
+                isSubscribed = meta.isSubscribed,
+            )
+        }
+
+    suspend fun comments(
+        context: android.content.Context,
+        videoId: String,
+        nestedKey: String? = null,
+    ): YtCommentPage = withContext(Dispatchers.IO) {
+        val svc = service(context)
+        val key = nestedKey?.takeIf { it.isNotBlank() } ?: runCatching {
+            svc.mediaItemService.getMetadataObserve(videoId).blockingFirst().commentsKey
+        }.getOrNull()
+        if (key.isNullOrBlank()) return@withContext YtCommentPage(emptyList(), null)
+        val group = runCatching {
+            svc.commentsService.getCommentsObserve(key).blockingFirst()
+        }.getOrNull() ?: return@withContext YtCommentPage(emptyList(), null)
+        val items = group.comments.orEmpty().mapNotNull { c ->
+            val message = c.message.orEmpty()
+            if (message.isBlank()) return@mapNotNull null
+            YtComment(
+                id = c.id.orEmpty(),
+                author = c.authorName.orEmpty().ifBlank { "YouTube user" },
+                avatar = c.authorPhoto,
+                message = message,
+                published = c.publishedDate.orEmpty(),
+                likes = c.likeCount.orEmpty(),
+                replies = c.replyCount.orEmpty(),
+                nestedKey = c.nestedCommentsKey,
+            )
+        }
+        YtCommentPage(items, group.nextCommentsKey)
+    }
+}
+
+/**
+ * The player's right-side Info and Comments panels.
+ *
+ * Same geometry and slide-in as "More Videos": a translucent scrim over the
+ * video and a full-height panel on the right, so the three buttons live in one
+ * continuous surface instead of three different UI languages.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun YouTubeVideoPanel(
+    videoId: String,
+    mode: YtPanelMode,
+    onClose: () -> Unit,
+) {
+    val context = LocalContext.current.applicationContext
+    var info by remember(videoId) { mutableStateOf<YtVideoInfo?>(null) }
+    var loading by remember(videoId, mode) { mutableStateOf(true) }
+    var comments by remember(videoId) { mutableStateOf<YtCommentPage?>(null) }
+    var replyTo by remember(videoId) { mutableStateOf<YtComment?>(null) }
+    var error by remember(videoId, mode) { mutableStateOf<String?>(null) }
+    val closeFocus = remember { FocusRequester() }
+    val firstCommentFocus = remember { FocusRequester() }
+    val commentsState = rememberLazyListState()
+    val listScope = rememberCoroutineScope()
+    var closeFocused by remember { mutableStateOf(false) }
+
+    // An open panel owns the remote. Focus the first thing the user can act
+    // on: the first comment, or the close button when there is nothing to
+    // scroll/select yet. InfoContent focuses itself once the metadata lands.
+    LaunchedEffect(mode, loading, error, info, comments) {
+        delay(80)
+        when {
+            loading || error != null -> runCatching { closeFocus.requestFocus() }
+            mode == YtPanelMode.INFO && info == null -> runCatching { closeFocus.requestFocus() }
+            mode == YtPanelMode.COMMENTS && comments?.comments.isNullOrEmpty() ->
+                runCatching { closeFocus.requestFocus() }
+            mode == YtPanelMode.COMMENTS -> runCatching { firstCommentFocus.requestFocus() }
+        }
+    }
+
+    LaunchedEffect(videoId, mode) {
+        if (videoId.isBlank()) return@LaunchedEffect
+        loading = true
+        error = null
+        if (mode == YtPanelMode.INFO) {
+            info = YouTubeVideoDetails.info(context, videoId)
+            if (info == null) error = "Couldn't load video info."
+        } else {
+            comments = YouTubeVideoDetails.comments(context, videoId)
+            if (comments == null) error = "Couldn't load comments."
+        }
+        loading = false
+    }
+
+    LaunchedEffect(replyTo) {
+        val target = replyTo ?: return@LaunchedEffect
+        loading = true
+        comments = YouTubeVideoDetails.comments(context, videoId, target.nestedKey)
+        loading = false
+    }
+
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        // Info and Comments are reading panels, not the narrow More Videos
+        // rail: on a phone they need enough width for a comment to wrap at
+        // word boundaries instead of one or two words per line. A television
+        // matches the reference player instead, where both panels occupy 30%
+        // of the width, flush with the right edge.
+        val panelWidth = if (com.hikari.app.tv.TvMode.isTv) {
+            maxWidth * 0.30f
+        } else {
+            (maxWidth * 0.46f)
+                .coerceIn(320.dp, 560.dp)
+                .coerceAtMost(maxWidth * 0.88f)
+        }
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color(0x66000000))
+                .focusProperties { canFocus = false }
+                .clickable(onClick = onClose),
+        )
+        Row(
+            Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .width(panelWidth)
+                // 30% opaque: the panel tints the picture without hiding it.
+                .background(Color(0x4D111114))
+                .clickable(enabled = false) {},
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 14.dp, end = 4.dp, top = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        if (mode == YtPanelMode.INFO) Icons.Filled.Info else Icons.Filled.Comment,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        when {
+                            mode == YtPanelMode.INFO -> "Info"
+                            replyTo != null -> "Replies"
+                            else -> "Comments"
+                        },
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(
+                        onClick = onClose,
+                        modifier = Modifier
+                            .focusRequester(closeFocus)
+                            .onFocusChanged { closeFocused = it.isFocused }
+                            .then(
+                                if (closeFocused) {
+                                    Modifier
+                                        .background(Color.White.copy(alpha = 0.14f), CircleShape)
+                                        .border(2.dp, Color.White, CircleShape)
+                                } else {
+                                    Modifier
+                                }
+                            ),
+                    ) {
+                        Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White)
+                    }
+                }
+
+                if (replyTo != null) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { replyTo = null }
+                            .padding(horizontal = 10.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                            contentDescription = "Back to comments",
+                            tint = Color.White.copy(alpha = 0.8f),
+                        )
+                        Text(
+                            "All comments",
+                            color = Color.White.copy(alpha = 0.8f),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+
+                when {
+                    loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp)
+                    }
+                    error != null -> Box(Modifier.fillMaxSize().padding(20.dp), contentAlignment = Alignment.Center) {
+                        Text(error!!, color = Color(0xFFB0B0B0), fontSize = 13.sp)
+                    }
+                    mode == YtPanelMode.INFO -> InfoContent(info)
+                    replyTo != null -> ReplyHeader(replyTo!!)
+                }
+
+                if (mode == YtPanelMode.COMMENTS && !loading && error == null) {
+                    val page = comments
+                    if (page == null || page.comments.isEmpty()) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text("No comments yet.", color = Color(0xFFB0B0B0), fontSize = 13.sp)
+                        }
+                    } else {
+                        LazyColumn(
+                            state = commentsState,
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            itemsIndexed(
+                                items = page.comments,
+                                key = { _, comment -> comment.id.ifBlank { comment.author + comment.message } },
+                            ) { index, comment ->
+                                CommentRow(
+                                    comment = comment,
+                                    canOpenReplies = replyTo == null && !comment.nestedKey.isNullOrBlank(),
+                                    focusRequester = if (index == 0) firstCommentFocus else null,
+                                    onFocused = {
+                                        listScope.launch { commentsState.scrollToItem(index) }
+                                    },
+                                    onClick = {
+                                        if (replyTo == null && !comment.nestedKey.isNullOrBlank()) {
+                                            replyTo = comment
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InfoContent(info: YtVideoInfo?) {
+    if (info == null) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("No info for this video.", color = Color(0xFFB0B0B0), fontSize = 13.sp)
+        }
+        return
+    }
+    val listState = rememberLazyListState()
+    val focus = remember { FocusRequester() }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(info) {
+        delay(80)
+        runCatching { focus.requestFocus() }
+    }
+    LazyColumn(
+        state = listState,
+        modifier = Modifier
+            .fillMaxSize()
+            .focusRequester(focus)
+            .focusable()
+            .onKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                when (event.key) {
+                    Key.DirectionDown -> {
+                        if (!listState.canScrollForward) return@onKeyEvent false
+                        scope.launch { listState.scrollBy(160f) }
+                        true
+                    }
+                    Key.DirectionUp -> {
+                        if (!listState.canScrollBackward) return@onKeyEvent false
+                        scope.launch { listState.scrollBy(-160f) }
+                        true
+                    }
+                    Key.PageDown -> {
+                        scope.launch { listState.scrollBy(480f) }
+                        true
+                    }
+                    Key.PageUp -> {
+                        scope.launch { listState.scrollBy(-480f) }
+                        true
+                    }
+                    else -> false
+                }
+            },
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        item {
+            AsyncImage(
+                model = info.thumbnail,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xFF222222)),
+            )
+        }
+        item {
+            Text(
+                info.title,
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        item {
+            Text(
+                info.author,
+                color = Color(0xFFD0D0D0),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        item {
+            Text(
+                listOf(info.views, info.published, info.likes.takeIf { it.isNotBlank() }?.let { "$it likes" })
+                    .filterNotNull()
+                    .filter { it.isNotBlank() }
+                    .joinToString(" · "),
+                color = Color(0xFFA8A8A8),
+                fontSize = 11.sp,
+            )
+        }
+        if (info.description.isNotBlank()) {
+            item {
+                Text(
+                    info.description,
+                    color = Color(0xFFC8C8C8),
+                    fontSize = 12.sp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReplyHeader(comment: YtComment) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)) {
+        Text(
+            "Replying to",
+            color = Color(0xFFA8A8A8),
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            comment.author,
+            color = Color.White,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            comment.message,
+            color = Color(0xFFC8C8C8),
+            fontSize = 11.sp,
+            softWrap = true,
+            maxLines = 4,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CommentRow(
+    comment: YtComment,
+    canOpenReplies: Boolean,
+    focusRequester: FocusRequester? = null,
+    onFocused: () -> Unit = {},
+    onClick: () -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (focused) Color.White.copy(alpha = 0.10f) else Color.Transparent)
+            .then(
+                if (focused) {
+                    Modifier.border(2.dp, Color.White, RoundedCornerShape(10.dp))
+                } else {
+                    Modifier
+                }
+            )
+            .then(
+                if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier
+            )
+            .onFocusChanged { state ->
+                focused = state.isFocused
+                if (state.isFocused) onFocused()
+            }
+            // Every comment is a focus stop; OK opens the replies when this
+            // one has them, and does nothing otherwise.
+            .clickable { if (canOpenReplies) onClick() }
+            .padding(6.dp),
+    ) {
+        if (!comment.avatar.isNullOrBlank()) {
+            AsyncImage(
+                model = comment.avatar,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.size(30.dp).clip(CircleShape).background(Color(0xFF2A2A2E)),
+            )
+        } else {
+            Box(
+                Modifier.size(30.dp).clip(CircleShape).background(Color(0xFF2A2A2E)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(comment.author.take(1), color = Color.White, fontSize = 12.sp)
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                "${comment.author}  ${comment.published}",
+                color = Color(0xFFB8B8B8),
+                fontSize = 10.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                comment.message,
+                color = Color.White,
+                fontSize = 12.sp,
+                softWrap = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            // FlowRow, not Row: on a narrow phone panel the likes, reply count
+            // and "View replies" together are wider than the comment column,
+            // and a Row silently clipped the last one. This wraps the actions
+            // onto a second line instead.
+            FlowRow(
+                modifier = Modifier.padding(top = 4.dp).fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                if (comment.likes.isNotBlank()) {
+                    Text("👍 ${comment.likes}", color = Color(0xFF9A9A9A), fontSize = 10.sp)
+                }
+                if (comment.replies.isNotBlank()) {
+                    Text("Replies ${comment.replies}", color = Color(0xFF9A9A9A), fontSize = 10.sp)
+                }
+                if (canOpenReplies) {
+                    Text("View replies", color = Color(0xFF7FB8FF), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
