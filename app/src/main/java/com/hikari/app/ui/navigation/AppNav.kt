@@ -18,6 +18,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -1375,6 +1376,30 @@ private fun AppDockBar(
                     CircleShape,
                 )
                 .then(Modifier.glassSheen(glass))
+                // With the dock folded, the circle itself is the tab wheel:
+                // swipe down for the next tab, up for the previous one, and
+                // keep the shelf closed so another swipe continues the walk.
+                .pointerInput(tabs, selectedIndex) {
+                    val threshold = 24.dp.toPx()
+                    var total = 0f
+                    detectVerticalDragGestures(
+                        onDragStart = { total = 0f },
+                        onVerticalDrag = { change, dragAmount ->
+                            total += dragAmount
+                            change.consume()
+                        },
+                        onDragEnd = {
+                            if (abs(total) > threshold && tabs.isNotEmpty()) {
+                                val step = if (total > 0f) 1 else -1
+                                val next = ((selectedIndex + step) % tabs.size + tabs.size) % tabs.size
+                                onNavigate(tabs[next].route)
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            }
+                            total = 0f
+                        },
+                        onDragCancel = { total = 0f },
+                    )
+                }
                 .clickable {
                     collapsed = false
                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)

@@ -13,9 +13,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.hikari.app.player.PlayerActivity
-import com.hikari.app.ui.navigation.LocalTaskbarInset
 import com.hikari.app.youtube.LocalScreenActive
 import com.hikari.app.youtube.LocalYouTubeBottomPadding
 import com.hikari.app.youtube.YouTubePlayRequest
@@ -33,7 +33,6 @@ import com.hikari.app.youtube.youTubePlayerIntent
 @Composable
 fun YouTubeScreen(nav: NavHostController) {
     val context = LocalContext.current
-    val bottomInset = LocalTaskbarInset.current
     var lastRequest by remember { mutableStateOf<YouTubePlayRequest?>(null) }
     var followUp by remember { mutableStateOf<YouTubePlayRequest?>(null) }
 
@@ -82,7 +81,10 @@ fun YouTubeScreen(nav: NavHostController) {
     }
 
     CompositionLocalProvider(
-        LocalYouTubeBottomPadding provides bottomInset,
+        // The YouTube page runs to the bottom edge; the floating dock already
+        // overlays its last row, so reserving the whole taskbar height here
+        // only left a blank band under the feed.
+        LocalYouTubeBottomPadding provides 0.dp,
         LocalScreenActive provides true,
     ) {
         EngineYouTubeScreen(
