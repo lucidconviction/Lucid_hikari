@@ -21,6 +21,9 @@
          going while the user is elsewhere or the screen is off. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Background play keeps audio running while the screen is locked or the
+         app is put away, in a mediaPlayback foreground service. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <!-- API 33+: the download notification needs this to be visible. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Only for exporting into the public Downloads folder on API < 29;
@@ -417,6 +420,12 @@ android:name=".player.PlayerActivity"
             android:name=".youtube.YouTubeSignInKeepAliveService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- Audio-only continuation of the player while the app is away. -->
+        <service
+            android:name=".player.BackgroundPlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
 
         <service
             android:name=".download.DownloadService"

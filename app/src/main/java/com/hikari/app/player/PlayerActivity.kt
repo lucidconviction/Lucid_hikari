@@ -1988,6 +1988,7 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        activePlayer = java.lang.ref.WeakReference(this)
         // Re-run hardware TV detection before the View-based player decides its loading layout.
         // The main activity normally does this already, but the player can be entered directly
         // (including after an activity/process restore), so its cinematic TV cover must never
@@ -3505,6 +3506,19 @@ class PlayerActivity : ComponentActivity() {
         ytBackgroundPlay.value = on
         runCatching { com.hikari.app.youtube.YouTubeSettings.setBackgroundPlay(this, on) }
         updatePipAutoEnter()
+        // Android 13+ hides the ongoing media notification without this
+        // runtime permission; ask once, when the feature is switched on.
+        if (on && Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            runCatching {
+                requestPermissions(
+                    arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+                    0x504C,
+                )
+            }
+        }
         Toast.makeText(
             this,
             if (on) I18n.t("Background play on — audio keeps going when you leave")
@@ -3708,6 +3722,7 @@ class PlayerActivity : ComponentActivity() {
         // Arm the dismiss guard (see [pipExitSilenceArmed]); the exit branch
         // below leaves it armed until onResume clears it.
         if (isInPictureInPictureMode) {
+            BackgroundPlaybackService.stop(this)
             pipExitSilenceArmed = true
             pipExitPending = false
             // The full player is the only decoder PiP should pay for. A corner
@@ -19683,6 +19698,9 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
      */
     override fun onResume() {
         super.onResume()
+        // The player is visible again: the background notification has done
+        // its job (the audio never stopped).
+        BackgroundPlaybackService.stop(this)
         // Back on the full screen — including a tap on the PiP window, on
         // every callback order. The deferred dismiss check dies here (an
         // expand must never finish), the dismiss marks clear, and a stop
@@ -19762,7 +19780,15 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
     }
 
     override fun onPause() {
-        if (isFinishing) silencePlaybackForExit()
+        if (isFinishing) {
+            silencePlaybackForExit()
+        } else if (!inPip && player?.isPlaying == true) {
+            // Leaving the app (or the screen locking) with audio running:
+            // promote the process to a mediaPlayback foreground service so the
+            // decoder is not frozen. PiP already keeps the player visible and
+            // needs no notification.
+            BackgroundPlaybackService.start(this)
+        }
         super.onPause()
     }
 
@@ -19904,10 +19930,51 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
         // The booster's gain stage dies with the player's audio sink — nothing
         // platform-side to release by hand. Drop the reference with the player.
         volumeBoostProcessor = null
+        if (activePlayer?.get() === this) activePlayer = null
+        BackgroundPlaybackService.stop(this)
         super.onDestroy()
     }
 
     companion object {
+        /** The player currently on screen. The background service holds this
+         *  weakly, so a finished activity is never kept alive by its own
+         *  notification. */
+        @Volatile private var activePlayer: java.lang.ref.WeakReference<PlayerActivity>? = null
+
+        internal fun serviceHandle(): PlayerActivity? = activePlayer?.get()
+
+        internal fun serviceTitle(): String =
+            serviceHandle()?.intent?.getStringExtra("title").orEmpty()
+
+        internal fun serviceSubtitle(): String {
+            val a = serviceHandle() ?: return ""
+            val episode = a.intent.getStringExtra("histEpisodeName").orEmpty()
+            if (episode.isNotBlank()) return episode
+            return if (a.intent.getBooleanExtra("ytPlayback", false)) "YouTube" else ""
+        }
+
+        internal fun serviceIsPlaying(): Boolean =
+            serviceHandle()?.player?.isPlaying == true
+
+        internal fun serviceEnded(): Boolean =
+            serviceHandle()?.player?.playbackState ==
+                androidx.media3.common.Player.STATE_ENDED
+
+        /** Notification play/pause. Runs on the activity's main thread. */
+        internal fun serviceToggle() {
+            val a = serviceHandle() ?: return
+            a.runOnUiThread {
+                val p = a.player ?: return@runOnUiThread
+                if (p.isPlaying) p.pause() else p.play()
+            }
+        }
+
+        /** Notification stop: pause, leave the player where it is. */
+        internal fun servicePause() {
+            val a = serviceHandle() ?: return
+            a.runOnUiThread { a.player?.pause() }
+        }
+
         /** State-bundle keys for the process-death playback snapshot (see
          *  [onSaveInstanceState] / [restorePlaybackState]). */
         private const val STATE_SOURCES = "hikari.playback.sources"
