@@ -85,7 +85,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -1193,8 +1192,9 @@ private fun AppDockBar(
     var appeared by remember { mutableStateOf(false) }
     var hoveredIndex by remember { mutableIntStateOf(-1) }
     // Long-press folds the dock into a small glass circle at the bottom-left
-    // corner; tapping the circle brings it back. Survives a rotation.
-    var collapsed by rememberSaveable { mutableStateOf(false) }
+    // corner; tapping the circle brings it back. Deliberately not persisted:
+    // a rotation must always show the dock again, centred at the bottom.
+    var collapsed by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { appeared = true }
 
     // One row, always. The cells share whatever width the window actually has,
