@@ -1,3 +1,17 @@
+## 0.16.0
+
+**23 November 2026**
+
+### A Mac dock that fits, and a player that keeps playing
+
+- **The navigation bar is now a Mac-style dock.** One row, always on screen: every tab shares the available width, the plate is centred in portrait and landscape, and it sits flush with the bottom edge. The old right-edge cut-off and the extra floor margin are gone.
+- **The dock answers the finger.** Icons rest small; sliding across the bar magnifies the icon under the finger (with a light haptic tick) and its neighbours follow in a smaller wave. Lifting opens that tab. When the finger leaves, every icon settles back to its base size, and only the running dot marks the current tab.
+- **Long-press folds the dock away.** Hold the bar and it becomes a glass circle in the bottom-left corner showing the current tab; tap the circle to unfold the dock. Rotating always returns the full bar.
+- **A tablet keeps its left rail**, with the tabs vertically centred at the left edge.
+- **YouTube controls no longer time out under a finger.** The five-second hide only counts idle chrome now; holding a button or dragging the seek bar keeps the controls up.
+- **Background play.** New mediaPlayback foreground service: audio keeps running when the app is put away or the screen locks, with a play/pause/stop notification. The YouTube Background button also stops PiP from taking over when you leave.
+- **YouTube player controls**: vertical swipes on the left/right adjust brightness and volume, Rotate is available from the overlay, and the player keeps its last frame while a source resets (no black blink between videos).
+
 ## 0.15.9
 
 **21 November 2026**
