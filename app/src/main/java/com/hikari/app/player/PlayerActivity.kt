@@ -2001,6 +2001,14 @@ class PlayerActivity : ComponentActivity() {
         hideSystemUi()
 
         playerView = findViewById(R.id.player_view)
+        // Keep the last decoded frame on screen while a source/video/quality
+        // switch rebuilds the player. Without this media3 paints the shutter
+        // black for a beat — the "YouTube blinks" report.
+        playerView?.keepScreenOn = true
+        runCatching { playerView?.setKeepContentOnPlayerReset(true) }
+        runCatching {
+            playerView?.setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+        }
         nextPreviewContainer = findViewById(R.id.next_preview_container)
         nextPreviewView = findViewById(R.id.next_preview_view)
         nextPreviewLabel = findViewById(R.id.next_preview_label)
@@ -2672,23 +2680,21 @@ class PlayerActivity : ComponentActivity() {
         // auto-enter when the user leaves the player with video playing (12+).
         // minSdk is 24, so the whole feature is gated on SDK >= 26 (API 26
         // introduced PiP).
+        if (intent.getBooleanExtra("ytPlayback", false)) {
+            ytBackgroundPlay.value = runCatching {
+                com.hikari.app.youtube.YouTubeSettings.backgroundPlay(this)
+            }.getOrDefault(false)
+        }
         val pipBtn = findViewById<TextView>(R.id.pip_btn)
         if (Build.VERSION.SDK_INT >= 26) {
             pipBtn?.setOnClickListener { enterPip() }
-            if (Build.VERSION.SDK_INT >= 31) {
-                // API 31+ prefers setAutoEnterEnabled over onUserLeaveHint so
-                // the enter fires exactly once — but only when PiP is actually
-                // allowed (see isPipAllowedNow): with PiP turned off at OS level
-                // a doomed auto-enter attempt is what flashed a PiP window and
-                // had the dismiss check finish the player behind the user's back.
-                setPictureInPictureParams(
-                    PictureInPictureParams.Builder()
-                        .setAspectRatio(Rational(16, 9))
-                        .setAutoEnterEnabled(isPipAllowedNow())
-                        .also { b -> runCatching { b.setSeamlessResizeEnabled(true) } }
-                        .build()
-                )
-            }
+            // API 31+ prefers setAutoEnterEnabled over onUserLeaveHint so the
+            // enter fires exactly once — but only when PiP is actually allowed
+            // (see isPipAllowedNow) and background audio did not take over.
+            // With PiP turned off at OS level a doomed auto-enter attempt is
+            // what flashed a PiP window and had the dismiss check finish the
+            // player behind the user's back.
+            updatePipAutoEnter()
         } else {
             pipBtn?.visibility = View.GONE
         }
@@ -2814,22 +2820,7 @@ class PlayerActivity : ComponentActivity() {
                             updateScrubTimeBar(scrubTargetMs)
                         }
                     }
-                    if (verticalMode != 0) {
-                        val travel = playerView?.height?.toFloat()?.takeIf { it > 0f }
-                            ?: resources.displayMetrics.heightPixels.toFloat()
-                        // Swipe UP (a negative dy) increases the value. The gain
-                        // is deliberately high: with a 1:1 mapping the sliders
-                        // moved so slowly that the user had to swipe the whole
-                        // screen 8-9 times to reach the end. GESTURE_SWIPE_GAIN
-                        // makes roughly a quarter of a screen-height swipe cover
-                        // the full range.
-                        val delta = -((event.y - downY) / travel) * GESTURE_SWIPE_GAIN
-                        if (verticalMode == 1) {
-                            applyBrightness(startBrightness + delta)
-                        } else {
-                            applyVolume(startVolume + (delta * maxVolume).roundToInt())
-                        }
-                    }
+                    if (verticalMode != 0) applyVerticalDrag(event.y - downY)
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     holdSpeedTimer?.let { speedHandler.removeCallbacks(it) }
@@ -3492,6 +3483,36 @@ class PlayerActivity : ComponentActivity() {
         }.getOrDefault(true)
     }
 
+    /** Keeps the system's auto-enter flag in step with the YouTube overlay's
+     *  "Background" toggle. With background audio on, leaving the app must NOT
+     *  open a PiP window: the sound keeps playing on its own. */
+    private fun updatePipAutoEnter() {
+        if (Build.VERSION.SDK_INT < 31) return
+        runCatching {
+            setPictureInPictureParams(
+                PictureInPictureParams.Builder()
+                    .setAspectRatio(Rational(16, 9))
+                    .setAutoEnterEnabled(isPipAllowedNow() && !ytBackgroundPlay.value)
+                    .also { b -> runCatching { b.setSeamlessResizeEnabled(true) } }
+                    .build()
+            )
+        }
+    }
+
+    /** The YouTube overlay's Background button: persist the choice and make
+     *  the PiP policy follow it immediately. */
+    private fun setYouTubeBackgroundPlay(on: Boolean) {
+        ytBackgroundPlay.value = on
+        runCatching { com.hikari.app.youtube.YouTubeSettings.setBackgroundPlay(this, on) }
+        updatePipAutoEnter()
+        Toast.makeText(
+            this,
+            if (on) I18n.t("Background play on — audio keeps going when you leave")
+            else I18n.t("Background play off"),
+            Toast.LENGTH_SHORT,
+        ).show()
+    }
+
     // ---- YouTube "More Videos" (the list the current video came from) ----
 
     private val ytVideoId = androidx.compose.runtime.mutableStateOf("")
@@ -3500,6 +3521,11 @@ class PlayerActivity : ComponentActivity() {
     /** The reference player chrome is up: TV keys belong to Compose, not to
      *  the generic player controller hidden behind it. */
     @Volatile private var youTubeOverlayActive = false
+
+    /** YouTube overlay: keep audio playing when the app is left, instead of
+     *  dropping into a PiP window. Compose state so the overlay's button
+     *  reflects the toggle immediately. */
+    private val ytBackgroundPlay = androidx.compose.runtime.mutableStateOf(false)
 
     private fun setupYouTubeMoreVideos() {
         if (!intent.getBooleanExtra("ytPlayback", false)) return
@@ -3530,6 +3556,12 @@ class PlayerActivity : ComponentActivity() {
                     onBack = { finish() },
                     onSwitchVideo = { switchYouTubeVideo(it) },
                     onQuality = { height -> applyYouTubeQualityChoice(height) },
+                    onSwipeStart = { x -> beginExternalVerticalSwipe(x) },
+                    onSwipe = { dy -> updateExternalVerticalSwipe(dy) },
+                    onSwipeEnd = { endExternalVerticalSwipe() },
+                    onRotate = { cycleRotation() },
+                    backgroundPlay = ytBackgroundPlay.value,
+                    onBackgroundPlay = { on -> setYouTubeBackgroundPlay(on) },
                 )
             }
         }
@@ -3660,7 +3692,7 @@ class PlayerActivity : ComponentActivity() {
         super.onUserLeaveHint()
         if (Build.VERSION.SDK_INT in 26..30) {
             if (inPip || isFinishing) return
-            if (player?.isPlaying == true && isPipAllowedNow()) enterPip()
+            if (!ytBackgroundPlay.value && player?.isPlaying == true && isPipAllowedNow()) enterPip()
         }
     }
 
@@ -4778,6 +4810,44 @@ class PlayerActivity : ComponentActivity() {
             fill.layoutParams = lp
         }
         thumb?.let { it.translationY = -(fillPx - it.height / 2f) }
+    }
+
+    /** Moves the active brightness/volume slider by the drag distance from the
+     *  gesture's start point. Shared by the native surface and the YouTube
+     *  Compose chrome, so both obey the same gain and the same HUD. */
+    private fun applyVerticalDrag(totalDy: Float) {
+        val travel = playerView?.height?.toFloat()?.takeIf { it > 0f }
+            ?: resources.displayMetrics.heightPixels.toFloat()
+        // Swipe UP (a negative dy) increases the value. The gain is deliberately
+        // high: with a 1:1 mapping the sliders moved so slowly that the user
+        // had to swipe the whole screen 8-9 times to reach the end.
+        // GESTURE_SWIPE_GAIN makes roughly a quarter of a screen-height swipe
+        // cover the full range.
+        val delta = -(totalDy / travel) * GESTURE_SWIPE_GAIN
+        if (verticalMode == 1) {
+            applyBrightness(startBrightness + delta)
+        } else {
+            applyVolume(startVolume + (delta * maxVolume).roundToInt())
+        }
+    }
+
+    /** The YouTube chrome's vertical drag begins — same HUD as the generic
+     *  player, which the Compose overlay would otherwise cover. */
+    private fun beginExternalVerticalSwipe(x: Float) {
+        if (!swipesEnabled || controlsLocked) return
+        downX = x
+        playerView?.hideController()
+        beginVerticalGesture()
+    }
+
+    private fun updateExternalVerticalSwipe(totalDy: Float) {
+        if (verticalMode == 0 || controlsLocked) return
+        applyVerticalDrag(totalDy)
+    }
+
+    private fun endExternalVerticalSwipe() {
+        if (verticalMode == 0) return
+        endVerticalGesture()
     }
 
     /** Fades the gesture HUD out a moment after the finger lifts (cancelled if
@@ -19628,16 +19698,11 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
         // Re-assert the auto-enter permission every return: the user can flip
         // PiP for Hikari in OS settings while the app is alive, and stale
         // params would auto-enter into a denial (or miss an allowed enter).
-        if (Build.VERSION.SDK_INT >= 31) {
-            runCatching {
-                setPictureInPictureParams(
-                    PictureInPictureParams.Builder()
-                        .setAspectRatio(Rational(16, 9))
-                        .setAutoEnterEnabled(isPipAllowedNow())
-                        .build()
-                )
-            }
-        }
+        updatePipAutoEnter()
+        // Some OEMs clear the window flag when an activity returns from a
+        // dialog or a screen-off; re-assert it so a playing video never lets
+        // the screen time out underneath the user.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         hideSystemUi()
         // The remote's targets are set up once the whole window exists (see
         // [applyTvFocus]); a no-op on every device that is not a television.

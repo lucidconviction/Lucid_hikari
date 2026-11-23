@@ -26,6 +26,7 @@ object YouTubeSettings {
     private const val KEY_CODEC = "codec_preference"
     private const val KEY_FEED_PREVIEW = "feed_preview"
     private const val KEY_CONTENT_REGION = "content_region"
+    private const val KEY_BACKGROUND_PLAY = "background_play"
 
     /** SponsorBlock's segment types, in the order they're listed. */
     val sponsorCategories: List<Pair<String, String>> = listOf(
@@ -108,6 +109,12 @@ object YouTubeSettings {
     /** Open on the tab you were last on; off means the first tab each time. */
     fun rememberLastTab(context: Context) = prefs(context).getBoolean(KEY_REMEMBER_TAB, true)
     fun setRememberLastTab(context: Context, on: Boolean) = prefs(context).edit().putBoolean(KEY_REMEMBER_TAB, on).apply()
+
+    /** Keep the sound playing when the app is left (audio only, no PiP window).
+     *  The player reads this before deciding whether to drop into PiP. */
+    fun backgroundPlay(context: Context) = prefs(context).getBoolean(KEY_BACKGROUND_PLAY, false)
+    fun setBackgroundPlay(context: Context, on: Boolean) =
+        prefs(context).edit().putBoolean(KEY_BACKGROUND_PLAY, on).apply()
 
     /** The playback speed you last picked on a YouTube video, used to start the next one. */
     fun playbackSpeed(context: Context) = prefs(context).getFloat(KEY_SPEED, 1f)

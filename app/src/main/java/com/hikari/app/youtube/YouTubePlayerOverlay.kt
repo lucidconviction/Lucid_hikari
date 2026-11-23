@@ -7,6 +7,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,6 +31,7 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Comment
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.NotificationsNone
@@ -42,6 +44,7 @@ import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.WatchLater
+import androidx.compose.material.icons.outlined.ScreenRotation
 import androidx.compose.material.icons.outlined.ThumbDown
 import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material3.Button
@@ -119,7 +122,9 @@ private const val YT_COMMENTS_CONTROL = 8
 private const val YT_LIKE_CONTROL = 9
 private const val YT_DISLIKE_CONTROL = 10
 private const val YT_NEXT_VIDEO_CONTROL = 11
-private const val YT_SEEK_CONTROL = 12
+private const val YT_ROTATE_CONTROL = 12
+private const val YT_BACKGROUND_CONTROL = 13
+private const val YT_SEEK_CONTROL = 14
 
 /** An open side panel owns the remote: the ring behind it must not take focus. */
 private val LocalYtPanelOpen = compositionLocalOf { false }
@@ -132,6 +137,12 @@ fun YouTubePlayerOverlay(
     onBack: () -> Unit,
     onSwitchVideo: (YouTubePlayRequest) -> Unit,
     onQuality: (Int) -> Unit,
+    onSwipeStart: (Float) -> Unit = {},
+    onSwipe: (Float) -> Unit = {},
+    onSwipeEnd: () -> Unit = {},
+    onRotate: () -> Unit = {},
+    backgroundPlay: Boolean = false,
+    onBackgroundPlay: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -400,6 +411,8 @@ fun YouTubePlayerOverlay(
             YT_LIKE_CONTROL -> react(1)
             YT_DISLIKE_CONTROL -> react(2)
             YT_NEXT_VIDEO_CONTROL -> goNext()
+            YT_ROTATE_CONTROL -> onRotate()
+            YT_BACKGROUND_CONTROL -> onBackgroundPlay(!backgroundPlay)
             YT_SEEK_CONTROL -> playerProvider()?.let { if (it.isPlaying) it.pause() else it.play() }
         }
     }
@@ -451,7 +464,7 @@ fun YouTubePlayerOverlay(
                                 when {
                                     controlIndex == YT_SEEK_CONTROL -> seekBy(-YT_SEEK_STEP_MS)
                                     controlIndex == YT_PLAY_CONTROL -> controlIndex = YT_BACK_CONTROL
-                                    controlIndex in YT_LAST_VIDEO_CONTROL..YT_NEXT_VIDEO_CONTROL ->
+                                    controlIndex in YT_LAST_VIDEO_CONTROL..YT_BACKGROUND_CONTROL ->
                                         controlIndex =
                                             (controlIndex - 1).coerceAtLeast(YT_LAST_VIDEO_CONTROL)
                                 }
@@ -461,9 +474,9 @@ fun YouTubePlayerOverlay(
                                 when {
                                     controlIndex == YT_SEEK_CONTROL -> seekBy(YT_SEEK_STEP_MS)
                                     controlIndex == YT_BACK_CONTROL -> controlIndex = YT_PLAY_CONTROL
-                                    controlIndex in YT_LAST_VIDEO_CONTROL..YT_NEXT_VIDEO_CONTROL ->
+                                    controlIndex in YT_LAST_VIDEO_CONTROL..YT_BACKGROUND_CONTROL ->
                                         controlIndex =
-                                            (controlIndex + 1).coerceAtMost(YT_NEXT_VIDEO_CONTROL)
+                                            (controlIndex + 1).coerceAtMost(YT_BACKGROUND_CONTROL)
                                 }
                                 return@onPreviewKeyEvent true
                             }
@@ -472,7 +485,7 @@ fun YouTubePlayerOverlay(
                                     controlIndex == YT_SEEK_CONTROL -> controlIndex = YT_INFO_CONTROL
                                     controlIndex in YT_LAST_VIDEO_CONTROL..YT_INFO_CONTROL ->
                                         controlIndex = YT_BACK_CONTROL
-                                    controlIndex in YT_MORE_CONTROL..YT_NEXT_VIDEO_CONTROL ->
+                                    controlIndex in YT_MORE_CONTROL..YT_BACKGROUND_CONTROL ->
                                         controlIndex = YT_PLAY_CONTROL
                                 }
                                 return@onPreviewKeyEvent true
@@ -483,7 +496,7 @@ fun YouTubePlayerOverlay(
                                         controlIndex = YT_LAST_VIDEO_CONTROL
                                     controlIndex == YT_PLAY_CONTROL ->
                                         controlIndex = YT_NEXT_VIDEO_CONTROL
-                                    controlIndex in YT_LAST_VIDEO_CONTROL..YT_NEXT_VIDEO_CONTROL ->
+                                    controlIndex in YT_LAST_VIDEO_CONTROL..YT_BACKGROUND_CONTROL ->
                                         controlIndex = YT_SEEK_CONTROL
                                 }
                                 return@onPreviewKeyEvent true
@@ -510,6 +523,42 @@ fun YouTubePlayerOverlay(
                             if (showControls) showControls = false else poke()
                         }
                     }
+                }
+                // Brightness / volume: the generic player's vertical swipes sit
+                // on the native surface, which this Compose chrome sits over.
+                // Hand the drag back to the activity so both players share one
+                // HUD, one gain curve and one settings switch.
+                .pointerInput(panel) {
+                    var total = 0f
+                    var active = false
+                    detectVerticalDragGestures(
+                        onDragStart = { offset ->
+                            if (panel == null) {
+                                active = true
+                                total = 0f
+                                onSwipeStart(offset.x)
+                            }
+                        },
+                        onVerticalDrag = { change, dragAmount ->
+                            if (active) {
+                                total += dragAmount
+                                onSwipe(total)
+                                change.consume()
+                            }
+                        },
+                        onDragEnd = {
+                            if (active) {
+                                active = false
+                                onSwipeEnd()
+                            }
+                        },
+                        onDragCancel = {
+                            if (active) {
+                                active = false
+                                onSwipeEnd()
+                            }
+                        },
+                    )
                 }
         )
 
@@ -650,6 +699,19 @@ fun YouTubePlayerOverlay(
                             focused = controlIndex == YT_NEXT_VIDEO_CONTROL,
                             busy = nextBusy,
                             onClick = { activateControl(YT_NEXT_VIDEO_CONTROL) },
+                        )
+                        YtControl(
+                            label = "Rotate",
+                            icon = Icons.Outlined.ScreenRotation,
+                            focused = controlIndex == YT_ROTATE_CONTROL,
+                            onClick = { activateControl(YT_ROTATE_CONTROL) },
+                        )
+                        YtControl(
+                            label = "Background",
+                            icon = Icons.Filled.Headphones,
+                            focused = controlIndex == YT_BACKGROUND_CONTROL,
+                            active = backgroundPlay,
+                            onClick = { activateControl(YT_BACKGROUND_CONTROL) },
                         )
                     }
 
