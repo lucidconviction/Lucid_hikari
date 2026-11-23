@@ -3,19 +3,23 @@ import com.hikari.app.i18n.tr
 
 import android.net.Uri
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -25,13 +29,16 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.CircleShape
@@ -87,10 +94,14 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.zIndex
 import kotlinx.coroutines.delay
+import kotlin.math.abs
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -659,10 +670,11 @@ object Routes {
 /**
  * The bottom bar's four looks (Settings → App Layout → Taskbar & navigation).
  *
- *  * [ANIMATED] — a small floating pill; as the user scrolls back up towards the
- *    top of a page it draws itself in — narrower, shorter, and with the button
- *    names set aside so only the icons are left — and settles back out on any
- *    downward scroll (or a tab change). This is the default layout.
+ *  * [ANIMATED] — the Mac-style dock: a floating smoked-glass plate with
+ *    square, gradient-tinted icon tiles. The selected tab lifts, magnifies and
+ *    gains a running-app dot; the dock keeps a generous margin from the bottom
+ *    edge. Scrolling up draws it in slightly; scrolling down settles it back
+ *    out. This is the default layout.
  *  * [FLOATING] — the detached glass pill, always the same size.
  *  * [COMPACT] — the drawn-in pill, permanently: the animated layout's small
  *    state without the animation. For anyone who wants the taskbar out of the
@@ -693,10 +705,10 @@ object NavStyles {
     val ALL = listOf(
         Option(
             ANIMATED,
-            "Floating animation",
-            "A small floating pill that draws itself in as you scroll up."
+            "Mac dock",
+            "A floating smoked-glass dock whose icons lift and magnify as you move between tabs."
         ),
-        Option(FLOATING, "Floating", "A rounded glass pill that hovers above the page."),
+        Option(FLOATING, "Dock (always on)", "The Mac-style dock, kept at full size."),
         Option(
             COMPACT,
             "Always compact",
@@ -739,6 +751,10 @@ object BarMetrics {
     val margin = 8.dp
     val midMargin = 6.dp
 
+    /** The Mac dock's resting plate and its deliberately generous floor gap. */
+    val dockHeight = 84.dp
+    val dockMargin = 16.dp
+
     /**
      * What a tab page must leave clear at the bottom of its scrolling content,
      * so the last row can be scrolled out from under the bar. The bar itself
@@ -752,6 +768,7 @@ object BarMetrics {
     fun inset(style: String): Dp = when (style) {
         NavStyles.CLASSIC -> classicHeight
         NavStyles.COMPACT -> midHeight + midMargin * 2
+        NavStyles.ANIMATED -> dockHeight + dockMargin * 2
         else -> fullHeight + margin * 2
     }
 }
@@ -782,6 +799,22 @@ private fun AppBottomBar(
     val tabs = BottomTabs.filter { it.route !in hidden }.ifEmpty { BottomTabs }
     val glass = rememberGlassTokens()
     val style = NavStyles.normalize(navStyle)
+    // The default layout is the Mac dock: a separate drawing path, because a
+    // dock is not just a recoloured pill — its icon tiles lift out of the
+    // plate, so it cannot share the labelled-cell bar below.
+    if (style == NavStyles.ANIMATED || style == NavStyles.FLOATING) {
+        AppDockBar(
+            currentRoute = currentRoute,
+            tabs = tabs,
+            // The floating choice is the same dock, kept at full size; the
+            // animated one is the dock that draws itself in while scrolling.
+            expanded = style == NavStyles.FLOATING || expanded,
+            showLabels = showLabels,
+            onNavigate = onNavigate,
+            modifier = modifier,
+        )
+        return
+    }
     // The animated layout is the same bar in two states: the full, labelled bar
     // the app rests on, and a smaller floating pill it draws back into as the
     // user scrolls up towards the top of a page (see [AppRoot], which tracks
@@ -1083,6 +1116,345 @@ private fun AppBottomBar(
             }
         }
     }
+}
+
+/**
+ * The Mac-style dock (the default taskbar look).
+ *
+ * A centred, smoked-glass plate with a real floor gap, holding square
+ * gradient-tinted icon tiles instead of flat glyphs. The selected tile lifts
+ * and magnifies with a spring, its neighbours follow at a smaller scale, and a
+ * running-app dot marks where the user is. Scrolling up draws the whole dock in
+ * a little; scrolling down settles it back out (see [AppRoot]'s `barExpanded`).
+ *
+ * Kept separate from [AppBottomBar] because this is not a recoloured pill: the
+ * tiles have their own material, the bar hugs its content instead of spanning
+ * the screen, and the icon motion is the feature.
+ */
+@Composable
+private fun AppDockBar(
+    currentRoute: String?,
+    tabs: List<BottomTab>,
+    expanded: Boolean,
+    showLabels: Boolean,
+    onNavigate: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val glass = rememberGlassTokens()
+    val selectedIndex = tabs.indexOfFirst { it.route == currentRoute }.coerceAtLeast(0)
+    val scrollState = rememberScrollState()
+    var appeared by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { appeared = true }
+
+    val labelsOn = showLabels && expanded
+    val cellWidth by animateDpAsState(
+        targetValue = if (expanded) 56.dp else 46.dp,
+        animationSpec = spring(dampingRatio = 0.62f, stiffness = 520f),
+        label = "dockCell",
+    )
+    val barHeight by animateDpAsState(
+        targetValue = when {
+            !expanded -> 58.dp
+            labelsOn -> BarMetrics.dockHeight
+            else -> 66.dp
+        },
+        animationSpec = spring(dampingRatio = 0.62f, stiffness = 520f),
+        label = "dockHeight",
+    )
+    val floorGap by animateDpAsState(
+        targetValue = if (expanded) BarMetrics.dockMargin else 10.dp,
+        animationSpec = spring(dampingRatio = 0.66f, stiffness = 460f),
+        label = "dockGap",
+    )
+    val shape = RoundedCornerShape(if (expanded) 26.dp else 22.dp)
+    val plate = if (glass.dark) {
+        Brush.verticalGradient(
+            listOf(
+                Color(0xFF2A2B34).copy(alpha = 0.78f),
+                Color(0xFF121319).copy(alpha = 0.90f),
+            )
+        )
+    } else {
+        Brush.verticalGradient(
+            listOf(
+                Color.White.copy(alpha = 0.94f),
+                Color.White.copy(alpha = 0.78f),
+            )
+        )
+    }
+
+    AnimatedVisibility(
+        visible = appeared,
+        enter = slideInVertically(tween(420)) { it / 3 } + fadeIn(tween(300)),
+        modifier = modifier,
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                // Explicit height: AnimatedVisibility is happy to measure its
+                // content against the whole screen, and with a matchParentSize
+                // plate inside, that turned the dock into a full-screen scrim.
+                // The dock is exactly the plate plus its floor gap.
+                .height(barHeight + floorGap * 2)
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .padding(horizontal = 16.dp, vertical = floorGap),
+            contentAlignment = Alignment.Center,
+        ) {
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val viewport = maxWidth
+                val contentWidth = minOf(cellWidth * tabs.size + 20.dp, viewport)
+                val density = LocalDensity.current
+                val cellPx = with(density) { cellWidth.toPx() }
+                val viewportPx = with(density) { viewport.toPx() }
+                val dockFits = cellWidth * tabs.size <= viewport
+                // Keep the active tab centred when the dock scrolls, exactly
+                // like the old bar: a deep link can land on any tab.
+                LaunchedEffect(currentRoute, tabs, cellWidth, viewport) {
+                    val index = tabs.indexOfFirst { it.route == currentRoute }
+                    if (index < 0) return@LaunchedEffect
+                    val contentPx = cellPx * tabs.size
+                    if (contentPx <= viewportPx) {
+                        scrollState.animateScrollTo(0)
+                        return@LaunchedEffect
+                    }
+                    val target = (index * cellPx - (viewportPx - cellPx) / 2f)
+                        .toInt()
+                        .coerceAtLeast(0)
+                    scrollState.animateScrollTo(target)
+                }
+                Box(Modifier.width(contentWidth).height(barHeight)) {
+                    // The plate is a sibling of the icons rather than their
+                    // parent, so a lifted tile is never clipped by the glass.
+                    Box(
+                        Modifier
+                            .matchParentSize()
+                            .shadow(if (glass.dark) 0.dp else 18.dp, shape)
+                            .clip(shape)
+                            .background(plate)
+                            .border(
+                                1.dp,
+                                if (glass.dark) Color.White.copy(alpha = 0.14f)
+                                else Color.Black.copy(alpha = 0.08f),
+                                shape,
+                            )
+                            .then(Modifier.glassSheen(glass))
+                    )
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(barHeight)
+                            .horizontalScroll(scrollState)
+                            .padding(horizontal = 8.dp, vertical = 3.dp),
+                        horizontalArrangement = if (dockFits) {
+                            Arrangement.SpaceEvenly
+                        } else {
+                            Arrangement.Start
+                        },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        tabs.forEachIndexed { index, tab ->
+                            DockTab(
+                                tab = tab,
+                                selected = currentRoute == tab.route,
+                                distance = abs(index - selectedIndex),
+                                expanded = expanded,
+                                showLabel = labelsOn,
+                                width = cellWidth,
+                                onClick = { onNavigate(tab.route) },
+                            )
+                        }
+                    }
+                    // A dock that scrolls should fade its cut edge, not slice
+                    // an icon in half. The fade matches the plate, so the last
+                    // tile dissolves into the glass and the row reads as
+                    // "there is more" instead of "the bar is broken".
+                    if (!dockFits) {
+                        val fadeColor = if (glass.dark) Color(0xFF0B0C10) else Color.White
+                        Box(
+                            Modifier
+                                .align(Alignment.CenterEnd)
+                                .width(28.dp)
+                                .fillMaxHeight()
+                                .background(
+                                    Brush.horizontalGradient(
+                                        listOf(Color.Transparent, fadeColor.copy(alpha = 0.92f))
+                                    )
+                                )
+                        )
+                        if (scrollState.value > 4) {
+                            Box(
+                                Modifier
+                                    .align(Alignment.CenterStart)
+                                    .width(24.dp)
+                                    .fillMaxHeight()
+                                    .background(
+                                        Brush.horizontalGradient(
+                                            listOf(fadeColor.copy(alpha = 0.92f), Color.Transparent)
+                                        )
+                                    )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** One app-style tile in the dock. The tile carries its own tinted glass, a
+ *  gloss along the top edge, a spring lift and the macOS running-app dot. */
+@Composable
+private fun DockTab(
+    tab: BottomTab,
+    selected: Boolean,
+    distance: Int,
+    expanded: Boolean,
+    showLabel: Boolean,
+    width: Dp,
+    onClick: () -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val pressed by interaction.collectIsPressedAsState()
+    val (top, bottom) = dockTint(tab.route)
+    val labelColor = MaterialTheme.colorScheme.onSurface
+    val scale by animateFloatAsState(
+        targetValue = when {
+            pressed -> 1.26f
+            hovered -> 1.30f
+            selected -> 1.16f
+            distance == 1 -> 1.07f
+            distance == 2 -> 1.03f
+            else -> 1f
+        },
+        animationSpec = spring(dampingRatio = 0.54f, stiffness = 520f),
+        label = "dockTileScale",
+    )
+    val lift by animateDpAsState(
+        targetValue = when {
+            pressed || hovered -> 7.dp
+            selected -> 5.dp
+            distance == 1 -> 1.5.dp
+            else -> 0.dp
+        },
+        animationSpec = spring(dampingRatio = 0.60f, stiffness = 500f),
+        label = "dockTileLift",
+    )
+    val dotAlpha by animateFloatAsState(
+        targetValue = if (selected) 1f else 0f,
+        animationSpec = tween(180),
+        label = "dockDot",
+    )
+    val tileShape = RoundedCornerShape(13.dp)
+    Column(
+        Modifier
+            .width(width)
+            .fillMaxHeight()
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Box(
+            Modifier
+                .size(42.dp)
+                .offset(y = -lift)
+                .graphicsLayer { scaleX = scale; scaleY = scale }
+                // A soft halo in the tab's own colour is the dock's "glow":
+                // no blur pass, just a radial wash behind the tile.
+                .drawBehind {
+                    drawRoundRect(
+                        brush = Brush.radialGradient(
+                            colors = listOf(top.copy(alpha = if (selected) 0.34f else 0.12f), Color.Transparent),
+                            center = center,
+                            radius = size.maxDimension * 0.95f,
+                        ),
+                    )
+                }
+                .clip(tileShape)
+                .background(
+                    Brush.linearGradient(
+                        listOf(
+                            if (selected) top else top.copy(alpha = 0.62f),
+                            if (selected) bottom else bottom.copy(alpha = 0.55f),
+                        )
+                    )
+                )
+                .border(
+                    1.dp,
+                    Color.White.copy(alpha = if (selected) 0.34f else 0.18f),
+                    tileShape,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            // Gloss: the top third catches the light, the rest falls away.
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(18.dp)
+                    .align(Alignment.TopCenter)
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(Color.White.copy(alpha = 0.20f), Color.Transparent)
+                        )
+                    )
+            )
+            Icon(
+                tab.icon,
+                contentDescription = tr(tab.label),
+                tint = Color.White.copy(alpha = if (selected) 1f else 0.9f),
+                modifier = Modifier.size(if (expanded) 22.dp else 20.dp),
+            )
+        }
+        Spacer(Modifier.height(2.dp))
+        Box(
+            Modifier
+                .size(4.dp)
+                .alpha(dotAlpha)
+                .clip(CircleShape)
+                .background(if (MaterialTheme.colorScheme.background.luminance() < 0.5f) Color.White.copy(alpha = 0.9f) else top)
+        )
+        if (showLabel) {
+            Spacer(Modifier.height(1.dp))
+            Text(
+                tr(tab.label),
+                color = if (selected) labelColor.copy(alpha = 0.92f) else labelColor.copy(alpha = 0.55f),
+                // An explicit compact line box: the ambient body style's line
+                // height is ~20sp and pushed this 8sp label out of the plate.
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 9.sp,
+                    lineHeight = 10.sp,
+                ),
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+/** The dock tile tints: each tab keeps its own colour pair, so the dock reads
+ *  as a row of app icons instead of fifteen copies of the accent. Bright top,
+ *  deep bottom is the same light direction every glass panel uses. */
+private fun dockTint(route: String): Pair<Color, Color> = when (route) {
+    Routes.HOME -> Color(0xFF6EA8FF) to Color(0xFF2C52D8)
+    Routes.ANIME_CALENDAR -> Color(0xFFB57BFF) to Color(0xFF6B2BC4)
+    Routes.SEARCH -> Color(0xFF4EDBC8) to Color(0xFF117C74)
+    Routes.LIBRARY -> Color(0xFFFFB968) to Color(0xFFB86414)
+    Routes.SPORTS -> Color(0xFF63E590) to Color(0xFF1B8646)
+    Routes.YOUTUBE -> Color(0xFFFF7373) to Color(0xFFAD1E1E)
+    Routes.MUSIC -> Color(0xFFFF83CD) to Color(0xFF9E1C6B)
+    Routes.MANGA -> Color(0xFFFFD46B) to Color(0xFFB07A0A)
+    Routes.IPTV -> Color(0xFF62D4FF) to Color(0xFF146A9C)
+    Routes.MULTI_VIEW -> Color(0xFF9FA9FF) to Color(0xFF4132B0)
+    Routes.STATS -> Color(0xFFB2E66B) to Color(0xFF4B8518)
+    Routes.TELEGRAM -> Color(0xFF79BCFF) to Color(0xFF1C6BBE)
+    Routes.WEBSITES -> Color(0xFF8FD8FF) to Color(0xFF286787)
+    Routes.EXTENSIONS -> Color(0xFFCA97FF) to Color(0xFF662BA4)
+    Routes.SETTINGS -> Color(0xFFB6BEC9) to Color(0xFF545C69)
+    else -> Color(0xFF8E9AA8) to Color(0xFF3B424C)
 }
 
 /** One button on the floating bottom bar. Public so Settings can render a
