@@ -6,8 +6,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -149,6 +152,8 @@ fun YouTubePlayerOverlay(
     val feed = YouTubeSession.feed
 
     var showControls by remember { mutableStateOf(true) }
+    /** A finger is on the chrome: freeze the auto-hide while it is there. */
+    var interacting by remember { mutableStateOf(false) }
     var panel by remember { mutableStateOf<YtPlayerPanel?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
 
@@ -180,11 +185,12 @@ fun YouTubePlayerOverlay(
     // Controls time out five seconds after the last key, exactly like the
     // reference. The root keeps focus while they are gone so the next press
     // reaches the ring handler instead of being lost on the video surface.
-    LaunchedEffect(showControls, controlsTick, panel) {
-        if (panel != null) return@LaunchedEffect
+    LaunchedEffect(showControls, controlsTick, panel, interacting) {
+        if (panel != null || interacting) return@LaunchedEffect
         if (showControls) {
             delay(5_000L)
-            showControls = false
+            // A control press may have started between the delay and here.
+            if (!interacting) showControls = false
         } else {
             delay(30L)
             runCatching { rootFocus.requestFocus() }
@@ -522,6 +528,18 @@ fun YouTubePlayerOverlay(
                         if (panel == null) {
                             if (showControls) showControls = false else poke()
                         }
+                    }
+                }
+                // The five-second timer is for an idle chrome, not a hand on
+                // it. Track the whole touch (including a held button or a seek
+                // drag) and pause the countdown until the finger lifts; the
+                // control's own click/seek then pokes it for another five.
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false)
+                        interacting = true
+                        waitForUpOrCancellation()
+                        interacting = false
                     }
                 }
                 // Brightness / volume: the generic player's vertical swipes sit
