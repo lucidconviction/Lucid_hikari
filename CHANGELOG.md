@@ -1,3 +1,20 @@
+## 0.17.0
+
+**25 November 2026**
+
+### A web app market, a Telegram queue, and a browser that asks first
+
+- **Web App Market.** A new store for saved web apps: curated categories, full-bleed HD icons, and a searchable catalogue seeded with 414 SFW apps from FMHY. Adult sources stay runtime-only and behind the existing NSFW gate; source names never appear in the market UI. Saved web apps now size 30% larger on a tablet.
+- **A proper tablet dock.** The bottom bar becomes an icon-only vertical dock on the left edge on tablets, with the same magnification wave, running dot, haptics and long-press fold. Folding it on a tablet (or a phone) opens the full tab page instead of a tiny circle.
+- **Telegram autoplay.** Films and videos in a chat, channel grid or chat search results carry the loaded list into the player as a queue. The last 12 seconds start the next video muted in the corner ("Up next"), then hand off in place with sound; with preview off, the player advances directly. TDLib and public CDN videos both work, and the queue stops at the last item.
+- **Picture-in-picture, everywhere.** The in-app floating PIP panes now promote their active pane to an Android system PiP window when the app is backgrounded. The other panes pause and release their decoders, then return at their saved position; closing the PiP ✕ stops the audio. `PlayerActivity`'s own PiP is unchanged.
+- **IPTV group management.** Long-press a group in a playlist: rename, move up/down, hide/restore, or lock it. Hidden groups keep their channels in All channels and search, catalog IDs stay unchanged, and only the playlist's own Groups mode is editable.
+- **Browser redirects are blocked in the background.** A tap approves only the exact link it points at; script, meta-refresh and server redirects that follow are cancelled silently — the page you were reading stays put, the redirect target never renders, and the only trace is a short "Blocked redirect to host" toast. Whitelisted ad hosts no longer bypass the gate, and a last-resort page-start check catches redirects that skip the normal navigation hook. The ⋮ menu's **Allow redirect to host** is the one-tap escape hatch, and allowed hosts stay reversible in Settings → Privacy & Browsing → WebView safety.
+- **External app calls ask too.** `intent://`, `market://`, `mailto:`, `tel:` and custom schemes no longer launch silently; the target app's own label is shown, with the same three choices and persistence.
+- **The browser address bar stays above the keyboard.** The edge-to-edge WebView now reserves the IME bottom inset, so the bottom bar and bookmark strip remain visible and usable while typing.
+- **Go to Web Apps** sits directly under **Go to app home** in the browser menu.
+- **Bigger dock pop-out.** Icon magnification grows by 50% on the vertical tablet dock and 150% on the phone dock in both portrait and landscape.
+
 ## 0.16.0
 
 **23 November 2026**

@@ -180,6 +180,7 @@ import com.hikari.app.ui.screens.SportsLeagueScreen
 import com.hikari.app.ui.screens.StatsScreen
 import com.hikari.app.ui.screens.TelegramScreen
 import com.hikari.app.ui.screens.WebsitesScreen
+import com.hikari.app.ui.screens.WebAppMarketScreen
 import com.hikari.app.ui.screens.TmdbGridScreen
 import com.hikari.app.ui.theme.HikariThemeMode
 import com.hikari.app.ui.theme.glassSheen
@@ -292,6 +293,10 @@ object Routes {
      *  [com.hikari.app.ui.screens.WebsitesScreen]). ON by default — any install
      *  with added sites needs a one-tap home for them. */
     const val WEBSITES = "websites"
+
+    /** The Web App Market sub-page. Folded onto [WEBSITES] by [tabBaseOf], so
+     *  the taskbar / tablet dock stays and highlights Web Apps. */
+    const val WEB_APP_MARKET = "webapp-market"
 
     /** Opens one manga. [url] is the source's own url for the title (its id). */
     fun mangaDetail(
@@ -631,6 +636,7 @@ object Routes {
             // button ("My Stuff"), so they highlight it and keep the bar on
             // screen exactly as the scoped search route highlights Search.
             HISTORY, DOWNLOADS -> LIBRARY
+            WEB_APP_MARKET -> WEBSITES
             else -> base
         }
     }
@@ -834,6 +840,8 @@ private fun AppBottomBar(
     navStyle: String = NavStyles.ANIMATED,
     expanded: Boolean = true,
     showLabels: Boolean = true,
+    dockCollapsed: Boolean = false,
+    onDockCollapsedChange: (Boolean) -> Unit = {},
     onNavigate: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -857,6 +865,8 @@ private fun AppBottomBar(
             // animated one is the dock that draws itself in while scrolling.
             expanded = style == NavStyles.FLOATING || expanded,
             showLabels = showLabels,
+            collapsed = dockCollapsed,
+            onCollapsedChange = onDockCollapsedChange,
             onNavigate = onNavigate,
             modifier = modifier,
         )
@@ -1184,6 +1194,8 @@ private fun AppDockBar(
     tabs: List<BottomTab>,
     expanded: Boolean,
     showLabels: Boolean,
+    collapsed: Boolean,
+    onCollapsedChange: (Boolean) -> Unit,
     onNavigate: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1193,34 +1205,20 @@ private fun AppDockBar(
     var appeared by remember { mutableStateOf(false) }
     var hoveredIndex by remember { mutableIntStateOf(-1) }
     // Long-press folds the dock into a small glass circle at the bottom-left
-    // corner; tapping the circle brings it back. Deliberately not persisted:
-    // a rotation must always show the dock again, centred at the bottom.
-    var collapsed by remember { mutableStateOf(false) }
+    // corner; tapping the circle brings it back. The state is owned by AppRoot
+    // because a shelved dock also releases the page's bottom inset, letting the
+    // screen run to the bottom edge. Deliberately not persisted: a rotation must
+    // always show the dock again, centred at the bottom.
     LaunchedEffect(Unit) { appeared = true }
 
     // One row, always. The cells share whatever width the window actually has,
     // so every tab stays on screen: small resting icons on a 14-tab phone,
     // larger ones on a wide landscape window. The magnification lives in
-    // DockTab, driven by the shared hovered index below.
+    // DockTile, driven by the shared hovered index below.
     val windowWidth = LocalConfiguration.current.screenWidthDp.dp
     val outerWidth = (windowWidth - 32.dp).coerceAtLeast(160.dp)
     val metrics = BarMetrics.dockMetrics(tabs.size, outerWidth, showLabels)
     val shape = RoundedCornerShape(26.dp)
-    val plate = if (glass.dark) {
-        Brush.verticalGradient(
-            listOf(
-                Color(0xFF2A2B34).copy(alpha = 0.78f),
-                Color(0xFF121319).copy(alpha = 0.90f),
-            )
-        )
-    } else {
-        Brush.verticalGradient(
-            listOf(
-                Color.White.copy(alpha = 0.94f),
-                Color.White.copy(alpha = 0.78f),
-            )
-        )
-    }
 
     Box(modifier.fillMaxWidth()) {
     AnimatedVisibility(
@@ -1269,16 +1267,7 @@ private fun AppDockBar(
                     Box(
                         Modifier
                             .matchParentSize()
-                            .shadow(if (glass.dark) 0.dp else 18.dp, shape)
-                            .clip(shape)
-                            .background(plate)
-                            .border(
-                                1.dp,
-                                if (glass.dark) Color.White.copy(alpha = 0.14f)
-                                else Color.Black.copy(alpha = 0.08f),
-                                shape,
-                            )
-                            .then(Modifier.glassSheen(glass))
+                            .dockPlate(glass, shape)
                     )
                     Row(
                         Modifier
@@ -1332,20 +1321,23 @@ private fun AppDockBar(
                     ) {
                         val tileSize = (exact.cell - 4.dp).coerceIn(18.dp, 34.dp)
                         tabs.forEachIndexed { index, tab ->
-                            DockTab(
+                            DockTile(
                                 tab = tab,
                                 selected = currentRoute == tab.route,
                                 hovered = index == hoveredIndex,
                                 distance = if (waveIndex >= 0) abs(index - waveIndex) else Int.MAX_VALUE,
                                 tileSize = tileSize,
                                 width = exact.cell,
+                                // The phone bar gets the most dramatic pop
+                                // (150% more) in BOTH orientations; only the
+                                // vertical tablet dock uses the smaller boost.
+                                popGrowth = PhoneDockPopGrowth,
                                 onClick = { onNavigate(tab.route) },
                                 onLongClick = {
-                                    collapsed = true
+                                    onCollapsedChange(true)
                                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                 },
-                                onHover = { hoveredIndex = index },
-                                onHoverEnd = { if (hoveredIndex == index) hoveredIndex = -1 },
+                                onHover = { hoveredIndex = index },                                onHoverEnd = { if (hoveredIndex == index) hoveredIndex = -1 },
                             )
                         }
                     }
@@ -1366,16 +1358,7 @@ private fun AppDockBar(
                 .windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Bottom))
                 .padding(start = 16.dp)
                 .size(56.dp)
-                .shadow(if (glass.dark) 0.dp else 12.dp, CircleShape)
-                .clip(CircleShape)
-                .background(plate)
-                .border(
-                    1.dp,
-                    if (glass.dark) Color.White.copy(alpha = 0.16f)
-                    else Color.Black.copy(alpha = 0.08f),
-                    CircleShape,
-                )
-                .then(Modifier.glassSheen(glass))
+                .dockPlate(glass, CircleShape, shadow = if (glass.dark) 0.dp else 12.dp)
                 // With the dock folded, the circle itself is the tab wheel:
                 // swipe down for the next tab, up for the previous one, and
                 // keep the shelf closed so another swipe continues the walk.
@@ -1401,7 +1384,7 @@ private fun AppDockBar(
                     )
                 }
                 .clickable {
-                    collapsed = false
+                    onCollapsedChange(false)
                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                 },
             contentAlignment = Alignment.Center,
@@ -1423,164 +1406,6 @@ private fun AppDockBar(
         }
     }
     }
-}
-
-/** One app-style tile in the dock. The tile carries its own tinted glass, a
- *  gloss along the top edge, a spring lift and the macOS running-app dot. */
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
-@Composable
-private fun DockTab(
-    tab: BottomTab,
-    selected: Boolean,
-    hovered: Boolean,
-    distance: Int,
-    tileSize: Dp,
-    width: Dp,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit,
-    onHover: () -> Unit,
-    onHoverEnd: () -> Unit,
-) {
-    val interaction = remember { MutableInteractionSource() }
-    val mouseHovered by interaction.collectIsHoveredAsState()
-    val pressed by interaction.collectIsPressedAsState()
-    LaunchedEffect(mouseHovered) { if (mouseHovered) onHover() else onHoverEnd() }
-    val (top, bottom) = dockTint(tab.route)
-    // The macOS dock wave: the tile under the finger is the largest, its
-    // immediate neighbours lift and grow a little, the next ones a little less.
-    val scale by animateFloatAsState(
-        targetValue = when {
-            pressed -> 1.75f
-            hovered -> 1.95f
-            distance == 0 -> 1.12f
-            distance == 1 -> 1.45f
-            distance == 2 -> 1.18f
-            else -> 1f
-        },
-        animationSpec = spring(dampingRatio = 0.46f, stiffness = 440f),
-        label = "dockTileScale",
-    )
-    val lift by animateDpAsState(
-        targetValue = when {
-            pressed || hovered -> 14.dp
-            distance == 0 -> 7.dp
-            distance == 1 -> 6.dp
-            distance == 2 -> 2.dp
-            else -> 0.dp
-        },
-        animationSpec = spring(dampingRatio = 0.52f, stiffness = 420f),
-        label = "dockTileLift",
-    )
-    val dotAlpha by animateFloatAsState(
-        targetValue = if (selected) 1f else 0f,
-        animationSpec = tween(180),
-        label = "dockDot",
-    )
-    val tileShape = RoundedCornerShape(if (tileSize > 28.dp) 13.dp else 9.dp)
-    Column(
-        Modifier
-            .width(width)
-            .fillMaxHeight()
-            .combinedClickable(
-                interactionSource = interaction,
-                indication = null,
-                onClick = onClick,
-                onLongClick = onLongClick,
-            ),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Box(
-            Modifier
-                .size(tileSize)
-                .offset(y = -lift)
-                .graphicsLayer { scaleX = scale; scaleY = scale }
-                // A soft halo in the tab's own colour is the dock's "glow":
-                // no blur pass, just a radial wash behind the tile.
-                .drawBehind {
-                    drawRoundRect(
-                        brush = Brush.radialGradient(
-                            colors = listOf(
-                                top.copy(alpha = if (selected || hovered) 0.34f else 0.12f),
-                                Color.Transparent,
-                            ),
-                            center = center,
-                            radius = size.maxDimension * 0.95f,
-                        ),
-                    )
-                }
-                .clip(tileShape)
-                .background(
-                    Brush.linearGradient(
-                        listOf(
-                            if (selected || hovered) top else top.copy(alpha = 0.62f),
-                            if (selected || hovered) bottom else bottom.copy(alpha = 0.55f),
-                        )
-                    )
-                )
-                .border(
-                    1.dp,
-                    Color.White.copy(alpha = if (selected || hovered) 0.34f else 0.18f),
-                    tileShape,
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            // Gloss: the top third catches the light, the rest falls away.
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(tileSize * 0.42f)
-                    .align(Alignment.TopCenter)
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(Color.White.copy(alpha = 0.20f), Color.Transparent)
-                        )
-                    )
-            )
-            Icon(
-                tab.icon,
-                contentDescription = tr(tab.label),
-                tint = Color.White.copy(alpha = if (selected || hovered) 1f else 0.9f),
-                modifier = Modifier.size((tileSize * 0.56f).coerceAtLeast(10.dp)),
-            )
-        }
-        Spacer(Modifier.height(2.dp))
-        Box(
-            Modifier
-                .size(3.dp)
-                .alpha(dotAlpha)
-                .clip(CircleShape)
-                .background(
-                    if (MaterialTheme.colorScheme.background.luminance() < 0.5f) {
-                        Color.White.copy(alpha = 0.9f)
-                    } else {
-                        top
-                    }
-                )
-        )
-    }
-}
-
-/** The dock tile tints: each tab keeps its own colour pair, so the dock reads
- *  as a row of app icons instead of fifteen copies of the accent. Bright top,
- *  deep bottom is the same light direction every glass panel uses. */
-private fun dockTint(route: String): Pair<Color, Color> = when (route) {
-    Routes.HOME -> Color(0xFF6EA8FF) to Color(0xFF2C52D8)
-    Routes.ANIME_CALENDAR -> Color(0xFFB57BFF) to Color(0xFF6B2BC4)
-    Routes.SEARCH -> Color(0xFF4EDBC8) to Color(0xFF117C74)
-    Routes.LIBRARY -> Color(0xFFFFB968) to Color(0xFFB86414)
-    Routes.SPORTS -> Color(0xFF63E590) to Color(0xFF1B8646)
-    Routes.YOUTUBE -> Color(0xFFFF7373) to Color(0xFFAD1E1E)
-    Routes.MUSIC -> Color(0xFFFF83CD) to Color(0xFF9E1C6B)
-    Routes.MANGA -> Color(0xFFFFD46B) to Color(0xFFB07A0A)
-    Routes.IPTV -> Color(0xFF62D4FF) to Color(0xFF146A9C)
-    Routes.MULTI_VIEW -> Color(0xFF9FA9FF) to Color(0xFF4132B0)
-    Routes.STATS -> Color(0xFFB2E66B) to Color(0xFF4B8518)
-    Routes.TELEGRAM -> Color(0xFF79BCFF) to Color(0xFF1C6BBE)
-    Routes.WEBSITES -> Color(0xFF8FD8FF) to Color(0xFF286787)
-    Routes.EXTENSIONS -> Color(0xFFCA97FF) to Color(0xFF662BA4)
-    Routes.SETTINGS -> Color(0xFFB6BEC9) to Color(0xFF545C69)
-    else -> Color(0xFF8E9AA8) to Color(0xFF3B424C)
 }
 
 /** One button on the floating bottom bar. Public so Settings can render a
@@ -1653,6 +1478,9 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
     val context = LocalContext.current
     val app = context.applicationContext as HikariApp
     val homeRequest by app.homeTabRequest.collectAsState()
+    // The WebView's "Go to Web Apps" menu item bumps this — landing on the
+    // saved Web Apps page from inside a site view.
+    val webAppsRequest by app.webAppsTabRequest.collectAsState()
     // A repo link from a browser ("Open with → Hikari"): switch to the
     // Extensions tab, whose screen installs it into the section it belongs to
     // and opens that repo's folder. Consumed by the Extensions screen itself.
@@ -1736,6 +1564,29 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
     // the content inset and every screen's nav decision agree.
     val layout = rememberLayoutTokens()
     val isTablet = layout.device == DeviceClass.TABLET
+    // A tablet uses the Mac dock for the two dock styles and the labelled rail
+    // for the two bar styles. The setting stays authoritative; the default
+    // (ANIMATED) is the vertical dock the tablet now ships with.
+    val tabletDock = isTablet &&
+        NavStyles.normalize(navStyle) in setOf(NavStyles.ANIMATED, NavStyles.FLOATING)
+    // Whether the tablet dock is shelved. Hoisted out of TabletDock because the
+    // page's left inset follows it: shelved = the page takes the full window,
+    // open = the page returns to the rail's 84dp gutter. Deliberately not
+    // persisted; a rotation shows the dock again (same rule as the phone fold).
+    var tabletDockCollapsed by remember { mutableStateOf(false) }
+    LaunchedEffect(isTablet, tabletDock) {
+        if (!isTablet || !tabletDock) tabletDockCollapsed = false
+    }
+    // The phone dock's fold is the same idea: shelved means the page runs to
+    // the bottom edge instead of leaving the bar's 64dp strip. Its state is
+    // separate from the tablet's so closing the Fold does not hand a folded
+    // dock to the other layout.
+    var phoneDockCollapsed by remember { mutableStateOf(false) }
+    val phoneDockStyle =
+        NavStyles.normalize(navStyle) in setOf(NavStyles.ANIMATED, NavStyles.FLOATING)
+    LaunchedEffect(isTablet, isTv, phoneDockStyle) {
+        if (isTablet || isTv || !phoneDockStyle) phoneDockCollapsed = false
+    }
     // The gap kept clear of the screen's edges on a television ("overscan" —
     // see TvUi.DEFAULT_OVERSCAN_DP for why televisions need one at all).
     val overscanFlow = remember { app.store.tvOverscanFlow() }
@@ -1763,6 +1614,23 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
         delay(4_000L)
         mvBarVisible = false
     }
+    // What the page keeps clear on the left. On a tablet the dock is the only
+    // thing there, so shelving it (or letting MultiView fade it) releases the
+    // full width; opening it restores the gutter. Animated so the page slides
+    // back under the dock instead of jumping.
+    val tabletNavVisible =
+        showBar && isTablet && (tabRoute != Routes.MULTI_VIEW || mvBarVisible)
+    val tabletNavTarget = when {
+        !isTablet -> layout.navInset
+        !tabletNavVisible -> 0.dp
+        tabletDock -> if (tabletDockCollapsed) 0.dp else TabletDockInset
+        else -> layout.navInset
+    }
+    val animatedNavInset by animateDpAsState(
+        targetValue = tabletNavTarget,
+        animationSpec = tween(220),
+        label = "tabletNavInset",
+    )
     val barScroll = remember {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
@@ -1800,6 +1668,16 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
             app.homeTabRequest.value = 0
             if (tabRoute != Routes.EXTENSIONS) {
                 Routes.navigateTab(nav, Routes.HOME)
+            }
+        }
+    }
+    var webAppsHandled by remember { mutableStateOf(0) }
+    LaunchedEffect(webAppsRequest) {
+        if (webAppsRequest > 0 && webAppsRequest != webAppsHandled) {
+            webAppsHandled = webAppsRequest
+            app.webAppsTabRequest.value = 0
+            if (tabRoute != Routes.WEBSITES) {
+                Routes.navigateTab(nav, Routes.WEBSITES)
             }
         }
     }
@@ -2074,7 +1952,7 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
                 // page that padded only by the bar's height would still end up
                 // under it. In immersive mode — the default, and what the whole
                 // design assumes — that inset is 0 and this is just the bar.
-                LocalTaskbarInset provides if (showBar && !isTv) {
+                LocalTaskbarInset provides if (showBar && !isTv && !isTablet) {
                     val navBarBottom = with(LocalDensity.current) {
                         WindowInsets.navigationBars.getBottom(this).toDp()
                     }
@@ -2086,7 +1964,8 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
                         // the page's bottom padding has to follow the same
                         // metrics the bar draws itself with.
                         NavStyles.ANIMATED, NavStyles.FLOATING ->
-                            BarMetrics.dockInset(barTabs, dockWidth, showTabLabels)
+                            if (phoneDockCollapsed) 0.dp
+                            else BarMetrics.dockInset(barTabs, dockWidth, showTabLabels)
                         else -> BarMetrics.inset(styleKey)
                     }
                     barHeight + navBarBottom
@@ -2135,7 +2014,7 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
                         // a television.
                         .then(
                             if (showBar && layout.device.hasRail) {
-                                Modifier.padding(start = layout.navInset)
+                                Modifier.padding(start = animatedNavInset)
                             } else {
                                 Modifier
                             }
@@ -2224,6 +2103,7 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
             // address bar for any URL and one-tap launch in the same browser that
             // streams extensions use.
             composable(Routes.WEBSITES) { WebsitesScreen(nav) }
+            composable(Routes.WEB_APP_MARKET) { WebAppMarketScreen(nav) }
             // ---- Manga (the off-by-default tab, its detail page and reader) ----
             composable(Routes.MANGA) { MangaScreen(nav) }
             composable(
@@ -2430,20 +2310,34 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
                 navStyle = navStyle,
                 expanded = barExpanded,
                 showLabels = showTabLabels,
+                dockCollapsed = phoneDockCollapsed,
+                onDockCollapsedChange = { phoneDockCollapsed = it },
                 onNavigate = { route -> Routes.navigateTab(nav, route) },
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
-        // A tablet gets a tall, labelled rail down the left edge. Same tabs and
-        // same hidden set as the taskbar, so the two layouts can never disagree
-        // about which pages exist (see TabletNavRail).
+        // A tablet uses the vertical Mac dock for the dock styles, and the
+        // tall labelled rail for Classic/Always compact. Same tabs and same
+        // hidden set as the taskbar, so the layouts can never disagree about
+        // which pages exist.
         if (showBar && isTablet && (tabRoute != Routes.MULTI_VIEW || mvBarVisible)) {
-            com.hikari.app.ui.layout.TabletNavRail(
-                currentRoute = tabRoute,
-                hidden = visibleTabs,
-                onNavigate = { route -> Routes.navigateTab(nav, route) },
-                modifier = Modifier.align(Alignment.CenterStart),
-            )
+            if (tabletDock) {
+                TabletDock(
+                    currentRoute = tabRoute,
+                    hidden = visibleTabs,
+                    collapsed = tabletDockCollapsed,
+                    onCollapsedChange = { tabletDockCollapsed = it },
+                    onNavigate = { route -> Routes.navigateTab(nav, route) },
+                    modifier = Modifier.align(Alignment.CenterStart),
+                )
+            } else {
+                com.hikari.app.ui.layout.TabletNavRail(
+                    currentRoute = tabRoute,
+                    hidden = visibleTabs,
+                    onNavigate = { route -> Routes.navigateTab(nav, route) },
+                    modifier = Modifier.align(Alignment.CenterStart),
+                )
+            }
         }
         // On a television the tabs live in a rail down the left edge instead
         // (see TvNavRail for why the platform does it that way), and it is

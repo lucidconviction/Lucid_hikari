@@ -265,6 +265,21 @@ object Tutorials {
             ),
         ),
         Tutorial(
+            "webapp-market",
+            "Web App Market",
+            listOf(Routes.WEB_APP_MARKET),
+            listOf(
+                TutorialPage(
+                    "A curated shelf",
+                    "The market collects top streaming sites, grouped by what they are. Pick a group, then a category, or search across the whole catalogue. Nothing is saved until you ask.",
+                ),
+                TutorialPage(
+                    "Save what you use",
+                    "Tap a card to open the site in Hikari's ad-free browser. The bookmark button saves it to Web Apps, where it gets the same one-tap tile as every other web app.",
+                ),
+            ),
+        ),
+        Tutorial(
             "telegram",
             "Telegram",
             listOf(Routes.TELEGRAM),

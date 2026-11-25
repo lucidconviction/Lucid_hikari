@@ -230,6 +230,7 @@ import com.hikari.app.ui.theme.HikariAccent
 import com.hikari.app.ui.theme.HikariThemeMode
 import com.hikari.app.ui.theme.inkOn
 import com.hikari.app.web.UserscriptImport
+import com.hikari.app.web.WebViewLinkGuard
 import com.hikari.app.web.UserscriptManager
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
@@ -8061,12 +8062,12 @@ private fun WebViewSafetyCard(app: HikariApp) {
         id = "privacy.webview",
         icon = Icons.Filled.Shield,
         title = tr("WebView safety"),
-        summary = if (redirectProtection && popupProtection) tr("Redirects & popups blocked")
+        summary = if (redirectProtection && popupProtection) tr("Redirects ask first · popups blocked")
         else tr("Partly blocked"),
     ) {
         SettingsToggle(
-            label = tr("Block redirects to other sites"),
-            supporting = tr("Subdomains of the site still load"),
+            label = tr("Block redirects"),
+            supporting = tr("You choose Block or Allow each time"),
             checked = redirectProtection,
             onCheckedChange = {
                 redirectProtection = it
@@ -8239,6 +8240,92 @@ private fun WebViewSafetyCard(app: HikariApp) {
                     scope.launch { app.store.setWebviewPopupBlock(next) }
                 }
             }) { Text(tr("Block")) }
+        }
+        Spacer(Modifier.height(10.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+        Spacer(Modifier.height(10.dp))
+        val linkGuard by WebViewLinkGuard.state.collectAsState()
+        LaunchedEffect(Unit) { WebViewLinkGuard.init(app) }
+        Text(
+            tr("Blocked redirects & app links"),
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            tr("Always block choices made in the redirect and app-link questions. These are separate from the ad-block list and can be cleared here."),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (linkGuard.blockedRedirects.isNotEmpty()) {
+            Text(
+                tr("Blocked redirects: %s").replace("%s", linkGuard.blockedRedirects.size.toString()),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+            linkGuard.blockedRedirects.sorted().forEach { entry ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        entry,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = { WebViewLinkGuard.unblockRedirect(entry, entry) }) {
+                        Icon(
+                            Icons.Filled.Delete,
+                            contentDescription = "Unblock redirects from $entry",
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            }
+        }
+        if (linkGuard.blockedApps.isNotEmpty() || linkGuard.allowedApps.isNotEmpty()) {
+            Text(
+                tr("App link decisions: %s blocked · %s always unblocked")
+                    .replaceFirst("%s", linkGuard.blockedApps.size.toString())
+                    .replaceFirst("%s", linkGuard.allowedApps.size.toString()),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(top = 2.dp)
+            )
+            (linkGuard.blockedApps.sorted().map { it to true } +
+                linkGuard.allowedApps.sorted().map { it to false }).forEach { (entry, blocked) ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        if (blocked) entry else entry + " · " + tr("allowed"),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = { WebViewLinkGuard.forgetApp(entry) }) {
+                        Icon(
+                            Icons.Filled.Delete,
+                            contentDescription = "Forget app link $entry",
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            }
+        }
+        if (linkGuard.blockedRedirects.isNotEmpty() || linkGuard.blockedApps.isNotEmpty() || linkGuard.allowedApps.isNotEmpty()) {
+            TextButton(onClick = { WebViewLinkGuard.clearAll() }) {
+                Text(tr("Clear blocked decisions"))
+            }
         }
     }
 }

@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -29,6 +30,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -71,6 +73,10 @@ import com.hikari.app.HikariApp
 import com.hikari.app.data.Site
 import com.hikari.app.i18n.I18n
 import com.hikari.app.i18n.tr
+import com.hikari.app.ui.layout.DeviceClass
+import com.hikari.app.ui.layout.rememberLayoutTokens
+import com.hikari.app.ui.navigation.LocalTaskbarInset
+import com.hikari.app.ui.navigation.Routes
 import com.hikari.app.web.WebAppShots
 import com.hikari.app.web.WebViewActivity
 import kotlinx.coroutines.launch
@@ -88,6 +94,11 @@ fun WebsitesScreen(nav: NavController) {
     val app = context.applicationContext as HikariApp
     val sites by app.store.sitesFlow().collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
+    val layout = rememberLayoutTokens()
+    // Tablets get 30% larger saved-web-app cards: a 160dp phone tile becomes a
+    // 208dp tile, and the card's own type/thumbnail scales with it.
+    val tabletCards = layout.device == DeviceClass.TABLET
+    val cardMinWidth = if (tabletCards) 208.dp else 160.dp
 
     var urlInput by remember { mutableStateOf("") }
     var showAddDialog by remember { mutableStateOf(false) }
@@ -170,6 +181,15 @@ fun WebsitesScreen(nav: NavController) {
                 title = { Text(tr("Web Apps") + " · ${sites.size}") },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                 actions = {
+                    IconButton(onClick = {
+                        nav.navigate(Routes.WEB_APP_MARKET) { launchSingleTop = true }
+                    }) {
+                        Icon(
+                            Icons.Filled.Storefront,
+                            contentDescription = tr("Web app market"),
+                            tint = Color.White.copy(alpha = 0.8f),
+                        )
+                    }
                     IconButton(onClick = { isGrid = !isGrid }) {
                         Icon(
                             if (isGrid) Icons.Filled.ViewList else Icons.Filled.GridOn,
@@ -312,18 +332,48 @@ fun WebsitesScreen(nav: NavController) {
                                 Text(tr("Add web app"), color = Color.Black, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                             }
                         }
+                        Spacer(Modifier.height(10.dp))
+                        Surface(
+                            onClick = {
+                                nav.navigate(Routes.WEB_APP_MARKET) { launchSingleTop = true }
+                            },
+                            shape = RoundedCornerShape(50),
+                            color = Color.White.copy(alpha = 0.12f),
+                        ) {
+                            Row(
+                                Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    Icons.Filled.Storefront,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = Color.White,
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    tr("Browse the market"),
+                                    color = Color.White,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                        }
                     }
                 }
             } else {
                 if (isGrid) {
                     LazyVerticalGrid(
-                        columns = GridCells.Adaptive(minSize = 160.dp),
+                        columns = GridCells.Adaptive(minSize = cardMinWidth),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(
+                            bottom = LocalTaskbarInset.current + 16.dp,
+                        ),
                         modifier = Modifier.fillMaxWidth().weight(1f),
                     ) {
                         items(sites, key = { it.url }) { site ->
-                            SiteGridCard(site = site, onOpen = {
+                            SiteGridCard(site = site, large = tabletCards, onOpen = {
                                 context.startActivity(
                                     Intent(context, WebViewActivity::class.java).apply {
                                         putExtra("url", site.url)
@@ -336,10 +386,13 @@ fun WebsitesScreen(nav: NavController) {
                 } else {
                     LazyColumn(
                         verticalArrangement = Arrangement.spacedBy(6.dp),
+                        contentPadding = PaddingValues(
+                            bottom = LocalTaskbarInset.current + 16.dp,
+                        ),
                         modifier = Modifier.fillMaxWidth().weight(1f),
                     ) {
                         items(sites, key = { it.url }) { site ->
-                            SiteCard(site = site, onOpen = {
+                            SiteCard(site = site, large = tabletCards, onOpen = {
                                 context.startActivity(
                                     Intent(context, WebViewActivity::class.java).apply {
                                         putExtra("url", site.url)
@@ -449,7 +502,12 @@ private fun siteShotModel(context: android.content.Context, url: String, version
 }
 
 @Composable
-fun SiteCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
+fun SiteCard(
+    site: Site,
+    large: Boolean = false,
+    onOpen: () -> Unit,
+    onDelete: () -> Unit,
+) {
     Surface(
         onClick = onOpen,
         color = androidx.compose.material3.MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.6f),
@@ -458,7 +516,10 @@ fun SiteCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            modifier = Modifier.padding(
+                horizontal = if (large) 20.dp else 16.dp,
+                vertical = if (large) 18.dp else 14.dp,
+            ),
         ) {
             val context = LocalContext.current
             val shotVersion = WebAppShots.versionOf(site.url)
@@ -469,8 +530,8 @@ fun SiteCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
                 model = shot,
                 contentDescription = site.name,
                 modifier = Modifier
-                    .width(88.dp)
-                    .height(52.dp)
+                    .width(if (large) 114.dp else 88.dp)
+                    .height(if (large) 68.dp else 52.dp)
                     .clip(RoundedCornerShape(8.dp)),
                 contentScale = ContentScale.Crop,
                 loading = {
@@ -485,12 +546,12 @@ fun SiteCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
                 },
                 success = { SubcomposeAsyncImageContent() },
             )
-            Spacer(Modifier.width(14.dp))
+            Spacer(Modifier.width(if (large) 18.dp else 14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     site.name,
                     color = androidx.compose.material3.MaterialTheme.colorScheme.onSurface,
-                    fontSize = 15.sp,
+                    fontSize = if (large) 19.sp else 15.sp,
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -499,7 +560,7 @@ fun SiteCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
                 Text(
                     site.url,
                     color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    fontSize = 11.sp,
+                    fontSize = if (large) 14.sp else 11.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -507,8 +568,8 @@ fun SiteCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
             Spacer(Modifier.width(8.dp))
             Box(
                 modifier = Modifier
-                    .size(32.dp)
-                    .background(androidx.compose.material3.MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.2f), RoundedCornerShape(16.dp))
+                    .size(if (large) 42.dp else 32.dp)
+                    .background(androidx.compose.material3.MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.2f), RoundedCornerShape(if (large) 21.dp else 16.dp))
                     .clickable(onClick = onDelete),
                 contentAlignment = Alignment.Center,
             ) {
@@ -516,7 +577,7 @@ fun SiteCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
                     Icons.Filled.Delete,
                     contentDescription = tr("Delete web app"),
                     tint = androidx.compose.material3.MaterialTheme.colorScheme.error,
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(if (large) 21.dp else 16.dp),
                 )
             }
         }
@@ -524,7 +585,12 @@ fun SiteCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
 }
 
 @Composable
-fun SiteGridCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
+fun SiteGridCard(
+    site: Site,
+    large: Boolean = false,
+    onOpen: () -> Unit,
+    onDelete: () -> Unit,
+) {
     val faviconUrl = remember(site.url) {
         val host = runCatching { java.net.URI(site.url).host }.getOrNull() ?: site.url
         "https://www.google.com/s2/favicons?domain=$host&sz=64"
@@ -550,10 +616,10 @@ fun SiteGridCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
                 modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
                 contentScale = ContentScale.Crop,
                 loading = {
-                    SiteScreenshotFallback(faviconUrl, site.name)
+                    SiteScreenshotFallback(faviconUrl, site.name, large)
                 },
                 error = {
-                    SiteScreenshotFallback(faviconUrl, site.name)
+                    SiteScreenshotFallback(faviconUrl, site.name, large)
                 },
                 success = { SubcomposeAsyncImageContent() },
             )
@@ -572,12 +638,16 @@ fun SiteGridCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
                 Modifier
                     .align(Alignment.BottomStart)
                     .fillMaxWidth()
-                    .padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
+                    .padding(
+                        start = if (large) 16.dp else 12.dp,
+                        end = if (large) 16.dp else 12.dp,
+                        bottom = if (large) 13.dp else 10.dp,
+                    ),
             ) {
                 Text(
                     site.name,
                     color = Color.White,
-                    fontSize = 14.sp,
+                    fontSize = if (large) 18.sp else 14.sp,
                     fontWeight = FontWeight.Bold,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
@@ -585,7 +655,7 @@ fun SiteGridCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
                 Text(
                     site.url.substringAfter("://").substringBefore('/'),
                     color = Color.White.copy(alpha = 0.72f),
-                    fontSize = 10.sp,
+                    fontSize = if (large) 13.sp else 10.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -593,9 +663,9 @@ fun SiteGridCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(6.dp)
-                    .size(28.dp)
-                    .background(Color(0x99000000), RoundedCornerShape(14.dp))
+                    .padding(if (large) 8.dp else 6.dp)
+                    .size(if (large) 36.dp else 28.dp)
+                    .background(Color(0x99000000), RoundedCornerShape(if (large) 18.dp else 14.dp))
                     .clickable(onClick = onDelete),
                 contentAlignment = Alignment.Center,
             ) {
@@ -603,7 +673,7 @@ fun SiteGridCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
                     Icons.Filled.Delete,
                     contentDescription = tr("Delete web app"),
                     tint = Color.White,
-                    modifier = Modifier.size(14.dp),
+                    modifier = Modifier.size(if (large) 18.dp else 14.dp),
                 )
             }
         }
@@ -611,7 +681,7 @@ fun SiteGridCard(site: Site, onOpen: () -> Unit, onDelete: () -> Unit) {
 }
 
 @Composable
-private fun SiteScreenshotFallback(faviconUrl: String, name: String) {
+private fun SiteScreenshotFallback(faviconUrl: String, name: String, large: Boolean) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -622,7 +692,7 @@ private fun SiteScreenshotFallback(faviconUrl: String, name: String) {
         AsyncImage(
             model = faviconUrl,
             contentDescription = name,
-            modifier = Modifier.size(42.dp),
+            modifier = Modifier.size(if (large) 54.dp else 42.dp),
             contentScale = ContentScale.Fit,
         )
     }

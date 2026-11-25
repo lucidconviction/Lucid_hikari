@@ -1,6 +1,11 @@
 package com.hikari.app
 
+import android.app.AppOpsManager
+import android.app.PictureInPictureParams
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.util.Rational
 import android.content.res.Configuration
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -36,6 +41,12 @@ class MainActivity : AppCompatActivity() {
      *  setContent). See [applyImmersiveMode]. */
     @Volatile
     private var fullscreenOff = false
+
+    /** Last in-app-PiP eligibility/active pane written to the system params, so
+     *  the pane-flow collector does not call setPictureInPictureParams for
+     *  every position/bounds tick. */
+    private var lastInAppPipAuto = false
+    private var lastInAppPipActive: Long? = null
 
     /** In-app UI scale: when on, the app ignores the phone's Font size and
      *  Display size settings everywhere (Compose screens scale themselves in
@@ -490,6 +501,7 @@ class MainActivity : AppCompatActivity() {
         // accent loader. Added after setContent so the content root exists; it
         // fades itself out (see BootSplash).
         com.hikari.app.ui.BootSplash.show(this)
+        installInAppPip()
         }
 
     /**
@@ -525,6 +537,118 @@ class MainActivity : AppCompatActivity() {
         return super.dispatchTouchEvent(event)
     }
 
+    // ---- Android system PiP around the in-app floating panes -------------
+    //
+    // PlayerActivity has its own PiP for the full player. This is the other
+    // half: when the app is backgrounded with PIP Mode on and at least one
+    // in-app pane open, the active pane is promoted to an Android PiP window.
+    // Only that pane decodes there; the others pause and are restored on
+    // return (see PipHost/PipWindowStore).
+
+    private fun installInAppPip() {
+        lifecycleScope.launch {
+            com.hikari.app.player.PipWindowStore.panes.collect { refreshInAppPipParams() }
+        }
+        lifecycleScope.launch {
+            com.hikari.app.player.PipWindowStore.activePaneId.collect { refreshInAppPipParams() }
+        }
+        lifecycleScope.launch {
+            com.hikari.app.player.PipModeSettings.enabled.collect { refreshInAppPipParams() }
+        }
+        refreshInAppPipParams()
+    }
+
+    /** True when the system will let Hikari open a PiP window at all (feature
+     *  present and not denied in the OS app settings). */
+    private fun isInAppPipAllowed(): Boolean {
+        if (Build.VERSION.SDK_INT < 26) return false
+        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) return false
+        return runCatching {
+            val ops = getSystemService(AppOpsManager::class.java) ?: return@runCatching true
+            when (ops.checkOpNoThrow(
+                AppOpsManager.OPSTR_PICTURE_IN_PICTURE,
+                android.os.Process.myUid(),
+                packageName,
+            )) {
+                AppOpsManager.MODE_IGNORED, AppOpsManager.MODE_ERRORED -> false
+                else -> true
+            }
+        }.getOrDefault(true)
+    }
+
+    private fun inAppPipEligible(): Boolean =
+        Build.VERSION.SDK_INT >= 26 &&
+            // Android TV keeps the in-app overlay only: its boxes either do
+            // not advertise PiP or cannot show a useful window.
+            !com.hikari.app.tv.TvMode.isTv &&
+            com.hikari.app.player.PipModeSettings.isOn &&
+            com.hikari.app.player.PipWindowStore.panes.value.isNotEmpty() &&
+            isInAppPipAllowed()
+
+    /**
+     * API 31+: keep auto-enter enabled exactly while a pane exists and PIP
+     * Mode is on. API 26–30 use [onUserLeaveHint] instead.
+     */
+    private fun refreshInAppPipParams() {
+        if (Build.VERSION.SDK_INT < 31) return
+        val eligible = inAppPipEligible()
+        val active = com.hikari.app.player.PipWindowStore.activePaneId.value
+            ?: com.hikari.app.player.PipWindowStore.panes.value.lastOrNull()?.id
+        if (eligible == lastInAppPipAuto && active == lastInAppPipActive) return
+        lastInAppPipAuto = eligible
+        lastInAppPipActive = active
+        runCatching {
+            setPictureInPictureParams(
+                PictureInPictureParams.Builder()
+                    .setAspectRatio(Rational(16, 9))
+                    .setAutoEnterEnabled(eligible)
+                    .also { b -> runCatching { b.setSeamlessResizeEnabled(true) } }
+                    .build()
+            )
+        }
+    }
+
+    /** API 26–30 only: auto-enter does not exist, so Home/another app calls
+     *  this. API 31+ is handled by setAutoEnterEnabled in
+     *  [refreshInAppPipParams]. */
+    @Suppress("DEPRECATION")
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (Build.VERSION.SDK_INT in 26..30 && inAppPipEligible()) enterInAppPip()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun enterInAppPip() {
+        if (Build.VERSION.SDK_INT < 26 || !inAppPipEligible()) return
+        if (!com.hikari.app.player.PipWindowStore.beginSystemPip()) return
+        val builder = PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9))
+        if (Build.VERSION.SDK_INT >= 31) {
+            runCatching { builder.setSeamlessResizeEnabled(true) }
+        }
+        runCatching { enterPictureInPictureMode(builder.build()) }
+            .onFailure { com.hikari.app.player.PipWindowStore.endSystemPip() }
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration,
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        if (isInPictureInPictureMode) {
+            if (com.hikari.app.player.PipWindowStore.panes.value.isNotEmpty()) {
+                com.hikari.app.player.PipWindowStore.beginSystemPip()
+            } else {
+                com.hikari.app.player.PipWindowStore.endSystemPip()
+            }
+        } else {
+            // Returning (tap-to-expand) restores the whole in-app shelf; the
+            // panes that were released for PiP recompose at their saved
+            // positions.
+            com.hikari.app.player.PipWindowStore.endSystemPip()
+            refreshInAppPipParams()
+        }
+    }
+
     override fun onStart() {
         super.onStart()
         // The CloudStream runtime's Torrent engine needs an activity reference
@@ -544,6 +668,9 @@ class MainActivity : AppCompatActivity() {
         // otherwise the app is left with a status-bar-sized blank band that
         // pushes every screen down until the next launch.
         applyImmersiveMode()
+        // The system may have cleared the auto-enter params while in PiP; put
+        // them back in step with the panes that are still open.
+        refreshInAppPipParams()
     }
 
     /**
@@ -597,6 +724,13 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         if (HikariApp.mainActivity === this) {
             HikariApp.mainActivity = null
+        }
+        // Closing the system PiP ✕ finishes this activity: release every pane
+        // so no decoder or audio can keep running invisibly. A configuration
+        // change (not finishing) must keep the panes.
+        if (isFinishing) {
+            com.hikari.app.player.PipWindowStore.endSystemPip()
+            com.hikari.app.player.PipWindowStore.hide()
         }
         super.onDestroy()
     }

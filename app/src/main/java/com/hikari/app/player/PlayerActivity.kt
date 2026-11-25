@@ -1988,6 +1988,16 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // A queue only belongs to the Telegram page's own launch. Any other
+        // player (a film, a channel) must not inherit a stale Telegram queue.
+        if (intent.getBooleanExtra("tgQueued", false)) {
+            // A Telegram video has no shelf: never inherit the catalogue queue
+            // a previously watched film left behind, or the end of the last
+            // Telegram video would autoplay an unrelated title.
+            PlaybackQueueStore.clear()
+        } else {
+            TelegramPlaybackQueue.clear()
+        }
         activePlayer = java.lang.ref.WeakReference(this)
         // Re-run hardware TV detection before the View-based player decides its loading layout.
         // The main activity normally does this already, but the player can be entered directly
@@ -2941,7 +2951,11 @@ class PlayerActivity : ComponentActivity() {
         episodesBtn?.visibility = if (seriesKnown) View.VISIBLE else View.GONE
         prevEpBtn?.visibility = if (seriesKnown) View.VISIBLE else View.GONE
         nextEpBtn?.visibility = if (seriesKnown) View.VISIBLE else View.GONE
-        autoplayBtn?.visibility = if (seriesKnown) View.VISIBLE else View.GONE
+        autoplayBtn?.visibility = if (seriesKnown || TelegramPlaybackQueue.hasNext()) {
+            View.VISIBLE
+        } else {
+            View.GONE
+        }
         autoNextBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
         chPrevBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
         chNextBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
@@ -6089,6 +6103,8 @@ class PlayerActivity : ComponentActivity() {
         val queueItem: AppMediaItem?,
         val sources: List<PlayerSource>,
         val sourceIndex: Int = 0,
+        /** Set when the next video is a Telegram feed item (see TelegramPlaybackQueue). */
+        val telegram: TelegramPlaybackQueue.Item? = null,
     )
 
     private var nextPreview: NextPlaybackPreview? = null
@@ -9577,6 +9593,20 @@ class PlayerActivity : ComponentActivity() {
         }
         if (!autoplayNextOn || autoplayRunning) return
         if (runCatching { isLiveSource(sources.getOrNull(currentIndex)) }.getOrDefault(false)) return
+        // The corner preview did not run (preview off, or it was not ready):
+        // advance the Telegram queue directly at the end.
+        val telegramNext = TelegramPlaybackQueue.next()
+        if (telegramNext != null) {
+            val streams = runCatching { parseSourcesPayload(telegramNext.sourcesJson) }
+                .getOrDefault(emptyList())
+                .filter { it.url.isNotBlank() && !it.isTorrent }
+            if (streams.isNotEmpty()) {
+                releaseNextPreview()
+                autoplayRunning = true
+                startTelegramNext(telegramNext, streams, 0L)
+                return
+            }
+        }
         val item = favouriteItem
         // A film — or a player opened without a library item — has no episode
         // to advance. Its next title is the next card in the shelf it was
@@ -9755,6 +9785,31 @@ class PlayerActivity : ComponentActivity() {
         val repo = contentRepo
         nextPreviewJob = lifecycleScope.launch {
             try {
+                // Telegram's next video needs no provider, episode or shelf
+                // lookup: the Telegram page handed us the queue's ready-made
+                // source rows. TDLib prewarm starts before the corner player.
+                val telegramNext = TelegramPlaybackQueue.next()
+                if (telegramNext != null) {
+                    val previewSources = runCatching {
+                        parseSourcesPayload(telegramNext.sourcesJson)
+                    }.getOrDefault(emptyList())
+                        .filter { it.url.isNotBlank() && !it.isTorrent }
+                        .take(10)
+                    if (previewSources.isNotEmpty()) {
+                        if (telegramNext.fileId != 0) {
+                            runCatching { com.hikari.app.telegram.Td.prewarm(telegramNext.fileId) }
+                        }
+                        nextPreview = NextPlaybackPreview(
+                            title = telegramNext.title,
+                            item = null,
+                            episode = null,
+                            queueItem = null,
+                            sources = previewSources,
+                            telegram = telegramNext,
+                        )
+                        return@launch
+                    }
+                }
                 if (item != null && item.type != MediaType.MOVIE && current != null) {
                     var eps = playerEpisodes
                     if (eps.isEmpty()) {
@@ -9843,9 +9898,16 @@ class PlayerActivity : ComponentActivity() {
         val network = OkHttpDataSource.Factory(PlayerHttp.client)
             .setUserAgent(Http.UA)
             .setDefaultRequestProperties(src.headers)
-        val previewDataSource = DefaultDataSource.Factory(this, network)
-        val previewPlaybackDataSource = if (src.local) previewDataSource else
+        // The corner player must answer hikari-td: URIs too, exactly like the
+        // main player: a TDLib video has no HTTP URL for the ordinary factory.
+        val previewDataSource = com.hikari.app.telegram.TdDataSourceFactory(
+            DefaultDataSource.Factory(this, network)
+        )
+        val previewPlaybackDataSource = if (src.local || src.url.startsWith("hikari-td:", true)) {
+            previewDataSource
+        } else {
             PlayerMediaCache.wrap(this, previewDataSource)
+        }
         val mediaSourceFactory = DefaultMediaSourceFactory(previewPlaybackDataSource)
         val p = runCatching {
             ExoPlayer.Builder(this)
@@ -9968,6 +10030,13 @@ class PlayerActivity : ComponentActivity() {
     private fun handOffNextPreview(preview: NextPlaybackPreview) {
         val p = nextPreviewPlayer
         val position = p?.currentPosition?.coerceAtLeast(0L) ?: 0L
+        val telegram = preview.telegram
+        if (telegram != null) {
+            promotePreviewFullscreen()
+            autoplayRunning = true
+            startTelegramNext(telegram, preview.sources, position)
+            return
+        }
         if (preview.queueItem != null) {
             // Same treatment as the next episode: the frozen preview covers
             // the screen while the new title's player prepares in place.
@@ -10002,6 +10071,80 @@ class PlayerActivity : ComponentActivity() {
             if (full.isNotEmpty()) appendSources(full)
             prefetchNextEpisode(item, ep, repo)
         }
+    }
+
+    /**
+     * Continues a Telegram queue item in the same player. The preview (when
+     * there was one) is already fullscreen and frozen; this swaps the main
+     * sources underneath it. No provider, episode or history entry is involved.
+     */
+    private fun startTelegramNext(
+        item: TelegramPlaybackQueue.Item,
+        streams: List<PlayerSource>,
+        startAtMs: Long,
+    ) {
+        if (streams.isEmpty()) {
+            autoplayRunning = false
+            hideLoadingBanner(immediate = true)
+            return
+        }
+        val next = TelegramPlaybackQueue.advance() ?: item
+        // The corner preview prewarms its own TDLib file; a direct advance
+        // (preview off or not ready) must warm the same bytes before the
+        // player asks for them.
+        if (next.fileId != 0) runCatching { com.hikari.app.telegram.Td.prewarm(next.fileId) }
+        PlaybackQueueStore.clear()
+        val nextIntent = Intent(this@PlayerActivity, PlayerActivity::class.java).apply {
+            putExtra("title", next.title)
+            putExtra("sources", encodeSources(streams))
+            putExtra("startPosition", startAtMs.coerceAtLeast(0L))
+            putExtra("tgQueued", true)
+        }
+        setIntent(nextIntent)
+        liveStreamsJob?.cancel()
+        liveStreamsJob = null
+        liveStatusJob?.cancel()
+        liveStatusJob = null
+        liveSessionId = null
+        channelSurfController = null
+        originProviderId = ""
+        originProviderName = ""
+        favouriteItem = null
+        historyEntry = null
+        historyKey = ""
+        liveEpisode = null
+        playerEpisodes = emptyList()
+        episodeSwitchGen++
+        sources = streams
+        currentIndex = 0
+        startPositionMs = startAtMs.coerceAtLeast(0L)
+        seekPending = startPositionMs > 0L
+        refreshAttempts = 0
+        noSubsRetry = false
+        resumeHintMs = 0L
+        resumeHintDurMs = 0L
+        resetHeaderWalk()
+        triedUrls.clear()
+        notifySourcesChanged()
+        findViewById<TextView>(R.id.title_text)?.text = next.title
+        findViewById<TextView>(R.id.subtitle_text)?.apply {
+            text = ""
+            visibility = View.GONE
+        }
+        channelsBtn?.visibility = View.GONE
+        quickChBtn?.visibility = View.GONE
+        autoNextBtn?.visibility = View.GONE
+        episodesBtn?.visibility = View.GONE
+        prevEpBtn?.visibility = View.GONE
+        nextEpBtn?.visibility = View.GONE
+        autoplayBtn?.visibility = if (TelegramPlaybackQueue.hasNext()) View.VISIBLE else View.GONE
+        showLoadingCover(
+            titleOverride = next.title,
+            logoOverride = null,
+            backdropOverride = null,
+        )
+        playSource(0)
+        autoplayRunning = false
     }
 
     /** Freezes the corner preview and expands it over the whole player while

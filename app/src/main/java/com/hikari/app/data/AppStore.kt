@@ -732,6 +732,8 @@ class AppStore(private val ctx: Context) {
         val SEARCH_FAMILY_IDS = stringSetPreferencesKey("searchFamilyIds")
         val PLAY_SCOPE_ASK = booleanPreferencesKey("playScopeAsk")
         val IPTV_GROUP_MODE = stringPreferencesKey("iptvGroupMode")
+        /** Per-playlist group tile overrides (label/order/hidden/locked), JSON. */
+        val IPTV_GROUP_PREFS = stringPreferencesKey("iptvGroupPrefs")
         /** Pinned quick channel display names, stored as JSON array of strings. */
         val IPTV_QUICK_PINNED = stringPreferencesKey("iptvQuickPinned")
         /** Custom quick channels the user has added, stored as JSON array of QuickChannel objects. */
@@ -2076,6 +2078,23 @@ class AppStore(private val ctx: Context) {
 
     suspend fun setIptvGroupMode(mode: String) {
         write("IPTV_GROUP_MODE") { it[K.IPTV_GROUP_MODE] = normalizeIptvGroupMode(mode) }
+    }
+
+    /**
+     * Raw per-playlist group overrides (see [IptvGroupPrefs]). Kept as JSON in
+     * one preference so the playlist page can read, edit and save the whole
+     * map atomically; a missing value means "no overrides".
+     */
+    fun iptvGroupPrefsFlow(): Flow<String?> =
+        store.data.map { it[K.IPTV_GROUP_PREFS] }.distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    suspend fun iptvGroupPrefs(): String? = iptvGroupPrefsFlow().first()
+
+    suspend fun setIptvGroupPrefs(raw: String?) {
+        write("IPTV_GROUP_PREFS") {
+            if (raw.isNullOrBlank()) it.remove(K.IPTV_GROUP_PREFS)
+            else it[K.IPTV_GROUP_PREFS] = raw
+        }
     }
 
     /**

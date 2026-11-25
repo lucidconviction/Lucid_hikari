@@ -116,6 +116,11 @@ class WebViewActivity : ComponentActivity() {
     private lateinit var rootView: LinearLayout
     /** Horizontal strip of saved pages at the bottom of the browser. */
     private lateinit var bookmarkBar: LinearLayout
+    /** The address toolbar and its bookmark strip, hidden while a web player is fullscreen. */
+    private lateinit var browserBar: LinearLayout
+    private lateinit var bookmarkScroll: HorizontalScrollView
+    /** Full-window host for an HTML5 video's custom view. */
+    private var fullscreenOverlay: FrameLayout? = null
     private var contentFrame: FrameLayout? = null
     // Main-frame load failure panel. A blank black page with no explanation was
     // the whole "it didn't load" experience: a dead host, a dropped connection
@@ -273,6 +278,59 @@ class WebViewActivity : ComponentActivity() {
     private fun recentUserGesture(): Boolean =
         android.os.SystemClock.uptimeMillis() - lastUserTouchAt < 2_500L
 
+    /**
+     * The one main-frame URL a fresh tap is allowed to load.
+     *
+     * [recentUserGesture] must NOT be used for redirects: a streaming page's
+     * "tap" handler usually sets `location.href` (or the server answers 302)
+     * a moment later, which arrives inside the touch window and sailed through
+     * the gate as if the user had chosen the redirect target. A tap now opens
+     * exactly the URL it points at; every following navigation is a redirect
+     * and asks, even same-site and even inside that window.
+     */
+    @Volatile
+    private var allowedTapUrl: String? = null
+    @Volatile
+    private var allowedTapAt = 0L
+
+    /** The history entry an explicit Back/Forward is loading; history moves
+     *  are user navigation, not redirects. */
+    @Volatile
+    private var historyNavKey: String? = null
+
+    /** Scheme-insensitive key that keeps the query: `?ad=` redirects differ. */
+    private fun navigationKey(url: String): String {
+        val uri = runCatching { java.net.URI(url) }.getOrNull() ?: return url.trim()
+        val host = uri.host?.removePrefix("www.")?.lowercase().orEmpty()
+        if (host.isBlank()) return url.trim().trimEnd('/')
+        val path = uri.path.orEmpty().trimEnd('/')
+        val query = uri.query.orEmpty()
+        return "$host$path" + (if (query.isBlank()) "" else "?$query")
+    }
+
+    /**
+     * True only for the first main-frame navigation of a fresh tap. A second
+     * target in the same window (a script/meta/server redirect) is not the tap
+     * target and must be asked about. The pending URL is cleared as soon as the
+     * tapped page actually starts (see onPageStarted), so later automatic
+     * redirects never borrow it.
+     */
+    private fun isTapNavigation(url: String, hasGesture: Boolean): Boolean {
+        val key = navigationKey(url)
+        if (key.isBlank()) return false
+        val now = android.os.SystemClock.uptimeMillis()
+        val pending = allowedTapUrl
+        val pendingFresh = pending != null && now - allowedTapAt < 2_000L
+        if (hasGesture) {
+            if (pendingFresh && key != pending) return false
+            if (pendingFresh && key == pending) return true
+            allowedTapUrl = key
+            allowedTapAt = now
+            return true
+        }
+        return pendingFresh && key == pending
+    }
+
     /** Debug-build breadcrumb for a page that renders blank: what loaded,
      *  what was cancelled, and which gate cancelled it. Release builds log
      *  nothing. */
@@ -284,6 +342,15 @@ class WebViewActivity : ComponentActivity() {
     private var lastBlockedRedirectUrl: String? = null
     @Volatile
     private var lastBlockedRedirectHost: String? = null
+
+    /**
+     * The page an app action asked for (address bar, bookmark, tab, retry).
+     * Its first request is a navigation, not a redirect: the gate must let it
+     * through even though the WebView normalises the URL (a trailing slash,
+     * http -> https, the www host). Cleared when the page starts.
+     */
+    @Volatile
+    private var trustedInitialUrl: String? = null
 
     /** The user's allowed redirect hosts, mirror included. */
     private fun allowedNow(): Set<String> =
@@ -463,7 +530,7 @@ class WebViewActivity : ComponentActivity() {
         val t = openTabs[activeTabIndex]
         pageUrl = t.url
         pageTitle = t.title
-        webView.loadUrl(t.url)
+        loadUserPage(t.url)
     }
 
     /** Called when this activity is first created — loads the active tab's URL. */
@@ -730,105 +797,29 @@ class WebViewActivity : ComponentActivity() {
         return true
     }
 
-    /**
-     * A main-frame navigation the user's own tap opened toward a foreign host
-     * that redirect protection would refuse: instead of a bare "Blocked
-     * redirect" toast and a trip to the ⋯ menu, the tap gets the same choice
-     * popups get — Allow once, Always allow this host, Block always, Cancel.
-     * Automatic redirects (no gesture) keep the silent block exactly as
-     * before, so ad-hijack redirects can never nag.
-     */
-    private fun askRedirectPermission(url: String, host: String?) {
-        runOnUiThread {
-            if (isFinishing || isDestroyed) return@runOnUiThread
-            if (!choiceDue(url)) return@runOnUiThread
-            rememberBlockedRedirect(url)
-            val label = host ?: url
-            val dlg = AlertDialog.Builder(this@WebViewActivity)
-                .setTitle(I18n.t("Open this link?"))
-                .setMessage(
-                    I18n.t("This page tried to open a link:") + "\n" + label
-                )
-                .create()
-            dlg.setView(choiceBox(
-                I18n.t("Allow once") to {
-                    allowOnce(url)
-                    runCatching { webView.loadUrl(url) }
-                },
-                (I18n.t("Always allow") + (if (!host.isNullOrBlank()) " $host" else "")) to {
-                    allowRedirectTo(url, host)
-                },
-                (I18n.t("Block always") + (if (!host.isNullOrBlank()) " $host" else "")) to {
-                    if (!host.isNullOrBlank()) blockHostForever(host)
-                },
-                I18n.t("Cancel") to { },
-            ) { dlg.dismiss() })
-            dlg.show()
-        }
-    }
+    /** One redirect dialog at a time: a redirect chain can fire several
+     *  navigations before the user answers the first, and stacking them would
+     *  bury the page under dialogs. Every extra target stays blocked. */
+    @Volatile
+    private var linkDialogOpen = false
+    @Volatile
+    private var lastAppChoiceKey: String? = null
+    @Volatile
+    private var lastAppChoiceAt = 0L
 
     /**
-     * Adds [host] to the user's "Allowed redirect links" (the SAME list
-     * Settings edits) and loads [url] straight away — the ⋯ menu's "Allow
-     * redirect" generalized for the tap-choice dialog (see
-     * [askRedirectPermission] and [allowBlockedRedirect]).
+     * Automatic redirects are cancelled in the background.
+     *
+     * The page the user is actually reading stays on screen; the redirect
+     * target is never loaded, never rendered and never shown. The only trace
+     * is the same short toast used elsewhere ("Blocked redirect to host — open
+     * the menu to allow it"), and the ⋮ menu keeps the one-tap escape hatch
+     * (see [allowBlockedRedirect]). A redirect is not a navigation the user
+     * asked for, so there is no dialog to answer.
      */
-    private fun allowRedirectTo(url: String, host: String?) {
-        val entry = host?.takeIf { it.isNotBlank() } ?: return
-        lifecycleScope.launch(Dispatchers.IO) {
-            val app = applicationContext as HikariApp
-            val current = runCatching { app.store.webviewRedirectAllow() }.getOrDefault(emptyList())
-            val next = (current + entry).distinct()
-            runCatching { app.store.setWebviewRedirectAllow(next) }
-            runOnUiThread {
-                allowedRedirectHosts = allowedRedirectHosts + entry
-                Toast.makeText(
-                    this@WebViewActivity,
-                    "Allowed redirect to $entry",
-                    Toast.LENGTH_SHORT,
-                ).show()
-                runCatching { webView.loadUrl(url) }
-            }
-        }
-    }
-
-    /**
-     * A host the user chose "Block always" for on a tapped link (see
-     * [askRedirectPermission]): its requests never load again AND its popups
-     * never ask again — the same two lists "Block this ad site" writes (see
-     * [blockAdSite]), so the entry is visible and revertible in Settings.
-     */
-    private fun blockHostForever(host: String) {
-        val norm = AdBlocker.normalizeDomain(host.trim().trimEnd('.').lowercase())
-        if (norm.isBlank()) return
-        lifecycleScope.launch(Dispatchers.IO) {
-            val app = applicationContext as HikariApp
-            runCatching {
-                val cur = app.store.adBlock()
-                if (cur.none { AdBlocker.normalizeDomain(it) == norm }) {
-                    runCatching { app.store.setAdBlock((cur + norm).distinct()) }
-                }
-                val blk = app.store.webviewPopupBlock().toMutableSet()
-                if (blk.add(norm)) app.store.setWebviewPopupBlock(blk.toList())
-                val allow = app.store.webviewPopupAllow().toMutableSet()
-                if (allow.remove(norm)) app.store.setWebviewPopupAllow(allow.toList())
-            }
-            val (blocked, white) = runCatching {
-                AdBlocker.resolve(app, app.store.adLists(), app.store.adBlock(), app.store.adWhite())
-            }.getOrDefault(blockedDomains to whitelistDomains)
-            blockedDomains = blocked
-            whitelistDomains = white
-            popupBlockHosts = popupBlockHosts + norm
-            popupAllowHosts = popupAllowHosts - norm
-            runOnUiThread {
-                Toast.makeText(
-                    this@WebViewActivity,
-                    "Blocked $host — ads and popups from it will not load. Revert in Settings → Privacy.",
-                    Toast.LENGTH_LONG,
-                ).show()
-                runCatching { webView.reload() }
-            }
-        }
+    private fun blockRedirectSilently(url: String, host: String?) {
+        rememberBlockedRedirect(url)
+        showBlockedToast(blockedRedirectToast(Uri.parse(url)))
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -842,6 +833,7 @@ class WebViewActivity : ComponentActivity() {
         // Never allow a window title bar — the app draws no header anywhere.
         window.requestFeature(Window.FEATURE_NO_TITLE)
         super.onCreate(savedInstanceState)
+        WebViewLinkGuard.init(this)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             window.attributes = window.attributes.apply {
@@ -949,32 +941,45 @@ class WebViewActivity : ComponentActivity() {
         // opens the source list, and the ⋯ menu. Tabs moved into the menu; a
         // "Tabs" pill next to a URL field was two permanent buttons for one
         // occasional action.
-        val TOP_BAR_HEIGHT = dp(52)
-        val topBar = LinearLayout(this).apply {
+        val BROWSER_BAR_HEIGHT = dp(56)
+        browserBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                TOP_BAR_HEIGHT,
+                BROWSER_BAR_HEIGHT,
             )
             gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(0xF00B0E16.toInt())
             setPadding(dp(2), 0, dp(2), 0)
         }
 
-        fun barButton(glyph: String, desc: String, onClick: (View) -> Unit): TextView =
+        fun barButton(
+            glyph: String,
+            desc: String,
+            size: Float = 19f,
+            onClick: (View) -> Unit,
+        ): TextView =
             TextView(this@WebViewActivity).apply {
                 text = glyph
-                textSize = 19f
+                textSize = size
                 setTextColor(Color.WHITE)
                 gravity = Gravity.CENTER
-                setPadding(dp(10), dp(6), dp(10), dp(6))
+                minWidth = dp(48)
+                setPadding(dp(6), dp(4), dp(6), dp(4))
                 contentDescription = desc
                 isClickable = true
                 setOnClickListener { v -> onClick(v) }
             }
 
-        backButton = barButton("\u2039", I18n.t("Back")) { if (webView.canGoBack()) webView.goBack() }
-        forwardButton = barButton("\u203A", I18n.t("Forward")) { if (webView.canGoForward()) webView.goForward() }
+        // The two arrows are deliberately the biggest controls in the bar: they
+        // are the buttons a thumb reaches for on every page, and the old 19sp
+        // chevrons were easy to miss on a 52dp strip.
+        backButton = barButton("\u276E", I18n.t("Back"), 30f) {
+            if (webView.canGoBack()) navigateHistory(false)
+        }
+        forwardButton = barButton("\u276F", I18n.t("Forward"), 30f) {
+            if (webView.canGoForward()) navigateHistory(true)
+        }
         val reloadButton = barButton("\u27F3", I18n.t("Reload")) { webView.reload() }
         val menuButton = barButton("\u22EE", I18n.t("Browser menu")) { showMenu(it) }
 
@@ -1006,12 +1011,12 @@ class WebViewActivity : ComponentActivity() {
             }
         }
 
-        topBar.addView(backButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        topBar.addView(forwardButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        topBar.addView(urlField, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        topBar.addView(videoChip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(4) })
-        topBar.addView(reloadButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        topBar.addView(menuButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        browserBar.addView(backButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        browserBar.addView(forwardButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        browserBar.addView(urlField, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        browserBar.addView(videoChip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(4) })
+        browserBar.addView(reloadButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        browserBar.addView(menuButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
         val content = FrameLayout(this).apply {
             addView(webView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -1074,7 +1079,7 @@ class WebViewActivity : ComponentActivity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(10), 0, dp(10), 0)
         }
-        val bookmarkScroll = HorizontalScrollView(this).apply {
+        bookmarkScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             setBackgroundColor(0xFF0D1018.toInt())
             addView(bookmarkBar, ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -1084,16 +1089,17 @@ class WebViewActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.BLACK)
             addView(progressBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(4)))
-            addView(topBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, TOP_BAR_HEIGHT))
-            // A little air between the chrome and the page: sites open with a
-            // header banner pressed right against the URL bar otherwise, and a
-            // fixed site header reads as part of Hikari's own toolbar.
+            // The address bar sits at the bottom, directly above the bookmark
+            // strip, where a thumb reaches it. The page takes the weight above
+            // it; the small top margin keeps a site's own header off the
+            // progress bar.
             addView(
                 content,
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
                     topMargin = dp(16)
                 },
             )
+            addView(browserBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, BROWSER_BAR_HEIGHT))
             addView(
                 bookmarkScroll,
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)),
@@ -1101,15 +1107,28 @@ class WebViewActivity : ComponentActivity() {
         }
         setContentView(rootView)
         // When the system bars are showing (the user swiped them back, or the
-        // device ignores the immersive request), reserve their height at the
-        // top instead of letting the status bar draw over the address field.
+        // device ignores the immersive request), reserve their height so the
+        // status bar does not draw over the page and the navigation bar does not
+        // cover the bookmark strip at the bottom.
+        //
+        // The IME is the same contract, and the important one for this screen:
+        // the address bar lives at the BOTTOM, so if only the system bars are
+        // reserved the keyboard opens straight over it. The edge-to-edge window
+        // does not resize itself (decorFitsSystemWindows=false), so the IME
+        // inset must lift the address bar + bookmark strip above the keyboard
+        // explicitly. max() keeps the navigation bar reserved when the keyboard
+        // is closed (ime.bottom is then 0).
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(rootView) { v, insets ->
-            val top = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars()).top
-            if (v.paddingTop != top) v.setPadding(0, top, 0, 0)
+            val bars = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            val ime = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.ime())
+            val bottom = maxOf(bars.bottom, ime.bottom)
+            if (v.paddingTop != bars.top || v.paddingBottom != bottom) {
+                v.setPadding(0, bars.top, 0, bottom)
+            }
             insets
         }
         androidx.core.view.ViewCompat.requestApplyInsets(rootView)
-        contentFrame = rootView.getChildAt(2) as? FrameLayout
+        contentFrame = rootView.getChildAt(1) as? FrameLayout
         mouseMode = com.hikari.app.tv.MouseMode.enabled
         desktopMode = getSharedPreferences("webview_prefs", MODE_PRIVATE)
             .getBoolean("desktop", false)
@@ -1213,7 +1232,7 @@ class WebViewActivity : ComponentActivity() {
             override fun handleOnBackPressed() {
                 when {
                     customView != null -> hideCustomView()
-                    webView.canGoBack() -> webView.goBack()
+                    webView.canGoBack() -> navigateHistory(false)
                     openTabs.size > 1 -> {
                         // On the home page of a tab: close this tab and switch to the nearest one.
                         closeTabAt(activeTabIndex)
@@ -1392,34 +1411,27 @@ class WebViewActivity : ComponentActivity() {
                         rememberBlockedRedirect(request.url.toString())
                         return true
                     }
-                    // Redirect protection: cancel main-frame navigations away from
-                    // the site before they load (ad-hijack redirects). Same-site
-                    // pages, subdomains, whitelisted hosts and user-allowed
-                    // redirect hosts still work.
+                    // Redirect protection: EVERY automatic main-frame redirect is
+                    // cancelled in the background — same site or foreign — so
+                    // the user never sees the redirect page. A real tap is a
+                    // navigation the user asked for and still loads; the
+                    // initial page load and a reload are not redirects. Allowed
+                    // hosts and the "Allow once" window pass.
                     if (redirectProtection && request.isForMainFrame) {
+                        val url = request.url.toString()
                         val host = request.url.host
                         val cur = currentPageHost()
-                        if (host != null && cur != null && host != cur &&
-                            !AdBlocker.matches(host, whitelistDomains) &&
-                            !isRedirectAllowed(request.url.toString()) &&
-                            !isSameSite(host, cur)
+                        val directTap = isTapNavigation(url, request.hasGesture())
+                        if (cur != null && !directTap && url != pageUrl &&
+                            !isTrustedInitial(url) &&
+                            !isRedirectAllowed(url)
                         ) {
-                            // The USER tapped this link (a real gesture): it gets
-                            // the Allow / Always / Block-always choice inline
-                            // (see askRedirectPermission), not a bare toast and
-                            // a trip to the ⋯ menu. Automatic redirects keep the
-                            // silent block — they are never the user's tap.
-                            if (request.hasGesture() || recentUserGesture()) {
-                                // A tapped link: the user asked for this page, so
-                                // it loads. Only AUTOMATIC redirects are
-                                // cancelled — an ad hijack has no finger behind
-                                // it, and the ad host/pattern gates above and
-                                // below still apply.
-                                return false
+                            if (WebViewLinkGuard.isRedirectBlocked(host, url)) {
+                                dbg("blocked-redirect " + request.url)
+                                return true
                             }
-                            dbg("cancel-navigation " + request.url)
-                            showBlockedToast(blockedRedirectToast(request.url))
-                            rememberBlockedRedirect(request.url.toString())
+                            dbg("block-redirect " + request.url)
+                            blockRedirectSilently(url, host)
                             return true
                         }
                     }
@@ -1453,6 +1465,46 @@ class WebViewActivity : ComponentActivity() {
                 // An explicit "Allow once" outranks the redirect/ad gates (the
                 // user just chose it), but never the donation guard above.
                 if (request.isForMainFrame && isOneShotAllowed(u)) return null
+                // Redirect protection runs BEFORE the whitelist/ad-host logic:
+                // whitelisting a site (or its CDN) must not turn its automatic
+                // redirects into silent navigations. Only the initial trusted
+                // load, a real tap's own target and the user's explicit
+                // "Always unblock" list may pass; everything else is cancelled
+                // here, before the target can render.
+                if (!verifyAllowRedirects) {
+                    // Cloudflare-verification mode: never let a redirect land on a
+                    // foreign page while the view is just passing a challenge.
+                    if (autoCloseWhenCloudflarePassed && request.isForMainFrame &&
+                        !isVerifyAllowed(u)
+                    ) {
+                        showBlockedToast(blockedRedirectToast(request.url))
+                        rememberBlockedRedirect(u)
+                        return WebResourceResponse(
+                            "text/plain", "utf-8", ByteArrayInputStream(ByteArray(0))
+                        )
+                    }
+                    if (redirectProtection && request.isForMainFrame) {
+                        val host = request.url.host
+                        val cur = currentPageHost()
+                        val directTap = isTapNavigation(u, request.hasGesture())
+                        if (cur != null && !directTap && u != pageUrl &&
+                            !isTrustedInitial(u) &&
+                            !isRedirectAllowed(u)
+                        ) {
+                            if (WebViewLinkGuard.isRedirectBlocked(host, u)) {
+                                dbg("blocked-request " + u)
+                                return WebResourceResponse(
+                                    "text/plain", "utf-8", ByteArrayInputStream(ByteArray(0))
+                                )
+                            }
+                            dbg("block-request " + u + " main=" + request.isForMainFrame)
+                            blockRedirectSilently(u, host)
+                            return WebResourceResponse(
+                                "text/plain", "utf-8", ByteArrayInputStream(ByteArray(0))
+                            )
+                        }
+                    }
+                }
                 // The hls.js polyfill is loaded from these CDNs; a blocklist
                 // that happens to name a public CDN must not take the video
                 // engine's own dependency down with it.
@@ -1517,52 +1569,6 @@ class WebViewActivity : ComponentActivity() {
                 if (VIDEO_URL_RE.containsMatchIn(u)) {
                     maybeAddVideo(u)
                 }
-                // Video-verification mode: main-frame redirects are allowed
-                // (the streaming site's redirect to the video page), but ad
-                // subresources are still blocked above.
-                if (!verifyAllowRedirects) {
-                    // Cloudflare-verification mode: never let a redirect land on a
-                    // foreign page while the view is just passing a challenge.
-                    if (autoCloseWhenCloudflarePassed && request.isForMainFrame &&
-                        !isVerifyAllowed(u)
-                    ) {
-                        showBlockedToast(blockedRedirectToast(request.url))
-                        rememberBlockedRedirect(u)
-                        return WebResourceResponse(
-                            "text/plain", "utf-8", ByteArrayInputStream(ByteArray(0))
-                        )
-                    }
-                    // Redirect protection: never let an ad hijack navigate the main
-                    // frame away to a foreign domain (the twinrdengine.com-class
-                    // redirects). Same-site pages, subdomains, whitelisted hosts and
-                    // user-allowed redirect hosts still navigate normally; turning
-                    // the toggle off disables this entirely.
-                    if (redirectProtection && request.isForMainFrame) {
-                        val host = request.url.host
-                        val cur = currentPageHost()
-                        if (host != null && cur != null && host != cur &&
-                            !AdBlocker.matches(host, whitelistDomains) &&
-                            !isRedirectAllowed(u) &&
-                            !isSameSite(host, cur)
-                        ) {
-                            // Same tap-choice as the override gate above: a
-                            // user-gesture navigation asks inline, an
-                            // automatic one is dropped silently.
-                            if (request.hasGesture() || recentUserGesture()) {
-                                // Same rule as the override gate: a finger on
-                                // the page means the navigation is the user's,
-                                // not an ad hijack's.
-                                return null
-                            }
-                            dbg("cancel-request " + u + " main=" + request.isForMainFrame)
-                            showBlockedToast(blockedRedirectToast(request.url))
-                            rememberBlockedRedirect(u)
-                            return WebResourceResponse(
-                                "text/plain", "utf-8", ByteArrayInputStream(ByteArray(0))
-                            )
-                        }
-                    }
-                }
                 return null
             }
 
@@ -1580,6 +1586,36 @@ class WebViewActivity : ComponentActivity() {
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 dbg("start " + url)
+                // Last line of defence: some WebView versions follow a
+                // server 302, a meta refresh or a script assignment without
+                // reaching shouldOverrideUrlLoading. If this page is neither
+                // the page the user asked for, a Back/Forward move, nor an
+                // explicit allow, stop it here so the redirect target never
+                // stays on screen.
+                if (url != null && redirectProtection &&
+                    !verifyAllowRedirects && !addonConfig &&
+                    (url.startsWith("http://", true) || url.startsWith("https://", true))
+                ) {
+                    val key = navigationKey(url)
+                    val startedFromTap = allowedTapUrl != null && key == allowedTapUrl
+                    val startedFromHistory = historyNavKey != null && key == historyNavKey
+                    val previous = pageUrl
+                    val trusted = isTrustedInitial(url)
+                    val allowed = isOneShotAllowed(url) || isRedirectAllowed(url)
+                    val samePage = previous == null || navigationKey(previous) == key
+                    if (!startedFromTap && !startedFromHistory && !trusted && !allowed && !samePage) {
+                        allowedTapUrl = null
+                        historyNavKey = null
+                        runCatching { webView.stopLoading() }
+                        val host = runCatching { java.net.URI(url).host }.getOrNull()
+                        dbg("block-page-start " + url)
+                        blockRedirectSilently(url, host)
+                        return
+                    }
+                }
+                allowedTapUrl = null
+                historyNavKey = null
+                if (url != null && isTrustedInitial(url)) trustedInitialUrl = null
                 syncToolbar(url)
                 // A full navigation starts a new page: sources detected on the
                 // previous one are not this page's. SPA route changes do not
@@ -2023,12 +2059,31 @@ class WebViewActivity : ComponentActivity() {
                 }
                 customView = view
                 customViewCallback = callback
+                // A page's own player took over: hide the browser chrome and
+                // host the custom view in a full-window overlay, so the video
+                // covers the address bar and bookmarks instead of starting
+                // below them. Back restores the page and the chrome.
+                hideBrowserChromeForFullscreen()
+                val overlay = FrameLayout(this@WebViewActivity).apply {
+                    setBackgroundColor(Color.BLACK)
+                }
+                addContentView(
+                    overlay,
+                    ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    ),
+                )
                 view?.let { v ->
-                    rootView.addView(
+                    overlay.addView(
                         v,
-                        ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                        FrameLayout.LayoutParams(
+                            FrameLayout.LayoutParams.MATCH_PARENT,
+                            FrameLayout.LayoutParams.MATCH_PARENT,
+                        ),
                     )
                 }
+                fullscreenOverlay = overlay
                 setKeepScreenOn(true)
                 hideSystemBars()
             }
@@ -2050,7 +2105,7 @@ class WebViewActivity : ComponentActivity() {
             }
         }
 
-        webView.loadUrl(pageUrl ?: startUrl)
+        loadUserPage(pageUrl ?: startUrl)
     }
 
     @Suppress("DEPRECATION")
@@ -2072,11 +2127,30 @@ class WebViewActivity : ComponentActivity() {
     }
 
     private fun hideCustomView() {
-        customView?.let { v -> rootView.removeView(v) }
+        customView?.let { v -> (v.parent as? ViewGroup)?.removeView(v) }
+        fullscreenOverlay?.let { o -> (o.parent as? ViewGroup)?.removeView(o) }
+        fullscreenOverlay = null
         customView = null
         customViewCallback?.let { runCatching { it.onCustomViewHidden() } }
         customViewCallback = null
+        showBrowserChromeAfterFullscreen()
         setKeepScreenOn(videoPlaying)
+    }
+
+    /** True fullscreen: no address bar, no bookmarks, no progress strip. */
+    private fun hideBrowserChromeForFullscreen() {
+        if (::progressBar.isInitialized) progressBar.visibility = View.GONE
+        if (::browserBar.isInitialized) browserBar.visibility = View.GONE
+        if (::bookmarkScroll.isInitialized) bookmarkScroll.visibility = View.GONE
+    }
+
+    /** The page left fullscreen: give the browser its chrome back. */
+    private fun showBrowserChromeAfterFullscreen() {
+        if (::progressBar.isInitialized) {
+            progressBar.visibility = if (progressBar.progress >= 100) View.GONE else View.VISIBLE
+        }
+        if (::browserBar.isInitialized) browserBar.visibility = View.VISIBLE
+        if (::bookmarkScroll.isInitialized) bookmarkScroll.visibility = View.VISIBLE
     }
 
     /**
@@ -2108,7 +2182,7 @@ class WebViewActivity : ComponentActivity() {
         errorPanel?.visibility = View.GONE
         loadFailed = false
         runCatching {
-            webView.loadUrl(lastFailedUrl ?: pageUrl ?: startUrl)
+            loadUserPage(lastFailedUrl ?: pageUrl ?: startUrl)
         }
     }
 
@@ -2120,6 +2194,9 @@ class WebViewActivity : ComponentActivity() {
         menu.menu.add(0, 2, 0, "\u2192 Forward")
         menu.menu.add(0, 3, 0, "\u21BB Reload")
         menu.menu.add(0, 4, 0, "\u2302 Go to app home")
+        // Directly under the app-home entry: leave the site view and land on
+        // the saved Web Apps page (the browser's own home, not the site's).
+        menu.menu.add(0, 22, 0, "\uD83C\uDF10 Go to Web Apps")
         menu.menu.add(0, 5, 0, "\u25B6 Open in player")
         menu.menu.add(0, 6, 0, "Open in browser")
         menu.menu.add(0, 15, 4, if (desktopMode) "\uD83D\uDCF1 Mobile site" else "\uD83D\uDDA5 Desktop site")
@@ -2172,13 +2249,18 @@ class WebViewActivity : ComponentActivity() {
         }
         menu.setOnMenuItemClickListener { item ->
             when (item.itemId) {
-                1 -> if (webView.canGoBack()) webView.goBack()
-                2 -> if (webView.canGoForward()) webView.goForward()
+                1 -> if (webView.canGoBack()) navigateHistory(false)
+                2 -> if (webView.canGoForward()) navigateHistory(true)
                 3 -> webView.reload()
                 4 -> {
                     // Leave the site view and jump the app back to its Home tab
                     // (NOT the website's home page — AppRoot watches this).
                     HikariApp.instance.homeTabRequest.value += 1
+                    finish()
+                }
+                22 -> {
+                    // Leave the site view and land on the saved Web Apps page.
+                    HikariApp.instance.webAppsTabRequest.value += 1
                     finish()
                 }
                 5 -> playVideo()
@@ -2594,6 +2676,47 @@ class WebViewActivity : ComponentActivity() {
         )
     }
 
+    /**
+     * A page the user chose in the app's own UI: the address bar, a bookmark
+     * chip, a tab, or the retry panel. That is a first-page navigation, not a
+     * redirect, so move [pageUrl] forward, clear the cached host and mark the
+     * URL trusted for its first request. Without the mark the WebView's own
+     * normalisation (example.com -> https://example.com/) looked like a redirect
+     * and asked about the page the user had just typed.
+     */
+    /** Back/Forward with the destination pre-approved for the page-start gate. */
+    private fun navigateHistory(forward: Boolean) {
+        val list = webView.copyBackForwardList()
+        val index = list.currentIndex + if (forward) 1 else -1
+        historyNavKey = if (index in 0 until list.size) {
+            list.getItemAtIndex(index)?.url?.let { navigationKey(it) }
+        } else {
+            null
+        }
+        if (forward) webView.goForward() else webView.goBack()
+    }
+
+    private fun loadUserPage(url: String) {
+        pageUrl = url
+        pageHostCache = null
+        allowedTapUrl = null
+        trustedInitialUrl = normalizePage(url)
+        runCatching { webView.loadUrl(url) }
+    }
+
+    /** Host + path, ignoring scheme, `www.`, a trailing slash and the query. */
+    private fun normalizePage(url: String): String {
+        val uri = runCatching { java.net.URI(url) }.getOrNull()
+        val host = uri?.host?.removePrefix("www.")?.lowercase().orEmpty()
+        val path = uri?.path.orEmpty().trimEnd('/')
+        return if (host.isBlank()) url.trim().trimEnd('/') else "$host$path"
+    }
+
+    private fun isTrustedInitial(url: String): Boolean {
+        val trusted = trustedInitialUrl ?: return false
+        return normalizePage(url) == trusted
+    }
+
     /** Host of the page currently shown (or being loaded). */
     private fun currentPageHost(): String? {
         pageHostCache?.let { return it }
@@ -2738,43 +2861,149 @@ class WebViewActivity : ComponentActivity() {
             Toast.makeText(this, I18n.t("This link can't be opened here"), Toast.LENGTH_SHORT).show()
             return true
         }
-        // Only a real tap may launch another app from ordinary browsing. A
-        // script-triggered intent:// is a classic ad/install hijack; extension
-        // and add-on setup pages are exempt so their own login flows still
-        // work on a delayed redirect.
-        if (!gesture && providerId == null && !addonConfig) {
-            showBlockedToast(I18n.t("Blocked an automatic app launch"))
+        WebViewLinkGuard.init(this)
+        val key = appLinkKey(uri, scheme)
+        if (WebViewLinkGuard.isAppAllowed(key)) {
+            dbg("app-allowed key=$key gesture=$gesture")
+            openExternalNow(uri, scheme)
             return true
         }
-        val opened = runCatching {
-            val intent = if (scheme == "intent") {
-                Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME).apply {
-                    addCategory(Intent.CATEGORY_BROWSABLE)
-                }
-            } else {
-                Intent(Intent.ACTION_VIEW, uri)
-            }
-            val resolver = runCatching {
+        if (WebViewLinkGuard.isAppBlocked(key)) {
+            dbg("app-blocked key=$key gesture=$gesture")
+            showBlockedToast(I18n.t("Blocked an app link"))
+            return true
+        }
+        // Every app call asks, whether a finger or a script triggered it.
+        // "Always unblock" is the explicit way to stop being asked, and it is
+        // stored in WebViewLinkGuard, not the ad-block list.
+        if (appChoiceDue(key)) askAppPermission(uri, scheme, key)
+        return true
+    }
+
+    private fun appChoiceDue(key: String): Boolean {
+        val now = System.currentTimeMillis()
+        if (key == lastAppChoiceKey && now - lastAppChoiceAt < 5_000L) return false
+        lastAppChoiceKey = key
+        lastAppChoiceAt = now
+        return true
+    }
+
+    /**
+     * The app-call counterpart of the redirect guard: Always block / Allow
+     * once / Always unblock. Site redirects are cancelled silently, but an
+     * external app launch still needs the user's decision. The target app's own label is shown when it
+     * can be resolved; otherwise the scheme/host is enough to recognise it.
+     */
+    private fun askAppPermission(uri: Uri, scheme: String, key: String) {
+        runOnUiThread {
+            if (isFinishing || isDestroyed) return@runOnUiThread
+            if (linkDialogOpen) return@runOnUiThread
+            linkDialogOpen = true
+            val label = appLinkLabel(uri, scheme)
+            val dlg = AlertDialog.Builder(this@WebViewActivity)
+                .setTitle(I18n.t("App link blocked"))
+                .setMessage(
+                    I18n.t("This page wants to open:") + "\n" + label + "\n\n" +
+                        I18n.t("Block it, or allow it?")
+                )
+                .create()
+            dlg.setOnDismissListener { linkDialogOpen = false }
+            dlg.setView(choiceBox(
+                I18n.t("Always block") to {
+                    WebViewLinkGuard.blockApp(key)
+                    Toast.makeText(
+                        this@WebViewActivity,
+                        "App links to $label will stay blocked",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                },
+                I18n.t("Allow once") to {
+                    openExternalNow(uri, scheme)
+                },
+                I18n.t("Always unblock") to {
+                    WebViewLinkGuard.allowApp(key)
+                    openExternalNow(uri, scheme)
+                },
+            ) {
+                linkDialogOpen = false
+                dlg.dismiss()
+            })
+            dlg.show()
+        }
+    }
+
+    private fun appLinkKey(uri: Uri, scheme: String): String {
+        if (scheme == "intent") {
+            val intent = buildExternalIntent(uri, scheme)
+            val pkg = intent?.component?.packageName
+                ?: intent?.`package`
+                ?: intent?.data?.host
+            return "pkg:" + (pkg ?: "intent").lowercase()
+        }
+        if (scheme == "market") {
+            val id = runCatching { uri.getQueryParameter("id") }.getOrNull()
+            return "pkg:" + (id ?: "market").lowercase()
+        }
+        val host = uri.host?.trim()?.lowercase()
+        return if (!host.isNullOrBlank()) "app:$scheme@$host" else "app:$scheme"
+    }
+
+    private fun appLinkLabel(uri: Uri, scheme: String): String {
+        val intent = buildExternalIntent(uri, scheme)
+        val resolver = intent?.let {
+            runCatching {
                 packageManager.resolveActivity(
-                    intent,
+                    it,
                     android.content.pm.PackageManager.MATCH_DEFAULT_ONLY,
                 )
             }.getOrNull()
-            if (resolver == null && scheme == "intent") {
-                // intent:// carries its own browser fallback; use it instead
-                // of dead-ending when the target app is not installed.
-                val fallback = intent.getStringExtra("browser_fallback_url")
-                if (!fallback.isNullOrBlank()) {
-                    webView.loadUrl(fallback)
-                    return true
-                }
+        }
+        val label = resolver?.loadLabel(packageManager)?.toString()?.trim()
+        if (!label.isNullOrBlank()) return label
+        return uri.host?.takeIf { it.isNotBlank() } ?: scheme
+    }
+
+    private fun buildExternalIntent(uri: Uri, scheme: String): Intent? = runCatching {
+        if (scheme == "intent") {
+            Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME).apply {
+                addCategory(Intent.CATEGORY_BROWSABLE)
             }
+        } else {
+            Intent(Intent.ACTION_VIEW, uri)
+        }
+    }.getOrNull()
+
+    private fun openExternalNow(uri: Uri, scheme: String) {
+        val intent = buildExternalIntent(uri, scheme)
+        if (intent == null) {
+            Toast.makeText(this, I18n.t("No app can open this link"), Toast.LENGTH_SHORT).show()
+            return
+        }
+        val resolver = runCatching {
+            packageManager.resolveActivity(
+                intent,
+                android.content.pm.PackageManager.MATCH_DEFAULT_ONLY,
+            )
+        }.getOrNull()
+        if (resolver == null && scheme == "intent") {
+            // intent:// carries its own browser fallback; use it instead of
+            // dead-ending when the target app is not installed.
+            val fallback = intent.getStringExtra("browser_fallback_url")
+            if (!fallback.isNullOrBlank()) {
+                // The user already said "Allow" for this hand-off: the app's
+                // own browser fallback is part of the same navigation, not a
+                // second redirect to ask about.
+                allowOnce(fallback)
+                webView.loadUrl(fallback)
+                return
+            }
+        }
+        val opened = runCatching {
             startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }.isSuccess
         if (!opened) {
             Toast.makeText(this, I18n.t("No app can open this link"), Toast.LENGTH_SHORT).show()
         }
-        return true
     }
 
     /** The addon's config page handed back an install URL: give it to the caller
@@ -3149,7 +3378,7 @@ class WebViewActivity : ComponentActivity() {
             t.contains('.') && !t.contains(' ') -> "https://" + t
             else -> "https://www.google.com/search?q=" + Uri.encode(t)
         }
-        runCatching { webView.loadUrl(target) }
+        loadUserPage(target)
     }
 
     /**
@@ -3246,7 +3475,7 @@ class WebViewActivity : ComponentActivity() {
             bookmarkBar.addView(
                 bookmarkChip(title, accent = false, onClick = {
                     if (webView.url != url || !webView.canGoBack()) {
-                        webView.loadUrl(url)
+                        loadUserPage(url)
                     }
                     webView.requestFocus()
                 }, onLongClick = {

@@ -5,6 +5,7 @@ import com.hikari.app.ui.components.LocalHideHelp
 import android.content.Intent
 import android.widget.Toast
 import com.hikari.app.data.Logs
+import com.hikari.app.player.TelegramPlaybackQueue
 import com.hikari.app.i18n.I18n
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -1779,6 +1780,7 @@ private fun TelegramChatVideos(
                 searchIn = searchIn,
                 view = view,
                 onPlay = { playTdVideo(context, it) },
+                onPlayAt = { list, index -> playTdQueue(context, list, index) },
             )
             return@Column
         }
@@ -1832,7 +1834,7 @@ private fun TelegramChatVideos(
         ChatVideoCollection(
             videos = loaded,
             view = view,
-            onPlay = { playTdVideo(context, it) },
+            onPlay = { video -> playTdQueue(context, loaded, loaded.indexOf(video)) },
             keeperKey = "tgChat:$chatId",
         ) {
             item(key = "telegram-td-more") {
@@ -2190,6 +2192,7 @@ private fun ChatVideoSearchResults(
     searchIn: Td.SearchIn,
     view: TgView,
     onPlay: (Td.ChatVideo) -> Unit,
+    onPlayAt: ((List<Td.ChatVideo>, Int) -> Unit)? = null,
 ) {
     var results by remember(chatId, query, searchIn) { mutableStateOf<List<Td.ChatVideo>?>(null) }
     var cursor by remember(chatId, query, searchIn) { mutableStateOf(0L) }
@@ -2280,7 +2283,15 @@ private fun ChatVideoSearchResults(
         )
         return
     }
-    ChatVideoCollection(videos = found, view = view, onPlay = onPlay, keeperKey = "tgChatSearch:$chatId:$query") {
+    ChatVideoCollection(
+        videos = found,
+        view = view,
+        onPlay = { video ->
+            val at = found.indexOf(video)
+            if (onPlayAt != null && at >= 0) onPlayAt(found, at) else onPlay(video)
+        },
+        keeperKey = "tgChatSearch:$chatId:$query",
+    ) {
         item(key = "telegram-td-search-footer") {
             Column(Modifier.fillMaxWidth().padding(10.dp)) {
                 Text(
@@ -2633,7 +2644,7 @@ private fun TelegramChannelVideos(
                     ChatVideoCollection(
                         videos = list,
                         view = view,
-                        onPlay = { playTdVideo(context, it) },
+                        onPlay = { video -> playTdQueue(context, list, list.indexOf(video)) },
                         keeperKey = "tgChannelGrid:$channel",
                     ) {
                         item(key = "telegram-channel-td-more") {
@@ -2690,7 +2701,9 @@ private fun TelegramChannelVideos(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     items(list, key = { it.channel + "/" + it.messageId }) { video ->
-                        TelegramVideoRow(video) { playTelegramVideo(context, video) }
+                        TelegramVideoRow(video) {
+                            playWebQueue(context, list, list.indexOf(video))
+                        }
                     }
                     item(key = "telegram-more") {
                         if (reachedEnd) {
@@ -2862,7 +2875,58 @@ private fun TelegramVideoRow(video: TelegramVideo, onPlay: () -> Unit) {
  * at the middle — and the player's own UI (quality, subtitles, speed, audio
  * tracks) is untouched.
  */
-private fun playTdVideo(context: android.content.Context, video: Td.ChatVideo) {
+private fun tdSourceJson(video: Td.ChatVideo): String = JSONArray().put(
+    JSONObject()
+        .put("name", "Telegram")
+        // The post it came from rides along so the data source can refresh an
+        // expired file reference — TDLib takes the fresh one out of the
+        // message it is handed (see TdFileDataSource.repair).
+        .put("url", TdFileDataSource.uriFor(video.fileId, video.chatId, video.messageId))
+        .put("local", true)
+        .put("isM3u8", false)
+        .put("isMpd", false)
+        .put("subtitles", JSONArray())
+).toString()
+
+private fun webSourceJson(video: TelegramVideo): String {
+    val headers = JSONObject()
+        .put("User-Agent", Http.UA)
+        .put("Referer", "https://t.me/")
+    return JSONArray().put(
+        JSONObject()
+            .put("name", "Telegram")
+            .put("url", video.url)
+            .put("headers", headers)
+            .put("isM3u8", video.url.contains(".m3u8", true))
+            .put("isMpd", false)
+            .put("subtitles", JSONArray())
+    ).toString()
+}
+
+private fun tdQueueItem(video: Td.ChatVideo): TelegramPlaybackQueue.Item =
+    TelegramPlaybackQueue.Item(video.title, tdSourceJson(video), video.fileId)
+
+private fun webQueueItem(video: TelegramVideo): TelegramPlaybackQueue.Item =
+    TelegramPlaybackQueue.Item(video.title, webSourceJson(video))
+
+private fun playTdQueue(context: android.content.Context, list: List<Td.ChatVideo>, index: Int) {
+    if (index !in list.indices) return
+    TelegramPlaybackQueue.set(list.map(::tdQueueItem), index)
+    playTdVideo(context, list[index], queued = true)
+}
+
+private fun playWebQueue(context: android.content.Context, list: List<TelegramVideo>, index: Int) {
+    if (index !in list.indices) return
+    TelegramPlaybackQueue.set(list.map(::webQueueItem), index)
+    playTelegramVideo(context, list[index], queued = true)
+}
+
+private fun playTdVideo(
+    context: android.content.Context,
+    video: Td.ChatVideo,
+    queued: Boolean = false,
+) {
+    if (!queued) TelegramPlaybackQueue.clear()
     // Tap tracer: if the player never opens, this line says whether the tap
     // even arrived (compare with the "player would not open" line below).
     Logs.log("Telegram", "play tap fileId=" + video.fileId + " chat=" + video.chatId + " msg=" + video.messageId)
@@ -2874,38 +2938,25 @@ private fun playTdVideo(context: android.content.Context, video: Td.ChatVideo) {
     // Warmup must never break playback: a prewarm throw used to sit OUTSIDE
     // the guard below and crashed the app on tap instead of playing.
     runCatching { Td.prewarm(video.fileId) }
-    val sources = JSONArray().put(
-        JSONObject()
-            .put("name", "Telegram")
-            // The post it came from rides along so the data source can refresh an
-            // expired file reference — TDLib takes the fresh one out of the
-            // message it is handed (see TdFileDataSource.repair). Telegram's
-            // references are short-lived, and this list can be minutes or days
-            // old, which is exactly when a download would silently never start.
-            .put("url", TdFileDataSource.uriFor(video.fileId, video.chatId, video.messageId))
-            // Marks the source as "already local" so the player goes straight to
-            // ExoPlayer: there is no URL to probe and no CDN to fail over from.
-            .put("local", true)
-            .put("isM3u8", false)
-            .put("isMpd", false)
-            .put("subtitles", JSONArray())
-    )
+    val sources = tdSourceJson(video)
     // This launch must never fail silently: it used to be a bare runCatching
     // with no fallback, so a tap that could not open the player did NOTHING —
     // the exact "telegram video unclickable" report, with no log line to
     // answer it.
     val intent = Intent(context, com.hikari.app.player.PlayerActivity::class.java).apply {
         putExtra("title", video.title)
-        putExtra("sources", sources.toString())
+        putExtra("sources", sources)
+        if (queued) putExtra("tgQueued", true)
     }
-    // TDLib media stays in the full player (see PipLauncher); public Telegram
-    // CDN videos can float in a PIP window like any other stream.
-    if (!com.hikari.app.player.PipLauncher.intercept(context, intent)) {
-        val opened = runCatching { context.startActivity(intent) }
-        if (opened.isFailure) {
-            Logs.log("Telegram", "player would not open: " + (opened.exceptionOrNull()?.message ?: "unknown"))
-            Toast.makeText(context, I18n.t("Couldn't open the player"), Toast.LENGTH_SHORT).show()
-        }
+    // TDLib media deliberately stays in the full player (see PipLauncher);
+    // public Telegram CDN videos can float in a PIP window. A QUEUED Telegram
+    // video must always use the full player too: the corner preview and the
+    // in-place handoff live there, and an in-app PIP pane cannot advance a
+    // queue. Android system PiP is still available from that player.
+    val opened = runCatching { context.startActivity(intent) }
+    if (opened.isFailure) {
+        Logs.log("Telegram", "player would not open: " + (opened.exceptionOrNull()?.message ?: "unknown"))
+        Toast.makeText(context, I18n.t("Couldn't open the player"), Toast.LENGTH_SHORT).show()
     }
 }
 
@@ -2913,29 +2964,22 @@ private fun playTdVideo(context: android.content.Context, video: Td.ChatVideo) {
  * Play a public channel's video: Telegram's own CDN URL, straight into the same
  * player, with the headers its CDN expects.
  */
-private fun playTelegramVideo(context: android.content.Context, video: TelegramVideo) {
+private fun playTelegramVideo(
+    context: android.content.Context,
+    video: TelegramVideo,
+    queued: Boolean = false,
+) {
+    if (!queued) TelegramPlaybackQueue.clear()
     Logs.log("Telegram", "play tap url=" + video.url.take(160))
-    val headers = JSONObject()
-        .put("User-Agent", Http.UA)
-        // Telegram's CDN answers a bare request; the referer keeps it looking
-        // like the web preview the URL was read from.
-        .put("Referer", "https://t.me/")
-    val sources = JSONArray().put(
-        JSONObject()
-            .put("name", "Telegram")
-            .put("url", video.url)
-            .put("headers", headers)
-            .put("isM3u8", video.url.contains(".m3u8", true))
-            .put("isMpd", false)
-            .put("subtitles", JSONArray())
-    )
+    val sources = webSourceJson(video)
     // Same never-silent rule as [playTdVideo] above: a tap that cannot open
     // the player says so instead of doing nothing.
     val intent = Intent(context, com.hikari.app.player.PlayerActivity::class.java).apply {
         putExtra("title", video.title)
-        putExtra("sources", sources.toString())
+        putExtra("sources", sources)
+        if (queued) putExtra("tgQueued", true)
     }
-    if (!com.hikari.app.player.PipLauncher.intercept(context, intent)) {
+    if (queued || !com.hikari.app.player.PipLauncher.intercept(context, intent)) {
         val opened = runCatching { context.startActivity(intent) }
         if (opened.isFailure) {
             Logs.log("Telegram", "player would not open: " + (opened.exceptionOrNull()?.message ?: "unknown"))

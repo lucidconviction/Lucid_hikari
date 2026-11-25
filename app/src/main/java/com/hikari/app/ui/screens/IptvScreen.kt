@@ -30,6 +30,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
@@ -48,6 +49,9 @@ import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -108,6 +112,8 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
 import com.hikari.app.HikariApp
+import com.hikari.app.data.IptvGroupOverride
+import com.hikari.app.data.IptvGroupPrefs
 import com.hikari.app.data.IptvPlaylist
 import com.hikari.app.data.MultiViewSession
 import com.hikari.app.data.QuickChannel
@@ -1349,6 +1355,7 @@ private fun AddModePill(label: String, selected: Boolean, onClick: () -> Unit) {
  * catalog shows its folders. A tap opens that group's channels in the paged
  * catalog grid (which is how every other catalog in the app is browsed).
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun IptvPlaylistScreen(nav: NavHostController, providerId: String) {
     val app = LocalContext.current.applicationContext as HikariApp
@@ -1360,22 +1367,32 @@ fun IptvPlaylistScreen(nav: NavHostController, providerId: String) {
     val shape by shapeFlow.collectAsState(initial = TileShapes.POSTER)
     val groupModeFlow = remember { app.store.iptvGroupModeFlow() }
     val groupMode by groupModeFlow.collectAsState(initial = "groups")
+    val groupPrefsFlow = remember { app.store.iptvGroupPrefsFlow() }
+    val groupPrefsRaw by groupPrefsFlow.collectAsState(initial = null)
     val scope = rememberCoroutineScope()
 
     var groups by remember(providerId) { mutableStateOf<List<IptvGroupTile>?>(null) }
+    /** The group whose action sheet is open (long-press or overflow). */
+    var manageTarget by remember(providerId) { mutableStateOf<IptvGroupTile?>(null) }
+    /** The rename dialog's target and draft label. */
+    var renameTarget by remember(providerId) { mutableStateOf<IptvGroupTile?>(null) }
+    var renameText by remember(providerId) { mutableStateOf("") }
+    /** The "Hidden groups (N)" sheet. */
+    var hiddenSheetOpen by remember(providerId) { mutableStateOf(false) }
     /** F2 — loaded channel list, used for validation and health-dot computation. */
     var channels by remember(providerId) { mutableStateOf<List<com.hikari.app.data.IptvChannel>?>(null) }
     /** F2 — true while a Validate probe is in flight. */
     var validating by remember { mutableStateOf(false) }
     /** F2 — a version counter that recomposes the screen when validation completes. */
     var validateVersion by remember { mutableStateOf(0) }
-    LaunchedEffect(providerId, playlist, groupMode) {
+    LaunchedEffect(providerId, playlist, groupMode, groupPrefsRaw) {
         if (playlist == null) {
             groups = emptyList()
             channels = emptyList()
             return@LaunchedEffect
         }
-        groups = withContext(Dispatchers.IO) { readGroups(playlist, groupMode) }
+        val overrides = IptvGroupPrefs.forProvider(groupPrefsRaw, providerId)
+        groups = withContext(Dispatchers.IO) { readGroups(playlist, groupMode, overrides) }
         channels = withContext(Dispatchers.IO) { playlist.channels() }
     }
     /** F2 — probe every channel URL in the current playlist and cache results. */
@@ -1460,15 +1477,50 @@ fun IptvPlaylistScreen(nav: NavHostController, providerId: String) {
         }
     }
 
+    fun saveGroupPrefs(next: String) {
+        scope.launch { app.store.setIptvGroupPrefs(next) }
+    }
+
+    fun updateOverride(
+        originalName: String,
+        transform: (IptvGroupOverride) -> IptvGroupOverride,
+    ) {
+        val current = IptvGroupPrefs.forProvider(groupPrefsRaw, providerId)
+        val base = IptvGroupPrefs.find(current, originalName) ?: IptvGroupOverride(originalName)
+        val next = IptvGroupPrefs.upsert(groupPrefsRaw, providerId, transform(base))
+        saveGroupPrefs(next)
+    }
+
+    fun moveGroup(originalName: String, delta: Int) {
+        val orderedNames = groups.orEmpty()
+            .filterNot { it.hidden }
+            .filter { it.catalogId != IptvProvider.CATALOG_ALL }
+            .map { it.originalName }
+        val next = IptvGroupPrefs.move(groupPrefsRaw, providerId, orderedNames, originalName, delta)
+        saveGroupPrefs(next)
+    }
+
     val loaded = groups
+    val overrides = remember(groupPrefsRaw, providerId) {
+        IptvGroupPrefs.forProvider(groupPrefsRaw, providerId)
+    }
+    val editableGroups = IptvPlaylist.normalizeGroupMode(groupMode) == "groups"
+    val visibleGroups = remember(loaded) { loaded.orEmpty().filterNot { it.hidden } }
+    val hiddenGroups = remember(loaded) { loaded.orEmpty().filter { it.hidden } }
     Column(Modifier.fillMaxSize()) {
         IptvHeader(
             title = playlist?.displayName ?: tr("IPTV"),
             subtitle = when {
                 loaded == null -> tr("Reading the playlist…")
                 else -> I18n.t("%s channels in %s %s")
-                    .replaceFirst("%s", loaded.sumOf { it.count }.toString())
-                    .replaceFirst("%s", loaded.size.toString())
+                    .replaceFirst(
+                        "%s",
+                        visibleGroups
+                            .filter { it.catalogId != IptvProvider.CATALOG_ALL }
+                            .sumOf { it.count }
+                            .toString(),
+                    )
+                    .replaceFirst("%s", visibleGroups.count { it.catalogId != IptvProvider.CATALOG_ALL }.toString())
                     .replaceFirst("%s", when (IptvPlaylist.normalizeGroupMode(groupMode)) {
                         "language" -> tr("languages")
                         "category" -> tr("categories")
@@ -1670,7 +1722,10 @@ fun IptvPlaylistScreen(nav: NavHostController, providerId: String) {
             // from a channel lands where the grid was.
             state = com.hikari.app.ui.components.keptGridState(
                 "iptvGroups:$providerId",
-                itemKeys = remember(loaded) { loaded.map { it.catalogId } },
+                itemKeys = remember(visibleGroups) {
+                    visibleGroups.map { it.catalogId } +
+                        if (hiddenGroups.isNotEmpty()) listOf("iptv-hidden-groups") else emptyList()
+                },
             ),
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
@@ -1685,7 +1740,7 @@ fun IptvPlaylistScreen(nav: NavHostController, providerId: String) {
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            items(loaded, key = { it.catalogId }) { g ->
+            items(visibleGroups, key = { it.catalogId }) { g ->
                 // Use the group's own first channel logo when it has one. Only
                 // groups with no artwork at all fall back to the generated
                 // poster.
@@ -1703,8 +1758,8 @@ fun IptvPlaylistScreen(nav: NavHostController, providerId: String) {
                     } else null
                 }
                 // F2 — compute health from the current channels
-                val groupChannels = remember(channels, validateVersion, g.catalogId) {
-                    channels.orEmpty().filter { IptvPlaylist.groupOf(it) == g.name }
+                val groupChannels = remember(channels, validateVersion, g.catalogId, g.originalName) {
+                    channels.orEmpty().filter { IptvPlaylist.groupOf(it) == g.originalName }
                 }
                 val health = remember(groupChannels, validateVersion) {
                     healthOf(groupChannels)
@@ -1716,6 +1771,12 @@ fun IptvPlaylistScreen(nav: NavHostController, providerId: String) {
                     subtitle = I18n.t("%s channels").replace("%s", g.count.toString()),
                     shape = shape,
                     health = health,
+                    locked = g.locked,
+                    onLongClick = if (editableGroups && g.catalogId != IptvProvider.CATALOG_ALL) {
+                        { manageTarget = g }
+                    } else {
+                        null
+                    },
                 ) {
                     Routes.safeNavigate(
                         nav,
@@ -1730,6 +1791,191 @@ fun IptvPlaylistScreen(nav: NavHostController, providerId: String) {
                     )
                 }
             }
+            if (hiddenGroups.isNotEmpty()) {
+                item(key = "iptv-hidden-groups", span = { GridItemSpan(maxLineSpan) }) {
+                    TextButton(
+                        onClick = { hiddenSheetOpen = true },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(
+                            Icons.Filled.VisibilityOff,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            I18n.t("Hidden groups (%s)")
+                                .replace("%s", hiddenGroups.size.toString())
+                        )
+                    }
+                }
+            }
+        }
+
+        // ---- group management (Groups mode only) --------------------------
+        val target = manageTarget
+        if (editableGroups && target != null) {
+            val targetOverride = IptvGroupPrefs.find(overrides, target.originalName)
+            val locked = targetOverride?.locked == true
+            val orderedNames = visibleGroups
+                .filter { it.catalogId != IptvProvider.CATALOG_ALL }
+                .map { it.originalName }
+            val position = orderedNames.indexOf(target.originalName)
+            ModalBottomSheet(
+                onDismissRequest = { manageTarget = null },
+                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            ) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp)
+                        .padding(bottom = 24.dp),
+                ) {
+                    Text(
+                        target.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        I18n.t("%s channels · %s")
+                            .replaceFirst("%s", target.count.toString())
+                            .replaceFirst("%s", if (locked) tr("Locked") else tr("Unlocked")),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp, bottom = 8.dp),
+                    )
+                    TextButton(
+                        enabled = !locked,
+                        onClick = {
+                            renameTarget = target
+                            renameText = target.name
+                            manageTarget = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(tr("Rename group")) }
+                    TextButton(
+                        enabled = !locked && position > 0,
+                        onClick = {
+                            moveGroup(target.originalName, -1)
+                            manageTarget = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(tr("Move up")) }
+                    TextButton(
+                        enabled = !locked && position >= 0 && position < orderedNames.lastIndex,
+                        onClick = {
+                            moveGroup(target.originalName, 1)
+                            manageTarget = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(tr("Move down")) }
+                    TextButton(
+                        enabled = !locked,
+                        onClick = {
+                            updateOverride(target.originalName) { it.copy(hidden = true) }
+                            manageTarget = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(tr("Hide group")) }
+                    TextButton(
+                        onClick = {
+                            updateOverride(target.originalName) { it.copy(locked = !it.locked) }
+                            manageTarget = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(
+                            if (locked) Icons.Filled.LockOpen else Icons.Filled.Lock,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (locked) tr("Unlock group") else tr("Lock group"))
+                    }
+                }
+            }
+        }
+
+        if (hiddenSheetOpen && hiddenGroups.isNotEmpty()) {
+            ModalBottomSheet(
+                onDismissRequest = { hiddenSheetOpen = false },
+                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            ) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp)
+                        .padding(bottom = 24.dp),
+                ) {
+                    Text(
+                        tr("Hidden groups"),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        tr("Their channels stay in All channels and search."),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp, bottom = 8.dp),
+                    )
+                    hiddenGroups.forEach { g ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                g.name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text(
+                                I18n.t("%s channels").replace("%s", g.count.toString()),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(end = 8.dp),
+                            )
+                            TextButton(onClick = {
+                                updateOverride(g.originalName) { it.copy(hidden = false) }
+                            }) { Text(tr("Restore")) }
+                        }
+                    }
+                }
+            }
+        }
+
+        val renaming = renameTarget
+        if (editableGroups && renaming != null) {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { renameTarget = null },
+                title = { Text(tr("Rename group")) },
+                text = {
+                    OutlinedTextField(
+                        value = renameText,
+                        onValueChange = { renameText = it },
+                        singleLine = true,
+                        label = { Text(tr("Group name")) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        enabled = renameText.isNotBlank(),
+                        onClick = {
+                            val label = renameText.trim()
+                            updateOverride(renaming.originalName) {
+                                it.copy(label = if (label == renaming.originalName) "" else label)
+                            }
+                            renameTarget = null
+                        },
+                    ) { Text(tr("Rename")) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { renameTarget = null }) { Text(tr("Cancel")) }
+                },
+            )
         }
     }
 }
@@ -1760,10 +2006,12 @@ fun IptvAllPlaylistsScreen(nav: NavHostController) {
     val shape by shapeFlow.collectAsState(initial = TileShapes.POSTER)
     val groupModeFlow = remember { app.store.iptvGroupModeFlow() }
     val groupMode by groupModeFlow.collectAsState(initial = "groups")
+    val groupPrefsFlow = remember { app.store.iptvGroupPrefsFlow() }
+    val groupPrefsRaw by groupPrefsFlow.collectAsState(initial = null)
     val scope = rememberCoroutineScope()
 
     var tiles by remember { mutableStateOf<List<AllPlaylistTile>?>(null) }
-    LaunchedEffect(playlists, groupMode) {
+    LaunchedEffect(playlists, groupMode, groupPrefsRaw) {
         val m = IptvPlaylist.normalizeGroupMode(groupMode)
         tiles = withContext(Dispatchers.IO) {
             val out = ArrayList<AllPlaylistTile>()
@@ -1782,22 +2030,38 @@ fun IptvAllPlaylistsScreen(nav: NavHostController) {
                         key = "$pid|all",
                         cover = channels.firstOrNull { !it.artwork.isNullOrBlank() }?.artwork,
                     )
-                    channels.groupBy { IptvPlaylist.groupKey(it, m) }
+                    val entries = channels.groupBy { IptvPlaylist.groupKey(it, m) }
                         .entries
                         .sortedWith(
                             compareByDescending<Map.Entry<String, List<com.hikari.app.data.IptvChannel>>> { it.value.size }
                                 .thenBy { it.key.lowercase() },
                         )
-                        .forEach { (group, chs) ->
-                            out += AllPlaylistTile(
-                                provider = p,
-                                name = group,
-                                catalogId = IptvProvider.catalogIdForGroup(group),
-                                count = chs.size,
-                                key = "$pid|$group",
-                                cover = chs.firstOrNull { !it.artwork.isNullOrBlank() }?.artwork,
-                            )
-                        }
+                    val overrides = if (m == "groups") {
+                        IptvGroupPrefs.forProvider(groupPrefsRaw, pid)
+                    } else {
+                        emptyList()
+                    }
+                    val ordered = if (m == "groups") {
+                        IptvGroupPrefs.arrange(entries.map { it.key }, overrides)
+                    } else {
+                        entries.map { it.key }
+                    }
+                    val byGroup = entries.associateBy { it.key }
+                    ordered.forEach { group ->
+                        val chs = byGroup[group]?.value ?: return@forEach
+                        out += AllPlaylistTile(
+                            provider = p,
+                            name = if (m == "groups") {
+                                IptvGroupPrefs.labelOf(overrides, group)
+                            } else {
+                                group
+                            },
+                            catalogId = IptvProvider.catalogIdForGroup(group),
+                            count = chs.size,
+                            key = "$pid|$group",
+                            cover = chs.firstOrNull { !it.artwork.isNullOrBlank() }?.artwork,
+                        )
+                    }
                 }
             }
             out
@@ -2227,12 +2491,20 @@ private object QuickMatchCache {
 
 /** One group inside a playlist. */
 private data class IptvGroupTile(
+    /** The label drawn on the tile (the group override's label, or [originalName]). */
     val name: String,
     val catalogId: String,
     val count: Int,
     /** First channel in this group that carries its own logo — the tile uses
      *  the playlist's own artwork instead of a generated placeholder. */
     val cover: String? = null,
+    /** Stable key: the playlist's own `group-title`. Catalog IDs are derived
+     *  from this, never from the display label. */
+    val originalName: String = name,
+    /** Hidden groups are kept out of the grid but listed behind the footer. */
+    val hidden: Boolean = false,
+    /** Lock only disables the tile's rename/move/hide actions. */
+    val locked: Boolean = false,
 )
 
 /** Reads one playlist (its channel count, its groups, and a logo to wear). */
@@ -2264,40 +2536,63 @@ private suspend fun readCard(p: IptvProvider): IptvCard {
  * [IptvProvider.catalogIdForGroup]), so a tile links straight to the same paged
  * catalog the provider would hand Home — no second code path to keep in step.
  */
-private suspend fun readGroups(p: IptvProvider, mode: String): List<IptvGroupTile> {
+private suspend fun readGroups(
+    p: IptvProvider,
+    mode: String,
+    overrides: List<IptvGroupOverride> = emptyList(),
+): List<IptvGroupTile> {
     val list = runCatching {
         withTimeoutOrNull(60_000L) { p.channels() }
     }.getOrNull().orEmpty()
     if (list.isEmpty()) return emptyList()
     val m = IptvPlaylist.normalizeGroupMode(mode)
     val out = ArrayList<IptvGroupTile>()
-    if (m == "groups") {
-        out += IptvGroupTile(
-            name = I18n.t("All channels"),
-            catalogId = IptvProvider.CATALOG_ALL,
-            count = list.size,
-            cover = list.firstOrNull { !it.artwork.isNullOrBlank() }?.artwork,
-        )
-    }
-    list.groupBy { IptvPlaylist.groupKey(it, m) }
+    val allChannelsTile = IptvGroupTile(
+        name = I18n.t("All channels"),
+        catalogId = IptvProvider.CATALOG_ALL,
+        count = list.size,
+        cover = list.firstOrNull { !it.artwork.isNullOrBlank() }?.artwork,
+    )
+    if (m == "groups") out += allChannelsTile
+    val entries = list.groupBy { IptvPlaylist.groupKey(it, m) }
         .entries
         .sortedWith(
             compareByDescending<Map.Entry<String, List<com.hikari.app.data.IptvChannel>>> { it.value.size }
                 .thenBy { it.key.lowercase() },
         )
-        .forEach { (group, channels) ->
-            out += IptvGroupTile(
-                name = group,
-                catalogId = when (m) {
-                    "language" -> IptvProvider.catalogIdForLanguage(group)
-                    "category" -> IptvProvider.catalogIdForCategory(group)
-                    "country" -> IptvProvider.catalogIdForCountry(group)
-                    else -> IptvProvider.catalogIdForGroup(group)
-                },
-                count = channels.size,
-                cover = channels.firstOrNull { !it.artwork.isNullOrBlank() }?.artwork,
-            )
+    val byGroup = entries.associateBy { it.key }
+    // Only the playlist's own Groups mode is user-editable. Language/category/
+    // country keep their generated order and labels.
+    val ordered = if (m == "groups") {
+        IptvGroupPrefs.arrange(entries.map { it.key }, overrides)
+    } else {
+        entries.map { it.key }
+    }
+    fun tile(group: String, channels: List<com.hikari.app.data.IptvChannel>, hidden: Boolean): IptvGroupTile {
+        val ov = if (m == "groups") IptvGroupPrefs.find(overrides, group) else null
+        return IptvGroupTile(
+            name = ov?.displayName() ?: group,
+            catalogId = when (m) {
+                "language" -> IptvProvider.catalogIdForLanguage(group)
+                "category" -> IptvProvider.catalogIdForCategory(group)
+                "country" -> IptvProvider.catalogIdForCountry(group)
+                else -> IptvProvider.catalogIdForGroup(group)
+            },
+            count = channels.size,
+            cover = channels.firstOrNull { !it.artwork.isNullOrBlank() }?.artwork,
+            originalName = group,
+            hidden = hidden,
+            locked = ov?.locked == true,
+        )
+    }
+    ordered.forEach { group -> byGroup[group]?.let { out += tile(it.key, it.value, false) } }
+    if (m == "groups") {
+        // Hidden groups still appear behind the footer so they can be restored;
+        // they are never drawn in the grid itself.
+        entries.map { it.key }.filterNot { it in ordered }.forEach { group ->
+            byGroup[group]?.let { out += tile(it.key, it.value, true) }
         }
+    }
     return out
 }
 
@@ -2856,6 +3151,7 @@ private fun IptvHeader(
  * playlist's own generated one) with the name under it, shaped by [shape].
  */
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun IptvTile(
     name: String,
     subtitle: String,
@@ -2875,6 +3171,10 @@ private fun IptvTile(
     /** Xtream panel expiration, drawn on the cover so the date is visible
      *  without opening the playlist. Null for ordinary M3U links. */
     expiry: String? = null,
+    /** Draws a small padlock; the group is locked against tile edits. */
+    locked: Boolean = false,
+    /** Long-press opens the group's action sheet. Null keeps a plain tap. */
+    onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val tokens = rememberGlassTokens()
@@ -2886,7 +3186,13 @@ private fun IptvTile(
             .clip(RoundedCornerShape(14.dp))
             .background(tokens.fillTop)
             .border(1.dp, tokens.border, RoundedCornerShape(14.dp))
-            .clickable(onClick = onClick),
+            .then(
+                if (onLongClick != null) {
+                    Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                } else {
+                    Modifier.clickable(onClick = onClick)
+                }
+            ),
     ) {
         Icon(
             Icons.Filled.LiveTv,
@@ -2988,6 +3294,22 @@ private fun IptvTile(
                     .padding(8.dp)
                     .size(10.dp),
             ) {}
+        }
+        if (locked && onRemove == null) {
+            Surface(
+                color = Color.Black.copy(alpha = 0.62f),
+                shape = RoundedCornerShape(50),
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(5.dp),
+            ) {
+                Icon(
+                    Icons.Filled.Lock,
+                    contentDescription = I18n.t("Locked group"),
+                    tint = Color.White,
+                    modifier = Modifier.padding(4.dp).size(13.dp),
+                )
+            }
         }
         if (onRemove != null) {
             Surface(

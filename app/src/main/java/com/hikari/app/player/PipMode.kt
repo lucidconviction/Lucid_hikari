@@ -210,6 +210,9 @@ internal data class PipPane(
     val manual: Boolean = false,
     val resumePositionMs: Long = 0L,
     val resumeToken: Long = 0L,
+    /** Whether it was playing when it left composition for system PiP; a pane
+     *  the user had paused must not start on its own when the app returns. */
+    val resumePlaying: Boolean = true,
 )
 
 /**
@@ -228,6 +231,22 @@ internal object PipWindowStore {
     /** The television's remote-control sheet (MENU/PIP pill). */
     private val _remoteMenu = MutableStateFlow(false)
     val remoteMenu: StateFlow<Boolean> = _remoteMenu.asStateFlow()
+
+    /**
+     * The pane a backgrounded app should promote to the Android system PiP
+     * window: the last one shown, added, restored or touched. Null before the
+     * first pane exists.
+     */
+    private val _activePaneId = MutableStateFlow<Long?>(null)
+    val activePaneId: StateFlow<Long?> = _activePaneId.asStateFlow()
+
+    /**
+     * True while MainActivity is in Android system PiP. PipHost then draws the
+     * active pane alone, full screen, and pauses/releases the others (their
+     * positions are saved so returning restores them).
+     */
+    private val _systemPip = MutableStateFlow(false)
+    val systemPip: StateFlow<Boolean> = _systemPip.asStateFlow()
 
     fun openRemoteMenu() {
         if (_panes.value.isNotEmpty()) _remoteMenu.value = true
@@ -259,7 +278,9 @@ internal object PipWindowStore {
                 locked = newest.locked,
                 resumePositionMs = 0L,
                 resumeToken = newest.resumeToken + 1,
+                resumePlaying = true,
             )
+        _activePaneId.value = newest.id
     }
 
     fun add(pane: PipPane) {
@@ -271,6 +292,7 @@ internal object PipWindowStore {
         }
         val created = pane.copy(id = nextId++)
         _panes.value = _panes.value.map { it.copy(muted = true) } + created
+        _activePaneId.value = created.id
     }
 
     /** Folds a window into the circular bubble, remembering where playback stopped. */
@@ -283,7 +305,9 @@ internal object PipWindowStore {
                 resumeToken = pane.resumeToken + 1,
                 muted = true,
                 locked = false,
+                resumePlaying = true,
             )
+        if (_activePaneId.value == id) _activePaneId.value = _panes.value.lastOrNull()?.id
     }
 
     /** Reopens a minimized window at its old position/size and playback timestamp. */
@@ -297,12 +321,15 @@ internal object PipWindowStore {
                 locked = false,
                 manual = true,
                 resumeToken = pane.resumeToken + 1,
+                resumePlaying = true,
             )
+        _activePaneId.value = id
     }
 
     fun remove(id: Long) {
         _panes.value = _panes.value.filterNot { it.id == id }
         _minimized.value = _minimized.value.filterNot { it.id == id }
+        if (_activePaneId.value == id) _activePaneId.value = _panes.value.lastOrNull()?.id
     }
 
     fun removeLast() {
@@ -312,9 +339,63 @@ internal object PipWindowStore {
     /** The touched window moves to the top, so overlapping PiPs stack naturally. */
     fun bringToFront(id: Long) {
         val list = _panes.value
-        if (list.lastOrNull()?.id == id) return
         val pane = list.firstOrNull { it.id == id } ?: return
+        _activePaneId.value = id
+        if (list.lastOrNull()?.id == id) return
         _panes.value = list.filterNot { it.id == id } + pane
+    }
+
+    /** Explicit focus selection (tap/focus in the floating window). */
+    fun setActive(id: Long) {
+        if (_panes.value.any { it.id == id }) _activePaneId.value = id
+    }
+
+    /**
+     * Save a pane's playback position without restarting it. Called when a
+     * non-active pane leaves composition for system PiP; returning recomposes
+     * it at this position.
+     */
+    fun rememberPosition(id: Long, positionMs: Long, playing: Boolean) {
+        _panes.value = _panes.value.map { pane ->
+            if (pane.id == id) {
+                pane.copy(
+                    resumePositionMs = positionMs.coerceAtLeast(0L),
+                    resumePlaying = playing,
+                )
+            } else {
+                pane
+            }
+        }
+    }
+
+    /**
+     * MainActivity is entering Android system PiP: choose the pane to promote
+     * and turn on the host's minimal, single-pane branch. A minimized active
+     * pane is restored first; with no panes at all this returns false and no
+     * system PiP is entered.
+     */
+    fun beginSystemPip(): Boolean {
+        if (_panes.value.isEmpty()) {
+            _systemPip.value = false
+            return false
+        }
+        var id = _activePaneId.value
+        if (id == null || _panes.value.none { it.id == id }) {
+            val folded = _minimized.value.lastOrNull()
+            if (folded != null) restore(folded.id)
+            id = _panes.value.lastOrNull()?.id
+        }
+        if (id == null) {
+            _systemPip.value = false
+            return false
+        }
+        _activePaneId.value = id
+        _systemPip.value = true
+        return true
+    }
+
+    fun endSystemPip() {
+        _systemPip.value = false
     }
 
     fun setBounds(id: Long, x: Float, y: Float, width: Float, height: Float, manual: Boolean) {
@@ -348,7 +429,12 @@ internal object PipWindowStore {
                 !s.isTorrent && !s.hasDrm && s.url.isNotBlank() && !StreamProbe.knownBad(s.url)
             }
             val next = nextHealthy ?: (current + 1)
-            pane.copy(sourceIndex = next, resumePositionMs = 0L, resumeToken = pane.resumeToken + 1)
+            pane.copy(
+                sourceIndex = next,
+                resumePositionMs = 0L,
+                resumeToken = pane.resumeToken + 1,
+                resumePlaying = true,
+            )
         }
     }
 
@@ -383,6 +469,7 @@ internal object PipWindowStore {
                     sourceIndex = nextIndex,
                     resumePositionMs = 0L,
                     resumeToken = pane.resumeToken + 1,
+                    resumePlaying = true,
                 )
             }
         }
@@ -391,11 +478,17 @@ internal object PipWindowStore {
     fun trimTo(maxPanes: Int) {
         val list = _panes.value
         if (list.size > maxPanes) _panes.value = list.takeLast(maxPanes)
+        if (_panes.value.none { it.id == _activePaneId.value }) {
+            _activePaneId.value = _panes.value.lastOrNull()?.id
+        }
     }
 
     fun hide() {
         _panes.value = emptyList()
         _minimized.value = emptyList()
+        _activePaneId.value = null
+        _systemPip.value = false
+        _remoteMenu.value = false
     }
 }
 
@@ -692,8 +785,10 @@ fun PipHost() {
     val panes by PipWindowStore.panes.collectAsState()
     val minimized by PipWindowStore.minimized.collectAsState()
     val remoteMenu by PipWindowStore.remoteMenu.collectAsState()
+    val activePaneId by PipWindowStore.activePaneId.collectAsState()
+    val systemPip by PipWindowStore.systemPip.collectAsState()
     val context = LocalContext.current
-    if (panes.isEmpty() && minimized.isEmpty()) return
+    if (panes.isEmpty() && minimized.isEmpty() && !systemPip) return
     var folderOpen by remember { mutableStateOf(false) }
     LaunchedEffect(minimized.isEmpty()) {
         if (minimized.isEmpty()) folderOpen = false
@@ -703,7 +798,12 @@ fun PipHost() {
     // window has its own × and is never dismissed by an unrelated Back.
     BackHandler(enabled = folderOpen) { folderOpen = false }
 
-    BoxWithConstraints(Modifier.fillMaxSize().zIndex(50f)) {
+    BoxWithConstraints(
+        Modifier
+            .fillMaxSize()
+            .then(if (systemPip) Modifier.background(Color.Black) else Modifier)
+            .zIndex(50f)
+    ) {
         val density = LocalDensity.current
         val marginPx = with(density) { 8.dp.toPx() }
         val gapPx = with(density) { 8.dp.toPx() }
@@ -743,7 +843,11 @@ fun PipHost() {
             folderY = folderY.coerceIn(bubbleRadiusPx, (maxHeightPx - bubbleRadiusPx).coerceAtLeast(bubbleRadiusPx))
         }
 
-        LaunchedEffect(panes.size, maxWidthPx, maxHeightPx, tablet) {
+        LaunchedEffect(panes.size, maxWidthPx, maxHeightPx, tablet, systemPip) {
+            // In Android system PiP only the active pane is drawn, full screen.
+            // Never rewrite the saved floating bounds (the other panes return
+            // to them), and never trim while the window is small.
+            if (systemPip) return@LaunchedEffect
             PipWindowStore.trimTo(maxPanes)
             val list = PipWindowStore.panes.value
             if (list.isEmpty()) return@LaunchedEffect
@@ -817,11 +921,22 @@ fun PipHost() {
             }
         }
 
+        val promotedId = activePaneId ?: panes.lastOrNull()?.id
         panes.forEach { pane ->
-            if (pane.width <= 0f || pane.height <= 0f) return@forEach
+            if (systemPip && pane.id != promotedId) {
+                // Leaving composition releases this pane's decoder. Its
+                // position was saved by the onDispose save below, so returning
+                // from system PiP reopens it where it stopped.
+                return@forEach
+            }
+            if (!systemPip && (pane.width <= 0f || pane.height <= 0f)) return@forEach
             key(pane.id) {
                 PipWindow(
                     pane = pane,
+                    systemPip = systemPip && pane.id == promotedId,
+                    onProgress = { positionMs, playing ->
+                        PipWindowStore.rememberPosition(pane.id, positionMs, playing)
+                    },
                     onToggleLock = { PipWindowStore.setLocked(pane.id, !pane.locked) },
                     onExpand = { positionMs ->
                         if (!pane.locked) PipLauncher.expand(context, pane, positionMs)
@@ -856,15 +971,19 @@ fun PipHost() {
                     },
                     onMuteChange = { PipWindowStore.setMuted(pane.id, it) },
                     onSourceFailed = { PipWindowStore.nextSource(pane.id) },
-                    modifier = Modifier
-                        .offset { IntOffset(pane.x.roundToInt(), pane.y.roundToInt()) }
-                        .width(with(density) { pane.width.toDp() })
-                        .height(with(density) { pane.height.toDp() }),
+                    modifier = if (systemPip && pane.id == promotedId) {
+                        Modifier.fillMaxSize()
+                    } else {
+                        Modifier
+                            .offset { IntOffset(pane.x.roundToInt(), pane.y.roundToInt()) }
+                            .width(with(density) { pane.width.toDp() })
+                            .height(with(density) { pane.height.toDp() })
+                    },
                 )
             }
         }
 
-        if (folderOpen) {
+        if (folderOpen && !systemPip) {
             Dialog(
                 onDismissRequest = { folderOpen = false },
                 properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -900,11 +1019,11 @@ fun PipHost() {
             }
         }
 
-        if (remoteMenu) {
+        if (remoteMenu && !systemPip) {
             PipRemoteMenu { PipWindowStore.closeRemoteMenu() }
         }
 
-        if (minimized.isNotEmpty()) {
+        if (minimized.isNotEmpty() && !systemPip) {
             Box(
                 Modifier
                     .offset {
@@ -1225,6 +1344,12 @@ private fun PipWindow(
     onResizeBy: (dxPx: Float, dyPx: Float) -> Unit,
     onMuteChange: (Boolean) -> Unit,
     onSourceFailed: () -> Unit,
+    /** True when this pane is the Android system PiP window: video only, no
+     *  title/transport/drag/resize chrome. */
+    systemPip: Boolean = false,
+    /** Last known position/play state, saved when the pane leaves composition
+     *  for system PiP. */
+    onProgress: (positionMs: Long, playing: Boolean) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -1277,11 +1402,16 @@ private fun PipWindow(
     // A television has no tap to bring the top bar back, so its controls stay
     // composed (and focusable) for the remote; a phone still gets the clean
     // auto-hiding strip.
-    val showControls = !locked && (controlsVisible || tvInput)
+    val showControls = !locked && !systemPip && (controlsVisible || tvInput)
     // The transport row is the one thing that must never vanish under a
     // finger. It stays put while the window is unlocked; only the title bar
     // times out, and a tap brings it back.
-    val showBottomControls = !locked
+    val showBottomControls = !locked && !systemPip
+    val latestPosition by rememberUpdatedState(positionMs)
+    val latestPlaying by rememberUpdatedState(isPlaying)
+    DisposableEffect(pane.id) {
+        onDispose { onProgress(latestPosition, latestPlaying) }
+    }
 
     fun interacted() {
         touchCount++
@@ -1384,8 +1514,11 @@ private fun PipWindow(
         val current = player
         onDispose { runCatching { current?.release() } }
     }
-    LaunchedEffect(player, appActive) {
-        player?.playWhenReady = appActive
+    LaunchedEffect(player, appActive, systemPip, pane.resumePlaying) {
+        // In Android system PiP the activity may be paused, but the promoted
+        // pane is the picture the user asked to keep watching. A pane the user
+        // had paused before backgrounding stays paused on return.
+        player?.playWhenReady = if (systemPip) true else appActive && pane.resumePlaying
     }
 
     DisposableEffect(player, playbackKey) {
@@ -1469,9 +1602,16 @@ private fun PipWindow(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .clip(RoundedCornerShape(12.dp))
-            .background(Color.Black)
-            .border(1.dp, Color.White.copy(alpha = 0.24f), RoundedCornerShape(12.dp))
+            .then(
+                if (systemPip) {
+                    Modifier.background(Color.Black)
+                } else {
+                    Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.Black)
+                        .border(1.dp, Color.White.copy(alpha = 0.24f), RoundedCornerShape(12.dp))
+                }
+            )
             // Any touch inside the window belongs to the window. Without this
             // a tap in the black strip between two controls fell through to the
             // page underneath (tapping "Links" behind the PIP's transport bar).
@@ -1485,11 +1625,13 @@ private fun PipWindow(
         // so showing them again never resizes or shifts the video.
         Box(
             Modifier.fillMaxWidth()
-                .height(if (tvInput) 52.dp else 42.dp)
+                .height(if (systemPip) 0.dp else if (tvInput) 52.dp else 42.dp)
                 .background(Color.Black),
             contentAlignment = Alignment.Center,
         ) {
-            if (locked) {
+            if (systemPip) {
+                // No chrome at all in the system PiP window.
+            } else if (locked) {
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -1579,7 +1721,7 @@ private fun PipWindow(
                 )
             }
 
-            if (!locked) {
+            if (!locked && !systemPip) {
                 Box(
                     Modifier
                         .fillMaxSize()
@@ -1621,7 +1763,7 @@ private fun PipWindow(
                             }
                         },
                 )
-            } else {
+            } else if (locked && !systemPip) {
                 // Locked: the video/overlay takes every touch so nothing lands
                 // on the list behind the window.
                 Box(
@@ -1720,7 +1862,7 @@ private fun PipWindow(
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(if (tvInput) 58.dp else 48.dp)
+                .height(if (systemPip) 0.dp else if (tvInput) 58.dp else 48.dp)
                 .background(Color.Black)
                 .then(
                     if (locked) {
