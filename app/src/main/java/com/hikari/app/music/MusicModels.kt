@@ -16,6 +16,14 @@ data class MusicTrack(
     val explicit: Boolean = false,
     val previewUrl: String? = null,
     val trackNumber: Int? = null,
+    /** Set for YouTube Music rows: the exact video to play, no title search. */
+    val videoId: String = "",
+    /** A local `content://` file (MediaStore or downloaded audio). */
+    val localUri: String? = null,
+    /** A direct HTTP stream (WebDAV, Navidrome, …) that must bypass the
+     *  title-based Qobuz/YouTube resolver. */
+    val streamUrl: String? = null,
+    val streamHeaders: Map<String, String> = emptyMap(),
 ) {
     val formattedDuration: String
         get() {
@@ -35,6 +43,12 @@ data class MusicTrack(
         put("explicit", explicit)
         previewUrl?.let { put("previewUrl", it) }
         trackNumber?.let { put("trackNumber", it) }
+        if (videoId.isNotBlank()) put("videoId", videoId)
+        localUri?.let { put("localUri", it) }
+        streamUrl?.let { put("streamUrl", it) }
+        if (streamHeaders.isNotEmpty()) {
+            put("streamHeaders", JSONObject(streamHeaders as Map<*, *>))
+        }
     }
 
     companion object {
@@ -80,6 +94,16 @@ data class MusicTrack(
                 explicit = explicitValue,
                 previewUrl = o.optString("preview").ifBlank { o.optString("previewUrl") }.takeIf { it.isNotBlank() },
                 trackNumber = optInt("track_position", "trackNumber").takeIf { it > 0 },
+                videoId = optString("videoId"),
+                localUri = optString("localUri").takeIf { it.isNotBlank() },
+                streamUrl = optString("streamUrl").takeIf { it.isNotBlank() },
+                streamHeaders = buildMap {
+                    val headers = o.optJSONObject("streamHeaders") ?: JSONObject()
+                    headers.keys().forEach { key ->
+                        val value = headers.optString(key)
+                        if (key.isNotBlank() && value.isNotBlank()) put(key, value)
+                    }
+                },
             )
         }
     }

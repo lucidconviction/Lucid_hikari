@@ -27,6 +27,24 @@ android {
         // in-app update checker can compare it against main's HEAD.
         val gitSha = System.getenv("GIT_SHA") ?: "unknown"
         buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
+        // Optional third-party credentials. Add these to gradle.properties (or
+        // your local properties) to enable Last.fm scrobbling and Drive OAuth.
+        fun buildCredential(name: String): String =
+            (project.findProperty(name) as? String).orEmpty()
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+        buildConfigField("String", "LASTFM_API_KEY", "\"${buildCredential("LASTFM_API_KEY")}\"")
+        buildConfigField("String", "LASTFM_SECRET", "\"${buildCredential("LASTFM_SECRET")}\"")
+        buildConfigField(
+            "String",
+            "GOOGLE_DRIVE_CLIENT_ID",
+            "\"${buildCredential("GOOGLE_DRIVE_CLIENT_ID")}\"",
+        )
+        buildConfigField(
+            "String",
+            "GOOGLE_DRIVE_CLIENT_SECRET",
+            "\"${buildCredential("GOOGLE_DRIVE_CLIENT_SECRET")}\"",
+        )
         // ---- Processors this app is built for ----
         // armeabi-v7a is the 32-bit arm build (older/cheaper phones) and
         // arm64-v8a is the 64-bit one (every modern phone). x86 and x86_64 are
@@ -478,6 +496,17 @@ dependencies {
     implementation(libs.androidx.preference.ktx)
     implementation(libs.rhino)
     implementation(libs.ktor.http)
+    // MediaSessionCompat + MediaStyle: the music notification's system media
+    // card, lock-screen controls and headset buttons.
+    implementation(libs.androidx.media)
+    // Native USB Audio Class output for Music's bit-perfect path.
+    implementation(project(":audio:decent-usb-audio-driver"))
+    // The BitChord/YouTube-Music catalogue engine (Nuvio One music section)
+    // talks to innertube through Ktor.
+    implementation(libs.ktor.client.core)
+    implementation(libs.ktor.client.okhttp)
+    implementation(libs.ktor.client.content.negotiation)
+    implementation(libs.ktor.serialization.kotlinx.json)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.ksoup)
     implementation(libs.kotlinx.datetime)

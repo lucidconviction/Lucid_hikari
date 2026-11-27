@@ -423,6 +423,10 @@ class HikariApp : Application() {
      *  view instead of reloading the website's home page). */
     val homeTabRequest = MutableStateFlow(0)
 
+    /** Bumped by the browser's music strip (and the music notification) to
+     *  return to the Music tab from another Activity. AppRoot watches this. */
+    val musicTabRequest = MutableStateFlow(0)
+
     /** Bumped by the WebView's "Go to Web Apps" menu item; AppRoot watches this
      *  and switches to the saved Web Apps page. Kept separate from
      *  [homeTabRequest] so the two menu entries never race. */

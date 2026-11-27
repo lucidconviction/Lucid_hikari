@@ -124,6 +124,7 @@ Lucid Hikari would not exist without developers who shared their work, their for
 
 - **Hikari Devs** and the Hikari project — @codegeasse1, @error-898-15, @noreply and the Hikari contributors — the app this fork is built from.
 - **Nuvio** — multi-window, scraper and player patterns.
+- **Nuvio One M** (zoga2o3-ops) and **BitChord** (kushagrasinghx, GPLv3) — the music section's palette, layout and screen design, ported into Lucid Music. The Schibsted Grotesk font is under the SIL Open Font License.
 - **SkyStream** and **Anymex** — interface, navigation and focus-driven design inspiration.
 - **CloudStream** — extension format and plugin runtime.
 - **Stremio** — add-on protocol and catalog model.

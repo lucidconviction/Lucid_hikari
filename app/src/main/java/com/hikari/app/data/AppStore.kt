@@ -159,6 +159,7 @@ class AppStore(private val ctx: Context) {
         val AD_WHITE = stringPreferencesKey("adWhite")
         val WEBVIEW_REDIRECT = booleanPreferencesKey("webviewRedirect")
         val WEBVIEW_POPUP = booleanPreferencesKey("webviewPopup")
+        val WEBVIEW_AUTOPLAY_BEST = booleanPreferencesKey("webviewAutoplayBest")
         val CF_AUTO_SOLVE = booleanPreferencesKey("cfAutoSolve")
         val EXT_VERIFY_WEBVIEW = booleanPreferencesKey("extVerifyWebview")
         val WEBVIEW_REDIRECT_ALLOW = stringPreferencesKey("webviewRedirectAllow")
@@ -4389,6 +4390,17 @@ fun searchExceptionOnFlow(): Flow<Boolean> =
 
     suspend fun setWebviewPopup(enabled: Boolean) {
         write("WEBVIEW_POPUP") { it[K.WEBVIEW_POPUP] = enabled }
+    }
+
+    /** Hand the best detected stream to the player as soon as a page offers
+     *  one (Settings → Privacy & Browsing → WebView safety). Default OFF. */
+    fun webviewAutoplayBestFlow(): Flow<Boolean> =
+        store.data.map { it[K.WEBVIEW_AUTOPLAY_BEST] ?: false }.distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    suspend fun webviewAutoplayBest(): Boolean = webviewAutoplayBestFlow().first()
+
+    suspend fun setWebviewAutoplayBest(enabled: Boolean) {
+        write("WEBVIEW_AUTOPLAY_BEST") { it[K.WEBVIEW_AUTOPLAY_BEST] = enabled }
     }
 
     /** Legacy preference: "Solve Cloudflare checks automatically" used to exist

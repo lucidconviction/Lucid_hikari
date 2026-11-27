@@ -1171,6 +1171,19 @@ class PlayerActivity : ComponentActivity() {
     private val bufferingWatchdog = Handler(Looper.getMainLooper())
     private var watchdogTask: Runnable? = null
 
+    /**
+     * Auto-refresh for a live stream whose position has stopped moving while
+     * the player still believes it is playing. Existing watchdogs only cover
+     * "never started" and hard playback errors; a live HLS feed can sit on a
+     * stale segment with no error at all, which is the reported "IPTV just
+     * freezes". Every 5s of a 20s frozen position re-opens the same source —
+     * the same cure [retryLiveStart] uses for a dead first frame.
+     */
+    private val liveGuard = Handler(Looper.getMainLooper())
+    private var liveGuardTask: Runnable? = null
+    private var liveGuardPos = -1L
+    private var liveGuardAt = 0L
+
     /** True once the current source has drawn its first video frame. */
     @Volatile private var renderedFirstFrame = false
 
@@ -2081,7 +2094,11 @@ class PlayerActivity : ComponentActivity() {
                 // channel buttons pinned on underneath them. They now mirror the
                 // controller exactly: visible with it, gone with it, and a tap
                 // on the screen brings both back.
-                val chVis = if (isIptvStream()) visibility else View.GONE
+                // On a television the left/right edge arrows are gone: the
+                // remote navigates the controls/channels menus instead, and
+                // two big chevrons over the picture were only ever a touch
+                // affordance.
+                val chVis = if (isIptvStream() && !playerTvRemote()) visibility else View.GONE
                 chPrevBtn?.visibility = chVis
                 chNextBtn?.visibility = chVis
                 channelsBtn?.visibility = chVis
@@ -2143,8 +2160,9 @@ class PlayerActivity : ComponentActivity() {
         autoplayBtn = findViewById(R.id.autoplay_btn)
         autoNextBtn = findViewById(R.id.auto_next_btn)
         subsBtn = findViewById(R.id.subs_btn)
-        // Closed captions are not offered in this build.
-        subsBtn?.visibility = View.GONE
+        // Subtitles are always offered: a stream may carry text tracks, and
+        // the sheet also loads addon/device subtitles when it does not.
+        subsBtn?.visibility = View.VISIBLE
         audioBtn = findViewById(R.id.audio_btn)
         lockBtn = findViewById(R.id.lock_btn)
         resizeBtn = findViewById(R.id.resize_btn)
@@ -2957,8 +2975,8 @@ class PlayerActivity : ComponentActivity() {
             View.GONE
         }
         autoNextBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
-        chPrevBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
-        chNextBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
+        chPrevBtn?.visibility = if (isIptvStream() && !playerTvRemote()) View.VISIBLE else View.GONE
+        chNextBtn?.visibility = if (isIptvStream() && !playerTvRemote()) View.VISIBLE else View.GONE
         channelsBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
         quickChBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
         multiWindowBtn?.visibility = View.VISIBLE
@@ -3007,8 +3025,8 @@ class PlayerActivity : ComponentActivity() {
         // re-opening the search. (Nuvio ports the same controller.)
         refreshChannelSurfController(intent)
         autoNextBtn?.visibility = if (channelSurfController != null) View.VISIBLE else View.GONE
-        chPrevBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
-        chNextBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
+        chPrevBtn?.visibility = if (isIptvStream() && !playerTvRemote()) View.VISIBLE else View.GONE
+        chNextBtn?.visibility = if (isIptvStream() && !playerTvRemote()) View.VISIBLE else View.GONE
         channelsBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
         quickChBtn?.visibility = if (isIptvStream()) View.VISIBLE else View.GONE
 
@@ -4589,33 +4607,22 @@ class PlayerActivity : ComponentActivity() {
                 if (controllerVisible) false else { tvSeek(-TV_SEEK_LONG_MS); true }
             }
 
-            android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
-                if (controllerVisible) false else { tvSeek(-TV_SEEK_STEP_MS); true }
-            }
-
+            android.view.KeyEvent.KEYCODE_DPAD_LEFT,
             android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                if (controllerVisible) false else { tvSeek(TV_SEEK_STEP_MS); true }
+                // With the controls up, the arrow belongs to the focus system
+                // (moving between pills/buttons). With them down it must NOT
+                // open the controls or seek — a remote's stray direction press
+                // while watching is not a request for the menu. It is consumed
+                // so it cannot move focus behind the picture.
+                if (controllerVisible || holdingFast || controlsLocked) false else true
             }
 
             android.view.KeyEvent.KEYCODE_DPAD_UP,
             android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
-                // F1 — channel surf: when a playlist controller is active and
-                // controls are hidden, UP/DOWN cycles channels instead of
-                // showing the controller.
-                if (channelSurfController != null && !controllerVisible && !holdingFast && !controlsLocked) {
-                    if (code == android.view.KeyEvent.KEYCODE_DPAD_UP) {
-                        lifecycleScope.launch { channelSurfController?.prev() }
-                        true
-                    } else {
-                        lifecycleScope.launch { channelSurfController?.next() }
-                        true
-                    }
-                } else if (controllerVisible || holdingFast || controlsLocked) {
-                    false
-                } else {
-                    playerView?.showController()
-                    true
-                }
+                // Same rule as Left/Right: no channel zapping and no
+                // controls-on-arrow. OK is the one key that opens the
+                // controller; once it is up, arrows navigate it.
+                if (controllerVisible || holdingFast || controlsLocked) false else true
             }
 
             // Back closes the controls first (the way every television app
@@ -8701,102 +8708,242 @@ class PlayerActivity : ComponentActivity() {
     private fun showChannelPicker(current: List<com.hikari.app.data.IptvChannel>) {
         val density = resources.displayMetrics.density
         fun dp(v: Int) = (v * density + 0.5f).toInt()
+        val accent = accentMidColor
         val dialog = Dialog(this, android.R.style.Theme_Translucent_NoTitleBar)
-        val root = LinearLayout(this).apply {
+        val root = FrameLayout(this).apply {
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            setBackgroundColor(0x99000000.toInt())
+            isClickable = true
+            setOnClickListener { dialog.dismiss() }
+        }
+        // One glass panel, the same silhouette the Quick Ch and MultiView
+        // sheets use: rounded dark glass, a hairline accent stroke and pill
+        // controls inside. The old plain black Dialog read as a different app.
+        val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(14), dp(18), dp(8))
-            setBackgroundColor(0xF0121218.toInt())
+            setPadding(dp(16), dp(14), dp(16), dp(8))
+            background = GradientDrawable().apply {
+                setColor(0xF00B0E16.toInt())
+                cornerRadius = dp(24).toFloat()
+                setStroke(dp(1), withAlpha(accent, 0.55f))
+            }
+            isClickable = true
         }
         val titleRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val title = TextView(this).apply {
-            text = I18n.t("IPTV Channels")
+        titleRow.addView(TextView(this).apply {
+            text = "\u25A4  " + I18n.t("IPTV Channels")
             setTextColor(0xFFFFFFFF.toInt())
-            textSize = 18f
+            textSize = 19f
             setTypeface(typeface, Typeface.BOLD)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        val close = TextView(this).apply {
-            text = "✕"
+        })
+        titleRow.addView(TextView(this).apply {
+            text = "\u2715"
             setTextColor(0xCCFFFFFF.toInt())
             textSize = 20f
-            setPadding(dp(14), dp(2), dp(2), dp(6))
+            setPadding(dp(12), 0, dp(2), dp(2))
+            isClickable = true
             setOnClickListener { dialog.dismiss() }
+        })
+        panel.addView(titleRow)
+
+        // User playlists as tabs. "All" is the old merged list; each tab is one
+        // installed playlist, so the Channels sheet finally says where a
+        // duplicate channel comes from.
+        val tabsScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            setPadding(0, dp(6), 0, dp(4))
         }
-        titleRow.addView(title)
-        titleRow.addView(close)
+        val tabsRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        tabsScroll.addView(tabsRow)
+        panel.addView(tabsScroll)
+
         val search = EditText(this).apply {
             hint = I18n.t("Search channels…")
             setSingleLine(true)
             setTextColor(0xFFFFFFFF.toInt())
-            setHintTextColor(0x77FFFFFF.toInt())
+            setHintTextColor(0x66FFFFFF.toInt())
             textSize = 14f
-            setPadding(dp(8), dp(6), dp(8), dp(6))
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            background = GradientDrawable().apply {
+                setColor(0x14FFFFFF)
+                cornerRadius = dp(16).toFloat()
+                setStroke(dp(1), 0x33FFFFFF)
+            }
         }
+        panel.addView(
+            search,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = dp(4) },
+        )
         val status = TextView(this).apply {
             setTextColor(0x99FFFFFF.toInt())
             textSize = 11f
-            setPadding(dp(4), dp(2), dp(4), dp(6))
+            setPadding(dp(4), dp(4), dp(4), dp(6))
         }
+        panel.addView(status)
         val list = ListView(this).apply {
             divider = null
-            dividerHeight = dp(4)
+            dividerHeight = dp(5)
+            isFocusable = true
+            isFocusableInTouchMode = true
+            setDrawSelectorOnTop(true)
+            selector = GradientDrawable().apply {
+                setColor(withAlpha(accent, 0.22f))
+                cornerRadius = dp(14).toFloat()
+                setStroke(dp(2), accent)
+            }
         }
-        root.addView(titleRow)
-        root.addView(search)
-        root.addView(status)
-        root.addView(list, LinearLayout.LayoutParams(
+        panel.addView(list, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f,
         ))
+        root.addView(
+            panel,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
         dialog.setContentView(root)
         dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        dialog.window?.setDimAmount(0.55f)
+        dialog.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
 
         var all = current
         var filtered = current
+        var selectedProvider: String? = null
+
+        val playlistNames = mutableMapOf<String, String>()
+        fun loadPlaylistNames() {
+            runCatching {
+                (applicationContext as? HikariApp)?.providers?.providers?.value
+                    ?.filterIsInstance<com.hikari.app.providers.IptvProvider>()
+                    ?.forEach { p ->
+                        playlistNames[p.config.id] = p.config.name
+                    }
+            }
+        }
+        fun providerLabel(id: String): String =
+            playlistNames[id]?.takeIf { it.isNotBlank() }
+                ?: id.removePrefix(com.hikari.app.data.IptvMark.ID_PREFIX)
+                    .ifBlank { I18n.t("Playlist") }
+
         val adapter = object : BaseAdapter() {
             override fun getCount(): Int = filtered.size
             override fun getItem(position: Int): Any? = filtered.getOrNull(position)
             override fun getItemId(position: Int): Long = position.toLong()
             override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
-                val row = LinearLayout(this@PlayerActivity).apply {
-                    orientation = LinearLayout.VERTICAL
-                    setPadding(dp(12), dp(8), dp(12), dp(8))
-                }
-                val ch = filtered.getOrNull(position) ?: return row
+                val ch = filtered.getOrNull(position)
+                    ?: return View(this@PlayerActivity)
                 val isCurrent = ch.url == sources.getOrNull(currentIndex)?.url
-                row.addView(TextView(this@PlayerActivity).apply {
+                val row = LinearLayout(this@PlayerActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(12), dp(9), dp(12), dp(9))
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(14).toFloat()
+                        setColor(if (isCurrent) withAlpha(accent, 0.16f) else 0x0DFFFFFF)
+                        setStroke(dp(1), if (isCurrent) withAlpha(accent, 0.55f) else 0x1FFFFFFF)
+                    }
+                }
+                val labels = LinearLayout(this@PlayerActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                }
+                labels.addView(TextView(this@PlayerActivity).apply {
                     text = ch.name
-                    setTextColor(if (isCurrent) 0xFF8AB4F8.toInt() else 0xFFFFFFFF.toInt())
+                    setTextColor(if (isCurrent) accent else 0xFFFFFFFF.toInt())
                     textSize = 14f
                     setTypeface(typeface, if (isCurrent) Typeface.BOLD else Typeface.NORMAL)
                     maxLines = 1
                     ellipsize = TextUtils.TruncateAt.END
                 })
-                if (!ch.group.isNullOrBlank()) {
-                    row.addView(TextView(this@PlayerActivity).apply {
-                        text = ch.group
+                val subtitle = listOf(ch.group, providerLabel(ch.providerId))
+                    .filter { it.isNotBlank() }
+                    .joinToString(" \u00B7 ")
+                if (subtitle.isNotBlank()) {
+                    labels.addView(TextView(this@PlayerActivity).apply {
+                        text = subtitle
                         setTextColor(0x88FFFFFF.toInt())
                         textSize = 11f
                         maxLines = 1
                         ellipsize = TextUtils.TruncateAt.END
                     })
                 }
+                row.addView(labels, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                row.addView(TextView(this@PlayerActivity).apply {
+                    text = "\u25B6"
+                    setTextColor(if (isCurrent) accent else 0x55FFFFFF.toInt())
+                    textSize = 13f
+                    setPadding(dp(8), 0, dp(2), 0)
+                })
                 return row
             }
         }
         list.adapter = adapter
 
-        fun applyFilter(query: String) {
-            filtered = if (query.isBlank()) all else
-                com.hikari.app.iptv.IptvSearch.filter(query, all) { listOf(it.name, it.group) }
+        val applyFilter: (String) -> Unit = { query ->
+            val base = all.filter { ch ->
+                selectedProvider == null || ch.providerId == selectedProvider
+            }
+            filtered = if (query.isBlank()) base else
+                com.hikari.app.iptv.IptvSearch.filter(query, base) { listOf(it.name, it.group) }
             adapter.notifyDataSetChanged()
             status.text = if (all.isEmpty()) {
                 I18n.t("No channels found")
             } else {
                 "${filtered.size} / ${all.size} " + I18n.t("channels")
             }
+        }
+
+        fun rebuildTabs() {
+            tabsRow.removeAllViews()
+            fun addTab(id: String?, label: String) {
+                val selected = selectedProvider == id
+                val pill = TextView(this).apply {
+                    text = label
+                    maxLines = 1
+                    ellipsize = TextUtils.TruncateAt.END
+                    maxWidth = dp(180)
+                    textSize = 13f
+                    setTypeface(typeface, if (selected) Typeface.BOLD else Typeface.NORMAL)
+                    setTextColor(if (selected) 0xFF101218.toInt() else 0xFFFFFFFF.toInt())
+                    setPadding(dp(14), dp(7), dp(14), dp(7))
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(18).toFloat()
+                        setColor(if (selected) accent else 0x1AFFFFFF)
+                        setStroke(dp(1), if (selected) accent else 0x33FFFFFF)
+                    }
+                    isClickable = true
+                    setOnClickListener {
+                        selectedProvider = id
+                        rebuildTabs()
+                        applyFilter(search.text?.toString().orEmpty())
+                    }
+                    if (playerTvRemote()) {
+                        isFocusable = true
+                        isFocusableInTouchMode = true
+                        foreground = tvFocusRing()
+                    }
+                }
+                tabsRow.addView(
+                    pill,
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply { marginEnd = dp(7) },
+                )
+            }
+            addTab(null, I18n.t("All"))
+            val ids = all.map { it.providerId }.filter { it.isNotBlank() }.distinct()
+            for (id in ids) addTab(id, providerLabel(id))
         }
 
         search.addTextChangedListener(object : TextWatcher {
@@ -8851,6 +8998,7 @@ class PlayerActivity : ComponentActivity() {
                 dead.forEach { channelSurfController?.markDead(it) }
                 val currentUrl = sources.getOrNull(currentIndex)?.url
                 all = all.filter { it.url !in dead || it.url == currentUrl }
+                rebuildTabs()
                 applyFilter(search.text?.toString().orEmpty())
                 if (dead.isNotEmpty()) {
                     status.text = status.text.toString() + " · " + dead.size + " " + I18n.t("offline hidden")
@@ -8859,18 +9007,28 @@ class PlayerActivity : ComponentActivity() {
             }
         }
 
+        loadPlaylistNames()
+        rebuildTabs()
+        applyFilter("")
         dialog.show()
         dialog.window?.setLayout(
-            (resources.displayMetrics.widthPixels * 0.92f).toInt(),
-            (resources.displayMetrics.heightPixels * 0.84f).toInt(),
+            (resources.displayMetrics.widthPixels * 0.94f).toInt(),
+            (resources.displayMetrics.heightPixels * 0.86f).toInt(),
         )
+        if (playerTvRemote()) {
+            runCatching { dialog.window?.decorView?.tvFocusableTree() }
+            dialog.window?.decorView?.post {
+                (tabsRow.getChildAt(0) ?: list)?.requestFocus()
+            }
+        }
         if (current.isEmpty()) {
             status.text = I18n.t("Loading channels from your playlists…")
             lifecycleScope.launch {
                 val gathered = withContext(Dispatchers.IO) { gatherEveryIptvChannel(emptyList()) }
                 if (isFinishing || isDestroyed || !dialog.isShowing) return@launch
                 all = gathered
-                filtered = gathered
+                loadPlaylistNames()
+                rebuildTabs()
                 applyFilter(search.text?.toString().orEmpty())
                 startValidation()
             }
@@ -9017,22 +9175,41 @@ class PlayerActivity : ComponentActivity() {
         channel: com.hikari.app.data.IptvChannel,
         all: List<com.hikari.app.data.IptvChannel>,
     ) {
-        val isM3u8 = channel.url.endsWith(".m3u8", ignoreCase = true)
-        val isMpd = channel.url.substringBefore('?').contains(".mpd", ignoreCase = true)
-        val headers = org.json.JSONObject().apply {
-            channel.headers.forEach { (k, v) -> put(k, v) }
-            channel.cookie?.takeIf { it.isNotBlank() }?.let { put("Cookie", it) }
+        // AUTO SOURCE: the same channel name usually exists in several
+        // playlists (and a panel can expose two mirrors). Build one source row
+        // per match, tapped channel first, and let the player's healthy-start
+        // heuristic pick the row whose host is alive — so tapping "ESPN" plays
+        // ESPN instead of whichever duplicate happened to be listed first.
+        val wantedName = channel.name.trim().lowercase()
+        val candidates = (
+            listOf(channel) + all.filter {
+                it.name.trim().lowercase() == wantedName && it.url != channel.url
+            }
+            ).distinctBy { it.url }
+        val sourcesJson = org.json.JSONArray()
+        for (candidate in candidates) {
+            val headers = org.json.JSONObject().apply {
+                candidate.headers.forEach { (k, v) -> put(k, v) }
+                candidate.cookie?.takeIf { it.isNotBlank() }?.let { put("Cookie", it) }
+            }
+            sourcesJson.put(
+                org.json.JSONObject()
+                    .put("name", candidate.name)
+                    .put("url", candidate.url)
+                    .put("headers", headers)
+                    .put(
+                        "isM3u8",
+                        candidate.url.endsWith(".m3u8", ignoreCase = true),
+                    )
+                    .put(
+                        "isMpd",
+                        candidate.url.substringBefore('?').contains(".mpd", ignoreCase = true),
+                    )
+                    .put("provider", "IPTV")
+                    .put("providerId", candidate.providerId)
+                    .put("isTorrent", false),
+            )
         }
-        val source = org.json.JSONObject()
-            .put("name", channel.name)
-            .put("url", channel.url)
-            .put("headers", headers)
-            .put("isM3u8", isM3u8)
-            .put("isMpd", isMpd)
-            .put("provider", "IPTV")
-            .put("providerId", channel.providerId)
-            .put("isTorrent", false)
-        val sourcesJson = org.json.JSONArray().put(source)
         val surf = (all.filter { it.providerId == channel.providerId }.ifEmpty { all }).take(250)
         val surfJson = org.json.JSONArray().apply {
             surf.forEach { ch ->
@@ -9066,7 +9243,7 @@ class PlayerActivity : ComponentActivity() {
         refreshChannelSurfController(next)
         updateTitleForChannel(channel)
         showLoadingCover()
-        playSource(0)
+        lifecycleScope.launch { playSource(preferredStartIndex()) }
     }
 
     /** The Episodes pill: lists the title's episodes (fetched from the provideres (fetched from the provider
@@ -15026,17 +15203,20 @@ class PlayerActivity : ComponentActivity() {
             .setBufferDurationsMs(
                 when {
                     isTd -> 60_000                         // minBufferMs — MTProto-tuned bank
-                    isLive -> if (tv) 12_000 else 20_000   // IPTV live: ride a dip, not a minute of latency
+                    // IPTV live: a deeper bank than before (20/25s) so a CDN
+                    // hiccup or a slow segment does not surface as a rebuffer;
+                    // the latency this costs is still under half a minute.
+                    isLive -> if (tv) 20_000 else 25_000
                     else -> if (tv) 15_000 else 30_000     // VOD bank
                 },
                 when {
                     isTd -> 180_000                        // maxBufferMs — MTProto ceiling
-                    isLive -> if (tv) 30_000 else 60_000   // IPTV live ceiling
+                    isLive -> if (tv) 60_000 else 75_000   // IPTV live ceiling
                     else -> if (tv) 60_000 else 180_000    // VOD ceiling
                 },
                 when {
                     isTd -> 1_000                          // bufferForPlaybackMs — MTProto
-                    isLive -> if (tv) 2_000 else 1_500     // IPTV: first frame soon
+                    isLive -> 2_500                        // IPTV: first frame soon
                     else -> if (tv) 1_000 else 500         // VOD: first frame sooner
                 },
                 when {
@@ -15677,24 +15857,11 @@ class PlayerActivity : ComponentActivity() {
             .setPreferredAudioLanguage("en")
             .build()
         player.addListener(listener)
-        // Captions are off for this player by request. A provider's media item
-        // can still carry a text track that media3 selects on its own, and
-        // re-attaching subtitles rebuilds the item; this listener turns the
-        // text type back off every time a track set appears, so no caption
-        // ever draws. (Burned-in captions in the video itself are not a track.)
-        player.addListener(object : Player.Listener {
-            override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
-                val selectedText = tracks.groups.any { group ->
-                    group.type == C.TRACK_TYPE_TEXT && group.isSelected
-                }
-                if (selectedText) {
-                    player.trackSelectionParameters = player.trackSelectionParameters
-                        .buildUpon()
-                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-                        .build()
-                }
-            }
-        })
+        // Do NOT force text tracks off here. The old listener disabled the
+        // text type whenever media3 selected a subtitle, which silently undid
+        // every pick from the Subtitles sheet — the "I can't change subtitles
+        // while watching" report. The default is already applied at build time
+        // (subsDefaultOn), and an explicit pick outranks it.
         playerView?.player = player
         // A dual-audio pairing survives an effects-pipeline re-arm (which
         // bypasses [playSource]): the rebuilt video player is muted again here
@@ -19839,11 +20006,55 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
      * ("fullscreen mode leaves a blank bar in the status bar"). Re-hide the
      * bars every time this activity is resumed or regains focus.
      */
+    /** Starts the frozen-live-stream guard (see [liveGuard]); idempotent. */
+    private fun startLiveStreamGuard() {
+        if (liveGuardTask != null) return
+        val task = object : Runnable {
+            override fun run() {
+                val p = player
+                val src = sources.getOrNull(currentIndex)
+                if (p != null && src != null && isLiveSource(src) &&
+                    renderedFirstFrame && p.playWhenReady &&
+                    p.playbackState != Player.STATE_IDLE &&
+                    liveStartRetries <= maxLiveStartRetries
+                ) {
+                    val pos = p.currentPosition
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    if (pos != liveGuardPos) {
+                        liveGuardPos = pos
+                        liveGuardAt = now
+                    } else if (liveGuardAt > 0L && now - liveGuardAt > 20_000L) {
+                        liveGuardAt = now
+                        com.hikari.app.data.Logs.log(
+                            "Player",
+                            "live stream \"${src.name}\" position frozen for 20s — re-opening",
+                        )
+                        retryLiveStart(liveStartBudgetMs)
+                    }
+                } else {
+                    liveGuardPos = -1L
+                    liveGuardAt = 0L
+                }
+                liveGuard.postDelayed(this, 5_000L)
+            }
+        }
+        liveGuardTask = task
+        liveGuard.postDelayed(task, 5_000L)
+    }
+
+    private fun stopLiveStreamGuard() {
+        liveGuardTask?.let { liveGuard.removeCallbacks(it) }
+        liveGuardTask = null
+        liveGuardPos = -1L
+        liveGuardAt = 0L
+    }
+
     override fun onResume() {
         super.onResume()
         // The player is visible again: the background notification has done
         // its job (the audio never stopped).
         BackgroundPlaybackService.stop(this)
+        startLiveStreamGuard()
         // Back on the full screen — including a tap on the PiP window, on
         // every callback order. The deferred dismiss check dies here (an
         // expand must never finish), the dismiss marks clear, and a stop
@@ -19923,6 +20134,7 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
     }
 
     override fun onPause() {
+        stopLiveStreamGuard()
         if (isFinishing) {
             silencePlaybackForExit()
         } else if (!inPip && player?.isPlaying == true) {
@@ -20009,6 +20221,7 @@ private suspend fun fetchChannelStreams(channel: com.hikari.app.data.IptvChannel
 
     override fun onDestroy() {
         sendYouTubeResult()
+        stopLiveStreamGuard()
         sponsorHandler.removeCallbacksAndMessages(null)
         sponsorTicking = false
         stopBannerAnimators()

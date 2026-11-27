@@ -17,6 +17,8 @@ import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import com.hikari.app.HikariApp
+import com.hikari.app.music.audio.MusicAudioRenderersFactory
+import com.hikari.app.music.audio.MusicBitPerfectUsb
 import com.hikari.app.net.Http
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -84,11 +86,14 @@ object MusicPlayer {
 
     private data class PreparedMedia(val source: MediaSource, val hasVideo: Boolean, val label: String)
 
-    /** How long the outgoing and incoming tracks overlap. */
-    private const val CROSSFADE_MS = 20_000L
-    /** Start resolving the next track this far before the fade window, so a
-     *  slow YouTube lookup finishes in time. */
-    private const val CROSSFADE_PREPARE_MS = 45_000L
+    /** Crossfade length from Settings → Music → Fade (0 = gapless/off). */
+    private fun crossfadeMs(): Long =
+        MusicSettings.fadeSeconds.value.coerceIn(0, 4) * 1_000L
+
+    /** Resolve the next track early enough for a slow YouTube lookup. */
+    private fun crossfadePrepareMs(): Long = crossfadeMs() + 5_000L
+
+    private var settingsWired = false
 
     private var fadePlayer: ExoPlayer? = null
     private var fadeJob: Job? = null
@@ -103,15 +108,73 @@ object MusicPlayer {
     fun init(context: Context) {
         appContext = context.applicationContext
         MusicLibrary.init(context)
+        MusicSettings.init(context)
+        MusicBitPerfectUsb.init(context)
+        MusicScrobbler.init(context)
+        wireSettings()
         if (player != null) return
         main.post {
             if (player == null) createPlayer()
         }
     }
 
+    /** Applies the Nuvio/BitChord playback settings live. */
+    private fun wireSettings() {
+        if (settingsWired) return
+        settingsWired = true
+        scope.launch {
+            MusicSettings.audioQuality.collect {
+                val capCurrent = _state.value.quality.startsWith("YouTube")
+                player?.let { p ->
+                    p.applyAudioPreferences(_state.value.videoPlaying, capCurrent)
+                }
+                fadePlayer?.let { p ->
+                    p.applyAudioPreferences(fadeHasVideo, fadeQuality.startsWith("YouTube"))
+                }
+            }
+        }
+        scope.launch {
+            MusicSettings.skipSilence.collect { enabled ->
+                player?.skipSilenceEnabled = enabled
+                fadePlayer?.skipSilenceEnabled = enabled
+            }
+        }
+        scope.launch {
+            MusicSettings.playbackSpeed.collect { speed ->
+                player?.setPlaybackSpeed(speed)
+                fadePlayer?.setPlaybackSpeed(speed)
+            }
+        }
+        scope.launch {
+            MusicSettings.equalizerPreset.collect { preset -> MusicEqualizer.apply(preset) }
+        }
+        scope.launch {
+            MusicSettings.fadeSeconds.collect { seconds ->
+                if (seconds == 0) cancelCrossfade()
+            }
+        }
+    }
+
+    private fun ExoPlayer.applyAudioPreferences(hasVideo: Boolean, capBitrate: Boolean) {
+        trackSelectionParameters = trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, !hasVideo)
+            // The quality ceiling is a YouTube data-saving choice. A lossless
+            // Qobuz/local FLAC can legitimately exceed 320 kbps, so it must not
+            // be filtered out by the same cap.
+            .setMaxAudioBitrate(
+                if (capBitrate) MusicSettings.audioQuality.value.maxKbps * 1_000
+                else Int.MAX_VALUE,
+            )
+            .build()
+    }
+
     private val mainListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             _state.value = _state.value.copy(playing = isPlaying)
+            // Keep the process in the foreground while music is audible so the
+            // notification's previous/play-pause/next stay live when the user
+            // leaves the app or locks the screen.
+            if (isPlaying) appContext?.let { MusicPlaybackService.start(it) }
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -132,6 +195,13 @@ object MusicPlayer {
                 error = "Couldn't play this track (${error.errorCodeName})",
             )
         }
+
+        override fun onAudioSessionIdChanged(audioSessionId: Int) {
+            if (audioSessionId != C.AUDIO_SESSION_ID_UNSET) {
+                MusicEqualizer.attach(audioSessionId)
+                MusicEqualizer.apply(MusicSettings.equalizerPreset.value)
+            }
+        }
     }
 
     private val fadeListener = object : Player.Listener {
@@ -141,7 +211,13 @@ object MusicPlayer {
     }
 
     private fun newPlayer(context: Context): ExoPlayer {
-        val exo = ExoPlayer.Builder(context).build()
+        val exo = ExoPlayer.Builder(context)
+            // The LastWave USB sink wraps Media3's normal sink and only takes
+            // over supported lossless PCM when the user enabled direct output.
+            .setRenderersFactory(
+                MusicAudioRenderersFactory(context, MusicBitPerfectUsb.audioOutput()),
+            )
+            .build()
         exo.setAudioAttributes(
             AudioAttributes.Builder()
                 .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
@@ -150,6 +226,11 @@ object MusicPlayer {
             true,
         )
         exo.setHandleAudioBecomingNoisy(true)
+        exo.skipSilenceEnabled = MusicSettings.skipSilence.value
+        exo.setPlaybackSpeed(MusicSettings.playbackSpeed.value)
+        // Keep the CPU awake while audio is playing in the background; the
+        // foreground service alone does not hold a wake lock.
+        exo.setWakeMode(C.WAKE_MODE_NETWORK)
         return exo
     }
 
@@ -295,6 +376,21 @@ object MusicPlayer {
         loadCurrent(track)
     }
 
+    /** Adds a track to the party queue. Used by the guest web page. */
+    @Synchronized
+    fun enqueue(track: MusicTrack, playNext: Boolean = false) {
+        val s = _state.value
+        if (s.track == null || s.queue.isEmpty()) {
+            play(track, listOf(track))
+            return
+        }
+        if (s.queue.any { it.id == track.id }) return
+        val queue = s.queue.toMutableList()
+        val at = if (playNext) (s.index + 1).coerceIn(0, queue.size) else queue.size
+        queue.add(at, track)
+        _state.value = s.copy(queue = queue)
+    }
+
     fun seekTo(positionMs: Long) {
         cancelCrossfade()
         player?.seekTo(positionMs.coerceAtLeast(0L))
@@ -348,9 +444,12 @@ object MusicPlayer {
      *  one is exactly one crossfade away from its end. */
     private fun maybeStartCrossfade(p: ExoPlayer, positionMs: Long, durationMs: Long) {
         val s = _state.value
+        val fadeMs = crossfadeMs()
+        if (fadeMs <= 0L) return
+        val prepareMs = crossfadePrepareMs()
         if (fading || !p.isPlaying || s.track == null) return
-        if (durationMs <= CROSSFADE_PREPARE_MS + 5_000L) return
-        if (positionMs < durationMs - CROSSFADE_PREPARE_MS) return
+        if (durationMs <= prepareMs + 5_000L) return
+        if (positionMs < durationMs - prepareMs) return
         val index = crossfadeNextIndex(s) ?: return
         val track = s.queue.getOrNull(index) ?: return
         if (track.id == s.track.id) return
@@ -370,9 +469,10 @@ object MusicPlayer {
             val fp = createFadePlayer() ?: run { abortCrossfade(); return@launch }
             fp.volume = 0f
             fp.setMediaSource(prepared.source)
-            fp.trackSelectionParameters = fp.trackSelectionParameters.buildUpon()
-                .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, !prepared.hasVideo)
-                .build()
+            fp.applyAudioPreferences(
+                prepared.hasVideo,
+                prepared.label.startsWith("YouTube"),
+            )
             fp.playWhenReady = player?.isPlaying == true
             fp.prepare()
             if (token != fadeToken || !fading) return@launch
@@ -385,8 +485,9 @@ object MusicPlayer {
     private fun updateCrossfadeVolumes(p: ExoPlayer, positionMs: Long, durationMs: Long) {
         val fp = fadePlayer ?: return
         if (!fadePrepared || durationMs <= 0L) return
-        val start = durationMs - CROSSFADE_MS
-        val progress = ((positionMs - start).toFloat() / CROSSFADE_MS).coerceIn(0f, 1f)
+        val fadeMs = crossfadeMs().coerceAtLeast(1L)
+        val start = durationMs - fadeMs
+        val progress = ((positionMs - start).toFloat() / fadeMs).coerceIn(0f, 1f)
         p.volume = 1f - progress
         fp.volume = progress
         if (progress >= 0.995f) promoteFade()
@@ -472,8 +573,11 @@ object MusicPlayer {
             player?.play()
             return
         }
-        if (s.hasNext) next()
-        else {
+        // Autoplay off still honours an explicit Repeat (All/One); with both
+        // off the queue stops at the end of the track.
+        if (s.hasNext && (MusicSettings.autoplay.value || s.repeat != RepeatMode.OFF)) {
+            next()
+        } else {
             player?.pause()
             player?.seekTo(0L)
             _state.value = s.copy(playing = false, positionMs = 0L)
@@ -514,10 +618,12 @@ object MusicPlayer {
             val exo = player ?: return@launch
             exo.setMediaSource(prepared.source)
             // Audio mode disables the picture; Video mode enables it so the
-            // PlayerView on the Music player page has something to draw.
-            exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
-                .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, !prepared.hasVideo)
-                .build()
+            // PlayerView on the Music player page has something to draw. The
+            // same parameters carry the quality ceiling and the equalizer.
+            exo.applyAudioPreferences(
+                prepared.hasVideo,
+                prepared.label.startsWith("YouTube"),
+            )
             if (startAtMs > 0L) exo.seekTo(startAtMs)
             exo.prepare()
             exo.play()
@@ -532,8 +638,13 @@ object MusicPlayer {
     /** Resolves a track into a ready-to-set MediaSource. Shared by normal
      *  playback and the crossfade's secondary player. */
     private suspend fun buildMedia(track: MusicTrack): PreparedMedia? {
-        val videoMode = _state.value.videoMode
-        val downloaded = if (videoMode) null else {
+        // Local/MediaStore and server rows carry their own playable URI and
+        // must never fall through to a title search on Qobuz/YouTube.
+        val directLocal = track.localUri?.takeIf { it.isNotBlank() }
+        val directStream = track.streamUrl?.takeIf { it.isNotBlank() }
+        val isDirect = directLocal != null || directStream != null
+        val videoMode = _state.value.videoMode && !isDirect
+        val downloaded = if (videoMode || isDirect) null else {
             MusicLibrary.downloadedFor(track.id)?.let { MusicLibrary.downloadFile(it) }
         }
         val localFile = downloaded?.takeIf { it.isFile && it.length() > 1024L }
@@ -541,20 +652,33 @@ object MusicPlayer {
             runCatching { MusicSourceResolver.videoStream(track) }.getOrNull()
         } else null
         val stream = when {
+            isDirect -> null
             videoStream != null -> videoStream
             localFile != null -> null
             else -> withContext(Dispatchers.IO) {
                 MusicSourceResolver.resolve(track, MusicLibrary.preferLossless.value)
             }
         }
-        if (localFile == null && stream == null) return null
-        val uri = if (localFile != null) Uri.fromFile(localFile) else Uri.parse(stream!!.url)
-        val headers = stream?.headers.orEmpty()
+        if (!isDirect && localFile == null && stream == null) return null
+        val uri = when {
+            directLocal != null -> Uri.parse(directLocal)
+            directStream != null -> Uri.parse(directStream)
+            localFile != null -> Uri.fromFile(localFile)
+            else -> Uri.parse(stream!!.url)
+        }
+        val headers = when {
+            directStream != null -> track.streamHeaders
+            else -> stream?.headers.orEmpty()
+        }
         val userAgent = headers["User-Agent"] ?: Http.UA
-        val dataSource = DefaultHttpDataSource.Factory()
+        val http = DefaultHttpDataSource.Factory()
             .setUserAgent(userAgent)
             .setDefaultRequestProperties(headers)
             .setAllowCrossProtocolRedirects(true)
+        val context = appContext ?: runCatching { HikariApp.instance }.getOrNull()
+        val dataSource = if (context != null) {
+            androidx.media3.datasource.DefaultDataSource.Factory(context, http)
+        } else http
         val mediaItem = ExoMediaItem.Builder()
             .setUri(uri)
             .setMediaMetadata(
@@ -566,18 +690,30 @@ object MusicPlayer {
                     .build(),
             )
             .build()
+        val urlText = uri.toString()
         val mediaSource = when {
-            localFile != null -> ProgressiveMediaSource.Factory(dataSource).createMediaSource(mediaItem)
-            stream!!.isDash || uri.toString().contains(".mpd", true) ->
+            localFile != null || directLocal != null ->
+                ProgressiveMediaSource.Factory(dataSource).createMediaSource(mediaItem)
+            stream?.isDash == true || urlText.contains(".mpd", true) ->
                 DashMediaSource.Factory(dataSource).createMediaSource(mediaItem)
-            stream.isHls || uri.toString().contains(".m3u8", true) ->
+            stream?.isHls == true || urlText.contains(".m3u8", true) ->
                 HlsMediaSource.Factory(dataSource).createMediaSource(mediaItem)
             else -> ProgressiveMediaSource.Factory(dataSource).createMediaSource(mediaItem)
         }
+        MusicBitPerfectUsb.setSourceLossless(
+            stream?.lossless == true ||
+                urlText.contains(".flac", true) ||
+                urlText.contains(".wav", true) ||
+                urlText.contains(".alac", true) ||
+                (localFile != null &&
+                    MusicLibrary.downloadedFor(track.id)?.format?.equals("flac", true) == true),
+        )
         return PreparedMedia(
             source = mediaSource,
             hasVideo = videoStream != null,
             label = when {
+                directLocal != null -> "Local file"
+                directStream != null -> track.album.ifBlank { "Server" }
                 localFile != null -> MusicLibrary.downloadedFor(track.id)?.quality ?: "Offline"
                 videoStream != null -> "YouTube video"
                 stream != null -> stream.label

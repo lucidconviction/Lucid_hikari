@@ -337,6 +337,10 @@ object Tutorials {
                     "The search box searches every card, folder and switch. Folders open in place, and Back steps out one level instead of leaving Settings.",
                 ),
                 TutorialPage(
+                    "Custom metadata tweaks",
+                    "Settings → Integrations → Custom metadata tweaks chooses where anime and movie details come from: Simkl, AniList, TMDB, AioMetadata and your installed metadata addons. First hit wins per field, and TMDB modules opens the exact enrichments you want.",
+                ),
+                TutorialPage(
                     "About & Updates",
                     "Version, update check, feature guide and these tutorials are all under About & Updates. Replay a tour from there at any time.",
                 ),

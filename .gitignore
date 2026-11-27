@@ -9,4 +9,5 @@
 .cxx
 local.properties
 /app/build
+/audio/decent-usb-audio-driver/build
 .kotlin/

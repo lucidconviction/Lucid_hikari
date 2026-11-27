@@ -1478,6 +1478,8 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
     val context = LocalContext.current
     val app = context.applicationContext as HikariApp
     val homeRequest by app.homeTabRequest.collectAsState()
+    // The browser's floating music strip asks for the Music tab the same way.
+    val musicRequest by app.musicTabRequest.collectAsState()
     // The WebView's "Go to Web Apps" menu item bumps this — landing on the
     // saved Web Apps page from inside a site view.
     val webAppsRequest by app.webAppsTabRequest.collectAsState()
@@ -1668,6 +1670,16 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
             app.homeTabRequest.value = 0
             if (tabRoute != Routes.EXTENSIONS) {
                 Routes.navigateTab(nav, Routes.HOME)
+            }
+        }
+    }
+    var musicHandled by remember { mutableStateOf(0) }
+    LaunchedEffect(musicRequest) {
+        if (musicRequest > 0 && musicRequest != musicHandled) {
+            musicHandled = musicRequest
+            app.musicTabRequest.value = 0
+            if (tabRoute != Routes.MUSIC) {
+                Routes.navigateTab(nav, Routes.MUSIC)
             }
         }
     }
@@ -2526,6 +2538,26 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
             }
         }
 
+        // Music keeps playing when the user leaves its tab, so its control
+        // strip follows them: one global copy, hidden only on the Music tab
+        // (which draws its own) and the full-screen Now Playing page. The
+        // state is collected INSIDE the wrapper so the 500ms position ticks do
+        // not recompose AppRoot and every page under it.
+        GlobalMusicMiniPlayer(
+            nav = nav,
+            visible = currentRoute != Routes.MUSIC && currentRoute != Routes.MUSIC_PLAYER,
+            startClearance = if (isTv) 96.dp else 0.dp,
+            bottomClearance = when {
+                isTv -> tvEdge + 16.dp
+                isTablet -> 16.dp
+                showBar && !phoneDockCollapsed -> 86.dp
+                else -> 16.dp
+            },
+            modifier = Modifier
+                .fillMaxSize()
+                .zIndex(19f),
+        )
+
         // In-app picture-in-picture from the player's "Mini" pill. It floats
         // over every tab, can be dragged and pinched, and taps through to the
         // full player. Draw it last so it is above the taskbar/rail.
@@ -2534,4 +2566,29 @@ fun AppRoot(themeKey: String = HikariThemeMode.DEFAULT.key) {
         // minimized folder. Drawn last so they sit above every tab and the taskbar.
         com.hikari.app.player.PipHost()
     }
+}
+
+/**
+ * The Music tab's control strip, hosted above every Compose screen.
+ *
+ * Kept as its own composable on purpose: [com.hikari.app.music.MusicPlayer.state]
+ * emits a new value every 500ms while a track plays (position/duration), and
+ * collecting it in [AppRoot] would recompose the whole navigation shell — and
+ * every page under it — twice a second. Here only this strip recomposes.
+ */
+@Composable
+private fun GlobalMusicMiniPlayer(
+    nav: NavHostController,
+    visible: Boolean,
+    startClearance: Dp,
+    bottomClearance: Dp,
+    modifier: Modifier = Modifier,
+) {
+    if (!visible) return
+    com.hikari.app.music.FloatingMusicPiP(
+        onOpenMusic = { Routes.navigateTab(nav, Routes.MUSIC) },
+        modifier = modifier,
+        startClearance = startClearance,
+        bottomClearance = bottomClearance,
+    )
 }

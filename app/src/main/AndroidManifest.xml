@@ -17,6 +17,12 @@
          (ExoPlayer WAKE_MODE_NETWORK) so the radio can't drop into power-save
          mid-stream and stall playback. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- Music → Local: the on-device MediaStore library. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
     <!-- Downloads run in a foreground dataSync service so the queue keeps
          going while the user is elsewhere or the screen is off. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -427,6 +433,30 @@ android:name=".player.PlayerActivity"
             android:name=".player.BackgroundPlaybackService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
+
+        <!-- The Music tab's transport in the notification shade while its
+             singleton player keeps playing in the background. -->
+        <activity
+            android:name=".music.SpotifyLoginActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Hikari.App" />
+
+        <service
+            android:name=".music.MusicPlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <!-- Music home-screen widget: artwork, title and transport. -->
+        <receiver
+            android:name=".music.MusicWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/music_widget_info" />
+        </receiver>
 
         <service
             android:name=".download.DownloadService"

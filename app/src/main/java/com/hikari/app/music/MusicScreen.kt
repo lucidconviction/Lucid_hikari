@@ -93,7 +93,7 @@ internal val MusicAccent2 = Color(0xFF00D2EF)
 private val MusicBg = Color(0xFF0B0B10)
 
 internal enum class MusicTab(val label: String) {
-    HOME("Home"), SEARCH("Search"), BROWSE("Browse"), RADIO("Radio"), LIBRARY("Library")
+    HOME("Home"), EXPLORE("Explore"), LIBRARY("Library"), LOCAL("Local"), SEARCH("Search")
 }
 
 internal enum class MusicFilter(val label: String) {
@@ -111,6 +111,165 @@ fun MusicScreen(nav: NavHostController) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val taskbar = LocalTaskbarInset.current
+    // The YouTube page's own account view model: same sign-in, same accounts,
+    // same device-code flow. Music only reads the session it already has.
+    val accountsVm: com.hikari.app.youtube.YouTubeAccountViewModel =
+        androidx.lifecycle.viewmodel.compose.viewModel {
+            com.hikari.app.youtube.YouTubeAccountViewModel(context)
+        }
+    val accountState by accountsVm.state.collectAsState()
+    // Background music controls need POST_NOTIFICATIONS on Android 13+. The
+    // YouTube tab asks once at startup; if that was denied, Music explains
+    // why the shade is empty and offers the system switch.
+    val notifPrefs = remember { context.getSharedPreferences("music_notifications", 0) }
+    val notificationGranted = remember {
+        mutableStateOf(
+            android.os.Build.VERSION.SDK_INT < 33 ||
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                    context,
+                    android.Manifest.permission.POST_NOTIFICATIONS,
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED,
+        )
+    }
+    val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        notificationGranted.value = granted
+        if (granted) runCatching { MusicPlaybackService.start(context) }
+    }
+    val localPermission = remember {
+        mutableStateOf(LocalMusicRepository.hasPermission(context))
+    }
+    val localPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        localPermission.value = granted ||
+            LocalMusicRepository.hasPermission(context)
+    }
+    // Google Drive upload through the system document provider: the user
+    // picks a folder in Drive, and the downloads are copied into it.
+    val driveLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree(),
+    ) { tree ->
+        if (tree != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    tree,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            }
+            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                val files = MusicLibrary.downloads.value
+                if (files.isEmpty()) {
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        Toast.makeText(
+                            context,
+                            "Nothing downloaded to upload.",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                    return@launch
+                }
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    Toast.makeText(
+                        context,
+                        "Uploading ${files.size} songs to Drive…",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+                val parent = android.provider.DocumentsContract.buildDocumentUriUsingTree(
+                    tree,
+                    android.provider.DocumentsContract.getTreeDocumentId(tree),
+                )
+                var copied = 0
+                for (download in files) {
+                    val file = MusicLibrary.downloadFile(download) ?: continue
+                    if (!file.isFile) continue
+                    val mime = when (download.format.lowercase()) {
+                        "flac" -> "audio/flac"
+                        "m4a", "mp4" -> "audio/mp4"
+                        "ogg" -> "audio/ogg"
+                        else -> "audio/mpeg"
+                    }
+                    val doc = runCatching {
+                        android.provider.DocumentsContract.createDocument(
+                            context.contentResolver,
+                            parent,
+                            mime,
+                            download.fileName,
+                        )
+                    }.getOrNull() ?: continue
+                    val ok = runCatching {
+                        context.contentResolver.openOutputStream(doc)?.use { output ->
+                            file.inputStream().use { input -> input.copyTo(output) }
+                        } != null
+                    }.getOrDefault(false)
+                    if (ok) copied++ else runCatching {
+                        android.provider.DocumentsContract.deleteDocument(
+                            context.contentResolver,
+                            doc,
+                        )
+                    }
+                }
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    Toast.makeText(
+                        context,
+                        if (copied == files.size) {
+                            "Uploaded $copied songs to Drive."
+                        } else {
+                            "Uploaded $copied of ${files.size} songs to Drive."
+                        },
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }
+        }
+    }
+    val activity = context as? android.app.Activity
+    fun openNotificationSettings() {
+        val intent = if (android.os.Build.VERSION.SDK_INT >= 26) {
+            android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+        } else {
+            android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                .setData(android.net.Uri.parse("package:${context.packageName}"))
+        }
+        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(intent) }
+    }
+    fun askNotifications() {
+        if (android.os.Build.VERSION.SDK_INT < 33) return
+        val rationale = activity?.let {
+            androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(
+                it,
+                android.Manifest.permission.POST_NOTIFICATIONS,
+            )
+        } == true
+        val asked = notifPrefs.getBoolean("asked", false)
+        if (rationale || !asked) {
+            notifPrefs.edit().putBoolean("asked", true).apply()
+            permissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            openNotificationSettings()
+        }
+    }
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                notificationGranted.value = android.os.Build.VERSION.SDK_INT < 33 ||
+                    androidx.core.content.ContextCompat.checkSelfPermission(
+                        context,
+                        android.Manifest.permission.POST_NOTIFICATIONS,
+                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
     val player by MusicPlayer.state.collectAsState()
     val liked by MusicLibrary.liked.collectAsState()
     val playlists by MusicLibrary.playlists.collectAsState()
@@ -119,11 +278,15 @@ fun MusicScreen(nav: NavHostController) {
     val downloadStates by MusicLibrary.downloadStates.collectAsState()
     val preferLossless by MusicLibrary.preferLossless.collectAsState()
     val videoMode by MusicLibrary.videoMode.collectAsState()
+    val catalog by MusicLibrary.catalog.collectAsState()
 
     LaunchedEffect(Unit) {
         MusicLibrary.init(context)
         MusicPlayer.init(context)
         QobuzResolver.warmUp()
+        YtMusicCatalog.warmUp()
+        YtAccountMusic.init(context)
+        accountsVm.refresh()
     }
 
     var tabName by rememberSaveable { mutableStateOf(MusicTab.HOME.name) }
@@ -138,6 +301,53 @@ fun MusicScreen(nav: NavHostController) {
     var homeLoading by remember { mutableStateOf(true) }
     var homeError by remember { mutableStateOf<String?>(null) }
     var homeReload by remember { mutableStateOf(0) }
+    var ytAccountLiked by remember { mutableStateOf<List<MusicTrack>>(emptyList()) }
+    var ytAccountPlaylists by remember { mutableStateOf<List<MusicPlaylist>>(emptyList()) }
+    var ytMoodSections by remember {
+        mutableStateOf<List<YtMusicCatalog.YtMoodSection>>(emptyList())
+    }
+    var showAccounts by remember { mutableStateOf(false) }
+    var showServers by remember { mutableStateOf(false) }
+    var showSpotify by remember { mutableStateOf(false) }
+    var showParty by remember { mutableStateOf(false) }
+    var showDrive by remember { mutableStateOf(false) }
+    var localTracks by remember { mutableStateOf<List<MusicTrack>>(emptyList()) }
+    var localLoading by remember { mutableStateOf(false) }
+    var localReload by remember { mutableStateOf(0) }
+
+    LaunchedEffect(tab, localPermission.value, localReload) {
+        if (tab == MusicTab.LOCAL && localPermission.value) {
+            localLoading = true
+            localTracks = LocalMusicRepository.scan(context)
+            localLoading = false
+        }
+    }
+
+    // YouTube Music's Explore buttons merged into the Explore page.
+    LaunchedEffect(catalog, homeReload) {
+        if (catalog == "deezer") {
+            ytMoodSections = emptyList()
+        } else {
+            ytMoodSections = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { YtMusicCatalog.moodSections() }.getOrDefault(emptyList())
+            }
+        }
+    }
+
+    // The account's own liked songs and playlists, loaded from the SAME
+    // MediaServiceCore session the YouTube tab signed in with.
+    LaunchedEffect(catalog, accountState.signedIn, accountState.accountName) {
+        if (catalog == "ytmusic" && accountState.signedIn) {
+            val lib = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                YtAccountMusic.library()
+            }
+            ytAccountLiked = lib.liked
+            ytAccountPlaylists = lib.playlists
+        } else {
+            ytAccountLiked = emptyList()
+            ytAccountPlaylists = emptyList()
+        }
+    }
 
     var menuTrack by remember { mutableStateOf<MusicTrack?>(null) }
     var artistDetail by remember { mutableStateOf<MusicArtistDetails?>(null) }
@@ -156,6 +366,15 @@ fun MusicScreen(nav: NavHostController) {
     }
 
     fun playTrack(track: MusicTrack, queue: List<MusicTrack>? = null) {
+        // The first play is the natural moment to ask for the notification
+        // permission the background controls need. A permanent "don't ask
+        // again" is handled by the banner's settings route instead.
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            !notificationGranted.value &&
+            !notifPrefs.getBoolean("asked", false)
+        ) {
+            askNotifications()
+        }
         MusicPlayer.play(track, queue)
         // Video mode draws its picture on the Now Playing page, so a track
         // started from any Music shelf goes straight there; auto-next keeps
@@ -173,7 +392,14 @@ fun MusicScreen(nav: NavHostController) {
         if (id.isBlank()) return
         scope.launch {
             detailLoading = true
-            artistDetail = runCatching { DeezerApi.artistDetails(id) }.getOrNull()
+            artistDetail = runCatching {
+                when {
+                    id.startsWith("yt:") -> YtMusicCatalog.artistDetails(id.removePrefix("yt:"))
+                    id.startsWith("dz:") -> DeezerApi.artistDetails(id.removePrefix("dz:"))
+                    id.startsWith("UC") -> YtMusicCatalog.artistDetails(id)
+                    else -> DeezerApi.artistDetails(id)
+                }
+            }.getOrNull()
             detailLoading = false
         }
     }
@@ -182,7 +408,14 @@ fun MusicScreen(nav: NavHostController) {
         if (id.isBlank()) return
         scope.launch {
             detailLoading = true
-            albumDetail = runCatching { DeezerApi.albumDetails(id) }.getOrNull()
+            albumDetail = runCatching {
+                when {
+                    id.startsWith("yt:") -> YtMusicCatalog.albumDetails(id.removePrefix("yt:"))
+                    id.startsWith("dz:") -> DeezerApi.albumDetails(id.removePrefix("dz:"))
+                    id.startsWith("MPRE") -> YtMusicCatalog.albumDetails(id)
+                    else -> DeezerApi.albumDetails(id)
+                }
+            }.getOrNull()
             detailLoading = false
         }
     }
@@ -191,26 +424,68 @@ fun MusicScreen(nav: NavHostController) {
         if (id.isBlank()) return
         scope.launch {
             detailLoading = true
-            playlistDetail = runCatching { DeezerApi.playlistDetails(id) }.getOrNull()
+            playlistDetail = runCatching {
+                val ytId = id.removePrefix("yt:")
+                val dzId = id.removePrefix("dz:")
+                when {
+                    id.startsWith("account:") -> {
+                        val tracks = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            YtAccountMusic.playlistTracks(id)
+                        }
+                        if (tracks.isEmpty()) null else MusicPlaylistDetails(
+                            playlist = ytAccountPlaylists.firstOrNull { it.id == id }
+                                ?: MusicPlaylist(id = id, title = "YouTube Music"),
+                            tracks = tracks,
+                        )
+                    }
+                    id.startsWith("yt:") -> YtMusicCatalog.playlistDetails(ytId)
+                    id.startsWith("dz:") -> DeezerApi.playlistDetails(dzId)
+                    id.startsWith("VL") || id.startsWith("OLAK") || id.startsWith("PL") ->
+                        YtMusicCatalog.playlistDetails(id)
+                    else -> DeezerApi.playlistDetails(id)
+                }
+            }.getOrNull()
             detailLoading = false
         }
     }
 
     // Home shelves load once; the reload counter powers the refresh button.
-    LaunchedEffect(homeReload) {
+    // Switching the catalogue (Settings → Music → Catalogue) reloads the page
+    // from the other service.
+    LaunchedEffect(homeReload, catalog, accountState.signedIn) {
         homeLoading = true
         homeError = null
         try {
-            home = DeezerApi.home(force = homeReload > 0)
+            val wantsDeezer = catalog != "ytmusic"
+            val wantsYouTube = catalog != "deezer"
+            val deezerHome = if (wantsDeezer) {
+                runCatching { DeezerApi.home(force = homeReload > 0) }.getOrNull()
+            } else null
+            val ytHome = if (wantsYouTube) {
+                runCatching { YtMusicCatalog.home() }.getOrNull()
+            } else null
+            val accountHome = if (wantsYouTube && accountState.signedIn) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching { YtAccountMusic.home() }.getOrNull()
+                }
+            } else null
+            home = mergeMusicHomes(deezerHome, ytHome, accountHome)
+            if (home == null) {
+                homeError = when (catalog) {
+                    "ytmusic" -> "YouTube Music didn't answer. Check the connection and try again."
+                    "deezer" -> "Couldn't reach Deezer."
+                    else -> "Neither Deezer nor YouTube Music answered."
+                }
+            }
         } catch (e: Throwable) {
-            homeError = e.message ?: "Couldn't reach Deezer."
+            homeError = e.message ?: "Couldn't load music."
         } finally {
             homeLoading = false
         }
     }
 
     // Search is debounced; a cleared box drops back to the prompt.
-    LaunchedEffect(query) {
+    LaunchedEffect(query, catalog, filters) {
         val q = query.trim()
         if (q.isEmpty()) {
             appliedQuery = ""
@@ -221,7 +496,15 @@ fun MusicScreen(nav: NavHostController) {
         delay(350)
         appliedQuery = q
         searching = true
-        searchData = runCatching { DeezerApi.search(q) }.getOrNull()
+        val effectiveFilter = MusicFilter.entries.firstOrNull { it.name == filters }
+            ?: MusicFilter.ALL
+        val yt = if (catalog != "deezer") {
+            runCatching { YtMusicCatalog.search(q, effectiveFilter) }.getOrNull()
+        } else null
+        val deezer = if (catalog != "ytmusic") {
+            runCatching { DeezerApi.search(q) }.getOrNull()
+        } else null
+        searchData = mergeMusicSearch(yt, deezer)
         searching = false
     }
 
@@ -233,18 +516,24 @@ fun MusicScreen(nav: NavHostController) {
     Box(
         Modifier
             .fillMaxSize()
-            .background(MusicBg),
+            .background(NuvioMusicPalette.background),
     ) {
+        NuvioAuroraBackground(seed = home?.hero?.coverUrl) {}
         Column(
             Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
                 .padding(bottom = taskbar + if (player.track != null) 78.dp else 0.dp),
         ) {
-            MusicHeader(
+            NuvioMusicTopBar(
+                selected = tab,
+                onSelect = { tabName = it.name },
                 onRefresh = { homeReload++ },
                 onSettings = { showSettings = true },
             )
+            if (android.os.Build.VERSION.SDK_INT >= 33 && !notificationGranted.value) {
+                NuvioNotificationBanner(onEnable = ::askNotifications)
+            }
             if (tab == MusicTab.HOME) {
                 Row(
                     Modifier
@@ -253,7 +542,12 @@ fun MusicScreen(nav: NavHostController) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        if (videoMode) "Music videos on" else "Audio only",
+                        when {
+                            videoMode -> "Music videos on"
+                            catalog == "ytmusic" -> "YouTube Music catalogue"
+                            catalog == "deezer" -> "Deezer catalogue"
+                            else -> "Deezer + YouTube Music"
+                        },
                         color = Color.White.copy(alpha = 0.55f),
                         fontSize = 11.sp,
                         modifier = Modifier.weight(1f),
@@ -261,12 +555,8 @@ fun MusicScreen(nav: NavHostController) {
                     MusicModeToggle(video = videoMode, onChange = ::changePlaybackMode)
                 }
             }
-            MusicTabRow(
-                selected = tab,
-                onSelect = { tabName = it.name },
-            )
             when (tab) {
-                MusicTab.HOME -> HomeTab(
+                MusicTab.HOME -> NuvioHomeTab(
                     home = home,
                     loading = homeLoading,
                     error = homeError,
@@ -278,7 +568,75 @@ fun MusicScreen(nav: NavHostController) {
                     onPlaylist = ::openPlaylist,
                     onRetry = { homeReload++ },
                 )
-                MusicTab.SEARCH -> SearchTab(
+                MusicTab.EXPLORE -> NuvioExploreTab(
+                    onStation = { q ->
+                        scope.launch {
+                            val tracks = runCatching { DeezerApi.genreTracks(q, 30) }
+                                .getOrDefault(emptyList())
+                            if (tracks.isEmpty()) {
+                                toast("No tracks found for this station.")
+                            } else {
+                                playTrack(tracks.first(), tracks)
+                                MusicPlayer.setRepeat(MusicPlayer.RepeatMode.ALL)
+                            }
+                        }
+                    },
+                    ytMoods = ytMoodSections,
+                    onYtMood = { mood ->
+                        scope.launch {
+                            val tracks = runCatching { YtMusicCatalog.moodTracks(mood) }
+                                .getOrDefault(emptyList())
+                            if (tracks.isEmpty()) {
+                                toast("YouTube Music has no songs for ${mood.title}.")
+                            } else {
+                                playTrack(tracks.first(), tracks)
+                                MusicPlayer.setRepeat(MusicPlayer.RepeatMode.ALL)
+                            }
+                        }
+                    },
+                )
+                MusicTab.LIBRARY -> NuvioLibraryTab(
+                    // Signed in, the account's Liked Music joins the local
+                    // likes; both are the same songs, keyed by video/track id.
+                    liked = if (catalog == "ytmusic" && ytAccountLiked.isNotEmpty()) {
+                        (ytAccountLiked + liked).distinctBy { it.id }
+                    } else liked,
+                    playlists = playlists,
+                    recent = recent,
+                    downloads = downloads,
+                    onPlay = ::playTrack,
+                    onOpenPlaylist = { userPlaylistDetail = it },
+                    onCreatePlaylist = {
+                        createPlaylistTrack = null
+                        createPlaylistOpen = true
+                    },
+                    onOpenDownloads = { showDownloads = true },
+                    onTrackMenu = { menuTrack = it },
+                    accountName = accountState.accountName,
+                    accountSignedIn = accountState.signedIn,
+                    accountChecked = accountState.checked,
+                    onAccount = { showAccounts = true },
+                    onSignIn = { accountsVm.startSignIn() },
+                    accountPlaylists = ytAccountPlaylists,
+                    onOpenAccountPlaylist = { openPlaylist(it.id) },
+                    onOpenServers = { showServers = true },
+                    onOpenSpotify = { showSpotify = true },
+                    onOpenParty = { showParty = true },
+                )
+                MusicTab.LOCAL -> NuvioLocalTab(
+                    tracks = localTracks,
+                    loading = localLoading,
+                    permissionGranted = localPermission.value,
+                    onGrant = {
+                        runCatching {
+                            localPermissionLauncher.launch(LocalMusicRepository.requiredPermission())
+                        }
+                    },
+                    onRefresh = { localReload++ },
+                    onPlay = ::playTrack,
+                    onTrackMenu = { menuTrack = it },
+                )
+                MusicTab.SEARCH -> NuvioSearchTab(
                     query = query,
                     onQueryChange = { query = it },
                     appliedQuery = appliedQuery,
@@ -293,41 +651,6 @@ fun MusicScreen(nav: NavHostController) {
                     onAlbum = ::openAlbum,
                     onPlaylist = ::openPlaylist,
                 )
-                MusicTab.BROWSE -> BrowseTab(
-                    onGenre = { q ->
-                        query = q
-                        tabName = MusicTab.SEARCH.name
-                    },
-                )
-                MusicTab.RADIO -> RadioTab(
-                    onPlayStation = { q ->
-                        scope.launch {
-                            val tracks = runCatching { DeezerApi.genreTracks(q, 30) }.getOrDefault(emptyList())
-                            if (tracks.isEmpty()) toast("No tracks found for this station.")
-                            else {
-                                playTrack(tracks.first(), tracks)
-                                // Radio is continuous: wrap the station's queue.
-                                MusicPlayer.setRepeat(MusicPlayer.RepeatMode.ALL)
-                            }
-                        }
-                    },
-                )
-                MusicTab.LIBRARY -> LibraryTab(
-                    liked = liked,
-                    playlists = playlists,
-                    recent = recent,
-                    downloads = downloads,
-                    downloadStates = downloadStates,
-                    onPlay = ::playTrack,
-                    onOpenPlaylist = { userPlaylistDetail = it },
-                    onCreatePlaylist = {
-                        createPlaylistTrack = null
-                        createPlaylistOpen = true
-                    },
-                    onDeletePlaylist = { MusicLibrary.deletePlaylist(it.id) },
-                    onOpenDownloads = { showDownloads = true },
-                    onTrackMenu = { menuTrack = it },
-                )
             }
         }
 
@@ -337,7 +660,12 @@ fun MusicScreen(nav: NavHostController) {
                 onExpand = { nav.navigate(Routes.MUSIC_PLAYER) },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = taskbar + 6.dp),
+                    .padding(
+                        // Clear the television's left rail; on a phone the
+                        // taskbar inset already does the same job at the bottom.
+                        start = if (com.hikari.app.tv.TvMode.current()) 96.dp else 0.dp,
+                        bottom = taskbar + 6.dp,
+                    ),
             )
         }
 
@@ -423,19 +751,18 @@ fun MusicScreen(nav: NavHostController) {
         )
     }
     userPlaylistDetail?.let { playlist ->
-        UserPlaylistSheet(
+        NuvioUserPlaylistPage(
             playlist = playlist,
-            liked = liked,
-            onDismiss = { userPlaylistDetail = null },
+            onClose = { userPlaylistDetail = null },
             onPlay = ::playTrack,
-            onTrackMenu = { userPlaylistDetail = null; menuTrack = it },
-            onRemove = { track ->
-                MusicLibrary.removeTrackFromPlaylist(playlist.id, track.id)
-                userPlaylistDetail = MusicLibrary.playlists.value.firstOrNull { it.id == playlist.id }
-            },
-            onDelete = {
+            onDeletePlaylist = {
                 MusicLibrary.deletePlaylist(playlist.id)
                 userPlaylistDetail = null
+            },
+            onRemoveTrack = { track ->
+                MusicLibrary.removeTrackFromPlaylist(playlist.id, track.id)
+                userPlaylistDetail = MusicLibrary.playlists.value
+                    .firstOrNull { it.id == playlist.id }
             },
         )
     }
@@ -444,16 +771,45 @@ fun MusicScreen(nav: NavHostController) {
         MusicSettingsDialog(
             preferLossless = preferLossless,
             onPreferLossless = { MusicLibrary.setPreferLossless(it) },
+            catalog = catalog,
+            onCatalog = { MusicLibrary.setCatalog(it) },
             onDismiss = { showSettings = false },
         )
     }
+    if (showServers) {
+        NuvioServersScreen(
+            onClose = { showServers = false },
+            onPlay = { track, queue -> playTrack(track, queue) },
+        )
+    }
+    if (showSpotify) {
+        NuvioSpotifyScreen(onClose = { showSpotify = false })
+    }
+    if (showParty) {
+        NuvioPartyScreen(onClose = { showParty = false })
+    }
+    if (showDrive) {
+        NuvioDriveScreen(onClose = { showDrive = false })
+    }
+    // The same device-code dialog the YouTube tab uses: entering the code on
+    // youtube.com/activate signs Music in to the identical account.
+    com.hikari.app.youtube.YouTubeSignInDialog(accountsVm, accountState)
+    if (showAccounts) {
+        com.hikari.app.youtube.YouTubeAccountsDialog(
+            account = accountState,
+            onSelect = { id -> accountsVm.selectAccount(id) },
+            onAdd = { accountsVm.startSignIn() },
+            onSignOut = { accountsVm.signOut() },
+            onDismiss = { showAccounts = false },
+        )
+    }
     if (showDownloads) {
-        DownloadsDialog(
+        NuvioDownloadsPage(
             downloads = downloads,
-            downloadStates = downloadStates,
-            onPlay = { track -> playTrack(track, downloads.map { it.track }) },
-            onDelete = { MusicLibrary.deleteDownload(it) },
-            onDismiss = { showDownloads = false },
+            onClose = { showDownloads = false },
+            onPlay = { track, queue -> playTrack(track, queue) },
+            onDelete = { MusicLibrary.deleteDownload(it.track.id) },
+            onUpload = { showDrive = true },
         )
     }
     addToPlaylistTrack?.let { track ->
@@ -1294,4 +1650,85 @@ internal fun formatFans(count: Long): String = when {
     count >= 1_000_000 -> "${(count / 100_000) / 10.0}M fans"
     count >= 1_000 -> "${count / 1_000}K fans"
     else -> "$count fans"
+}
+
+// ---------------------------------------------------------------------------
+// Merged Deezer + YouTube Music catalogue
+// ---------------------------------------------------------------------------
+
+/** The merged home feed: account shelves, then Deezer, then public YouTube
+ *  Music. Duplicate tracks inside one shelf are removed by title + artist. */
+private fun mergeMusicHomes(
+    deezer: DeezerApi.Home?,
+    youTube: DeezerApi.Home?,
+    account: DeezerApi.Home?,
+): DeezerApi.Home? {
+    fun key(track: MusicTrack): String =
+        track.title.trim().lowercase() + "\u0000" + track.artist.trim().lowercase()
+
+    val sections = LinkedHashMap<String, List<MusicTrack>>()
+    fun add(all: DeezerApi.Home?) {
+        all?.sections?.forEach { (title, tracks) ->
+            val existing = sections[title].orEmpty()
+            val seen = existing.mapTo(HashSet(), ::key)
+            sections[title] = existing + tracks.filter { seen.add(key(it)) }
+        }
+    }
+    add(account)
+    add(deezer)
+    add(youTube)
+
+    val artists = (
+        deezer?.artists.orEmpty().map { it.copy(id = "dz:${it.id}") } +
+            youTube?.artists.orEmpty() +
+            account?.artists.orEmpty()
+        ).distinctBy { it.id }
+    val albums = (
+        deezer?.albums.orEmpty().map { it.copy(id = "dz:${it.id}") } +
+            youTube?.albums.orEmpty() +
+            account?.albums.orEmpty()
+        ).distinctBy { it.id }
+    val playlists = (
+        deezer?.playlists.orEmpty().map { it.copy(id = "dz:${it.id}") } +
+            youTube?.playlists.orEmpty() +
+            account?.playlists.orEmpty()
+        ).distinctBy { it.id }
+
+    if (sections.isEmpty() && artists.isEmpty() && albums.isEmpty() && playlists.isEmpty()) {
+        return null
+    }
+    return DeezerApi.Home(sections, artists, albums, playlists)
+}
+
+/** The merged search page. YouTube songs come first (they carry an exact
+ *  video id), then Deezer songs that are not the same recording. */
+private fun mergeMusicSearch(
+    youTube: MusicSearchData?,
+    deezer: MusicSearchData?,
+): MusicSearchData? {
+    if (youTube == null && deezer == null) return null
+    fun key(track: MusicTrack): String =
+        track.title.trim().lowercase() + "\u0000" + track.artist.trim().lowercase()
+
+    val seen = HashSet<String>()
+    val tracks = (youTube?.tracks.orEmpty() + deezer?.tracks.orEmpty())
+        .filter { seen.add(key(it)) }
+    val artists = (
+        youTube?.artists.orEmpty() +
+            deezer?.artists.orEmpty().map { it.copy(id = "dz:${it.id}") }
+        ).distinctBy { it.id }
+    val albums = (
+        youTube?.albums.orEmpty() +
+            deezer?.albums.orEmpty().map { it.copy(id = "dz:${it.id}") }
+        ).distinctBy { it.id }
+    val playlists = (
+        youTube?.playlists.orEmpty() +
+            deezer?.playlists.orEmpty().map { it.copy(id = "dz:${it.id}") }
+        ).distinctBy { it.id }
+    return MusicSearchData(
+        tracks = tracks,
+        artists = artists,
+        albums = albums,
+        playlists = playlists,
+    )
 }

@@ -9,7 +9,9 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.BitmapFactory
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.StateListDrawable
 import android.text.InputType
+import android.util.TypedValue
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
@@ -119,6 +121,12 @@ class WebViewActivity : ComponentActivity() {
     /** The address toolbar and its bookmark strip, hidden while a web player is fullscreen. */
     private lateinit var browserBar: LinearLayout
     private lateinit var bookmarkScroll: HorizontalScrollView
+    /** The Music tab's transport, carried into the browser too (the Compose
+     *  mini player cannot draw over this separate Activity). */
+    private lateinit var musicBar: LinearLayout
+    private lateinit var musicTitle: TextView
+    private lateinit var musicArtist: TextView
+    private lateinit var musicPlay: TextView
     /** Full-window host for an HTML5 video's custom view. */
     private var fullscreenOverlay: FrameLayout? = null
     private var contentFrame: FrameLayout? = null
@@ -422,6 +430,23 @@ class WebViewActivity : ComponentActivity() {
     /** Per-session "Request desktop site" choice. The default UA comes from
      *  Settings; this is the one-tap override browsers put in their menu. */
     @Volatile private var desktopMode = false
+
+    /** Settings → Privacy & Browsing → "Autoplay the best video". When on, the
+     *  first real stream a page offers is handed to Hikari's player without
+     *  opening the source sheet. Off by default: most pages are read, not
+     *  watched. */
+    @Volatile private var autoplayBest = false
+    /** One hand-off per navigation, so a page that keeps re-detecting the same
+     *  stream cannot reopen the player. */
+    private var autoplayLaunched = false
+
+    /** The TV long-press browser sheet (see [showTvBrowserMenu]), and the
+     *  focused button inside it. */
+    private var tvMenu: View? = null
+    private var tvMenuFirst: View? = null
+    private val tvHoldHandler = Handler(Looper.getMainLooper())
+    private var tvHoldRunnable: Runnable? = null
+    private var tvHoldFired = false
 
     // True while any <video> on the page is actively playing (kept fresh by the
     // periodic scan). Popups opened while a video is playing are ads — players
@@ -896,6 +921,7 @@ class WebViewActivity : ComponentActivity() {
             isClickable = true
             contentDescription = I18n.t("Videos on this page")
             setOnClickListener { showMediaSheet() }
+            decorateTvFocus(this)
         }
 
         // A TELEVISION BOX MAY HAVE NO WEBVIEW AT ALL. The WebView is part of
@@ -969,6 +995,7 @@ class WebViewActivity : ComponentActivity() {
                 contentDescription = desc
                 isClickable = true
                 setOnClickListener { v -> onClick(v) }
+                decorateTvFocus(this)
             }
 
         // The two arrows are deliberately the biggest controls in the bar: they
@@ -1085,6 +1112,63 @@ class WebViewActivity : ComponentActivity() {
             addView(bookmarkBar, ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
         }
 
+        // Music follows you into the browser. The Compose mini player lives in
+        // MainActivity and cannot draw over a second Activity, so the same
+        // strip is built here: title/artist, previous, play-pause, next and a
+        // music-note button back to the Music tab.
+        fun musicButton(glyph: String, desc: String, size: Float = 20f, onClick: () -> Unit): TextView =
+            TextView(this).apply {
+                text = glyph
+                textSize = size
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+                setPadding(dp(10), 0, dp(10), 0)
+                contentDescription = desc
+                isClickable = true
+                setOnClickListener { onClick() }
+                decorateTvFocus(this)
+            }
+        musicTitle = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            textSize = 12f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        musicArtist = TextView(this).apply {
+            setTextColor(0x88FFFFFF.toInt())
+            textSize = 10f
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        musicPlay = musicButton("\u25B6", "Play or pause", 18f) {
+            com.hikari.app.music.MusicPlayer.toggle()
+        }
+        musicBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), 0, dp(4), 0)
+            setBackgroundColor(0xFF12151F.toInt())
+            visibility = View.GONE
+            val info = LinearLayout(this@WebViewActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(musicTitle)
+                addView(musicArtist)
+            }
+            addView(info, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(musicButton("\u23EE", "Previous", 18f) {
+                com.hikari.app.music.MusicPlayer.previous()
+            })
+            addView(musicPlay)
+            addView(musicButton("\u23ED", "Next", 18f) {
+                com.hikari.app.music.MusicPlayer.next()
+            })
+            addView(musicButton("\u266B", "Go to Music") {
+                HikariApp.instance.musicTabRequest.value += 1
+                finish()
+            })
+        }
+
         rootView = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.BLACK)
@@ -1096,8 +1180,14 @@ class WebViewActivity : ComponentActivity() {
             addView(
                 content,
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
-                    topMargin = dp(16)
+                    // 6dp, not 16: the page sits right under the status/cutout
+                    // inset instead of leaving a band of empty screen above it.
+                    topMargin = dp(6)
                 },
+            )
+            addView(
+                musicBar,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)),
             )
             addView(browserBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, BROWSER_BAR_HEIGHT))
             addView(
@@ -1142,6 +1232,7 @@ class WebViewActivity : ComponentActivity() {
             // Safety toggles from Settings.
             redirectProtection = app.store.webviewRedirect()
             popupProtection = app.store.webviewPopup()
+            autoplayBest = runCatching { app.store.webviewAutoplayBest() }.getOrDefault(false)
             allowedRedirectHosts = app.store.webviewRedirectAllow().toSet() +
                 com.hikari.app.data.RedirectAllow.now()
             // Popup exceptions (Settings → Privacy & Browsing → WebView safety).
@@ -1231,6 +1322,7 @@ class WebViewActivity : ComponentActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 when {
+                    tvMenu != null -> hideTvBrowserMenu()
                     customView != null -> hideCustomView()
                     webView.canGoBack() -> navigateHistory(false)
                     openTabs.size > 1 -> {
@@ -1245,6 +1337,23 @@ class WebViewActivity : ComponentActivity() {
         restoreActiveTab(recreated = savedInstanceState != null)
         setupWebView(startUrl)
         refreshBookmarks()
+        // Mirror the Music tab's transport into this Activity's strip. The
+        // collector is lifecycle-scoped, so it dies with the browser.
+        lifecycleScope.launch {
+            com.hikari.app.music.MusicPlayer.state.collect { state ->
+                if (!::musicBar.isInitialized) return@collect
+                val track = state.track
+                val show = track != null && !addonConfig && !autoCloseWhenCloudflarePassed
+                val wanted = if (show) View.VISIBLE else View.GONE
+                if (musicBar.visibility != wanted) musicBar.visibility = wanted
+                if (track != null) {
+                    if (musicTitle.text.toString() != track.title) musicTitle.text = track.title
+                    if (musicArtist.text.toString() != track.artist) musicArtist.text = track.artist
+                    val glyph = if (state.playing) "\u23F8" else "\u25B6"
+                    if (musicPlay.text.toString() != glyph) musicPlay.text = glyph
+                }
+            }
+        }
     }
 
     private fun setupWebView(startUrl: String) {
@@ -1268,7 +1377,17 @@ class WebViewActivity : ComponentActivity() {
         webView.isFocusable = true
         webView.isFocusableInTouchMode = true
         webView.setOnKeyListener { _, _, event -> handleTvRemote(event) }
-        if (com.hikari.app.tv.TvMode.isTv) webView.requestFocus()
+        if (com.hikari.app.tv.TvMode.isTv) {
+            // Hold OK / long-press the page: the television browser menu. A
+            // touch remote gets the same sheet from a long press.
+            webView.isLongClickable = true
+            webView.setOnLongClickListener {
+                showTvBrowserMenu()
+                true
+            }
+            webView.foreground = focusRing(accentColor())
+            webView.requestFocus()
+        }
         // The WebView's own Safe Browsing check (default on modern Android;
         // set explicitly so a vendor build cannot quietly disable it).
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -1637,6 +1756,7 @@ class WebViewActivity : ComponentActivity() {
                 shotHandler.removeCallbacksAndMessages(null)
                 detectedVideos.clear()
                 autoLaunched = false
+                autoplayLaunched = false
                 scanHandler.removeCallbacksAndMessages(null)
                 progressBar.visibility = View.VISIBLE
                 blockedToastShown = false
@@ -1735,6 +1855,19 @@ class WebViewActivity : ComponentActivity() {
                 }
                 scanRunnable = r
                 scanHandler.postDelayed(r, 1500)
+                // "Autoplay the best video": give the sniffer a moment to find
+                // a master playlist/DASH manifest, then hand the page to the
+                // player once. Off by default (Settings → Privacy & Browsing).
+                if (autoplayBest && !addonConfig && !autoCloseWhenCloudflarePassed) {
+                    scanHandler.postDelayed({
+                        if (autoplayBest && !autoplayLaunched && !isFinishing &&
+                            webView.hasFocus() && detectedVideos.isNotEmpty()
+                        ) {
+                            autoplayLaunched = true
+                            playVideo()
+                        }
+                    }, 3_500L)
+                }
                 scheduleScreenshot(view, url)
             }
 
@@ -2142,6 +2275,7 @@ class WebViewActivity : ComponentActivity() {
         if (::progressBar.isInitialized) progressBar.visibility = View.GONE
         if (::browserBar.isInitialized) browserBar.visibility = View.GONE
         if (::bookmarkScroll.isInitialized) bookmarkScroll.visibility = View.GONE
+        if (::musicBar.isInitialized) musicBar.visibility = View.GONE
     }
 
     /** The page left fullscreen: give the browser its chrome back. */
@@ -2151,6 +2285,9 @@ class WebViewActivity : ComponentActivity() {
         }
         if (::browserBar.isInitialized) browserBar.visibility = View.VISIBLE
         if (::bookmarkScroll.isInitialized) bookmarkScroll.visibility = View.VISIBLE
+        if (::musicBar.isInitialized && com.hikari.app.music.MusicPlayer.state.value.track != null) {
+            musicBar.visibility = View.VISIBLE
+        }
     }
 
     /**
@@ -2188,6 +2325,186 @@ class WebViewActivity : ComponentActivity() {
 
     // The ⋯ pill opens this tiny menu — the app draws NO header bar, so the
     // site's own header/search stay fully visible.
+    // ---- TV focus + long-press browser sheet -----------------------------
+
+    /** The live accent from the Activity theme (gold unless the user changed
+     *  it), used by the TV focus rings and the long-press sheet. */
+    private fun accentColor(): Int {
+        val value = TypedValue()
+        return if (theme.resolveAttribute(android.R.attr.colorAccent, value, true)) value.data
+        else 0xFFF5C569.toInt()
+    }
+
+    /** Transparent ring drawn on top of a View while the remote is on it. */
+    private fun focusRing(accent: Int): StateListDrawable {
+        val focused = GradientDrawable().apply {
+            setColor(Color.TRANSPARENT)
+            cornerRadius = dp(10).toFloat()
+            setStroke(dp(2), accent)
+        }
+        val normal = GradientDrawable().apply {
+            setColor(Color.TRANSPARENT)
+            cornerRadius = dp(10).toFloat()
+        }
+        return StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_focused), focused)
+            addState(intArrayOf(), normal)
+        }
+    }
+
+    /** A filled row/add pill for the long-press sheet: accent tint + ring on
+     *  focus, faint white otherwise, so every button reads as a target. */
+    private fun focusPill(accent: Int): StateListDrawable {
+        val focused = GradientDrawable().apply {
+            setColor((accent and 0x00FFFFFF) or 0x33000000)
+            cornerRadius = dp(15).toFloat()
+            setStroke(dp(2), accent)
+        }
+        val pressed = GradientDrawable().apply {
+            setColor((accent and 0x00FFFFFF) or 0x55000000)
+            cornerRadius = dp(15).toFloat()
+            setStroke(dp(2), accent)
+        }
+        val normal = GradientDrawable().apply {
+            setColor(0x14FFFFFF)
+            cornerRadius = dp(15).toFloat()
+            setStroke(dp(1), 0x33FFFFFF)
+        }
+        return StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_pressed), pressed)
+            addState(intArrayOf(android.R.attr.state_focused), focused)
+            addState(intArrayOf(), normal)
+        }
+    }
+
+    /** Give a View the same accent ring the Compose screens inherit, and a
+     *  small lift while focused. No-op on a touch device. */
+    private fun decorateTvFocus(view: View, accent: Int = accentColor()) {
+        if (!com.hikari.app.tv.TvMode.isTv) return
+        view.isFocusable = true
+        view.isFocusableInTouchMode = true
+        view.foreground = focusRing(accent)
+        view.setOnFocusChangeListener { v, focused ->
+            v.animate().scaleX(if (focused) 1.03f else 1f)
+                .scaleY(if (focused) 1.03f else 1f)
+                .setDuration(110L).start()
+        }
+    }
+
+    /**
+     * The television browser menu: hold OK (or long-press the page on a touch
+     * remote) and this dark glass sheet opens over the page. It carries the
+     * actions a remote needs — history, reload, page scrolling, tabs and the
+     * hand-off to Hikari's player — because the browser's ordinary ⋯ menu is a
+     * native PopupMenu that a D-pad cannot reliably reach.
+     */
+    private fun showTvBrowserMenu() {
+        if (tvMenu != null || isFinishing) return
+        val accent = accentColor()
+        val root = FrameLayout(this).apply {
+            setBackgroundColor(0xB3000000.toInt())
+            isClickable = true
+            setOnClickListener { hideTvBrowserMenu() }
+        }
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(14), dp(18), dp(14))
+            background = GradientDrawable().apply {
+                setColor(0xF00B0E16.toInt())
+                cornerRadius = dp(24).toFloat()
+                setStroke(dp(1), (accent and 0x00FFFFFF) or 0x66000000)
+            }
+            isClickable = true
+        }
+        val titleRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        titleRow.addView(TextView(this).apply {
+            text = "Browser"
+            setTextColor(Color.WHITE)
+            textSize = 20f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        titleRow.addView(TextView(this).apply {
+            text = "✕"
+            setTextColor(0xB3FFFFFF.toInt())
+            textSize = 20f
+            gravity = Gravity.CENTER
+            setPadding(dp(10), 0, dp(4), 0)
+            isFocusable = true
+            isClickable = true
+            setOnClickListener { hideTvBrowserMenu() }
+            decorateTvFocus(this, accent)
+        })
+        panel.addView(titleRow)
+        panel.addView(TextView(this).apply {
+            text = "Hold OK or long-press the page to open · Back closes"
+            setTextColor(0x73FFFFFF)
+            textSize = 11f
+            setPadding(0, dp(2), 0, dp(10))
+        })
+        val actions = mutableListOf<Pair<String, () -> Unit>>()
+        actions += "←   Back" to { if (webView.canGoBack()) navigateHistory(false) }
+        actions += "→   Forward" to { if (webView.canGoForward()) navigateHistory(true) }
+        actions += "↻   Reload" to { webView.reload() }
+        actions += "▲   Scroll up" to { webView.scrollBy(0, -dp(320)) }
+        actions += "▼   Scroll down" to { webView.scrollBy(0, dp(320)) }
+        actions += "🗂   Tabs (${openTabs.size})" to { showTabGrid() }
+        actions += "▶   Play video in player" to { playVideo() }
+        for ((label, run) in actions) {
+            val button = TextView(this).apply {
+                text = label
+                setTextColor(Color.WHITE)
+                textSize = 16f
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(16), 0, dp(16), 0)
+                background = focusPill(accent)
+                isClickable = true
+                isFocusable = true
+                isFocusableInTouchMode = true
+                setOnClickListener {
+                    hideTvBrowserMenu()
+                    run()
+                }
+            }
+            panel.addView(
+                button,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(50),
+                ).apply { bottomMargin = dp(7) },
+            )
+            if (tvMenuFirst == null) tvMenuFirst = button
+        }
+        val width = minOf(
+            dp(430),
+            (resources.displayMetrics.widthPixels - dp(48)).coerceAtLeast(dp(240)),
+        )
+        root.addView(
+            panel,
+            FrameLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER),
+        )
+        addContentView(
+            root,
+            ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        tvMenu = root
+        tvMenuFirst?.post { tvMenuFirst?.requestFocus() }
+    }
+
+    private fun hideTvBrowserMenu() {
+        val root = tvMenu ?: return
+        tvMenu = null
+        tvMenuFirst = null
+        (root.parent as? ViewGroup)?.removeView(root)
+        if (com.hikari.app.tv.TvMode.isTv) webView.requestFocus()
+    }
+
     private fun showMenu(anchor: View) {
         val menu = android.widget.PopupMenu(this, anchor, Gravity.END)
         menu.menu.add(0, 1, 0, "\u2190 Back")
@@ -2234,6 +2551,14 @@ class WebViewActivity : ComponentActivity() {
         menu.menu.add(0, 20, 20, "\u2764\uFE0F Save this site")
         // Open the tab grid so the user can switch / close tabs.
         menu.menu.add(0, 21, 21, "\uD83D\uDD17 Tabs (\u200A${openTabs.size}\u200B)")
+        // The same switch as Settings → Privacy & Browsing, one tap away.
+        menu.menu.add(
+            0,
+            23,
+            23,
+            if (autoplayBest) "\u25B6 Autoplay best video: on"
+            else "\u25B6 Autoplay best video: off",
+        )
         // Per-site adblock switch, instant: a site the blocker breaks goes on
         // the whitelist from here (and back off with the same tap), no trip
         // to Settings. The in-memory set is swapped and the page reloaded, so
@@ -2303,6 +2628,20 @@ class WebViewActivity : ComponentActivity() {
                 14 -> blockAdSite()
                 20 -> saveCurrentSite()
                 21 -> showTabGrid()
+                23 -> {
+                    autoplayBest = !autoplayBest
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        runCatching {
+                            (applicationContext as HikariApp).store
+                                .setWebviewAutoplayBest(autoplayBest)
+                        }
+                    }
+                    Toast.makeText(
+                        this,
+                        if (autoplayBest) "Autoplay best video on" else "Autoplay best video off",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
             }
             true
         }
@@ -2533,10 +2872,12 @@ class WebViewActivity : ComponentActivity() {
         ) {
             lastUserTouchAt = android.os.SystemClock.uptimeMillis()
         }
+        com.hikari.app.tv.TvInput.noteTouch()
         return super.dispatchTouchEvent(ev)
     }
 
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        com.hikari.app.tv.TvInput.noteKey(event)
         if (mouseMode && event.action == android.view.KeyEvent.ACTION_DOWN) {
             when (event.keyCode) {
                 android.view.KeyEvent.KEYCODE_DPAD_UP -> { moveCursor(0, -1); return true }
@@ -3539,6 +3880,7 @@ class WebViewActivity : ComponentActivity() {
         isClickable = true
         setOnClickListener { onClick() }
         if (onLongClick != null) setOnLongClickListener { onLongClick(); true }
+        decorateTvFocus(this)
     }
 
     // ------------------------------------------------------------ TV remote
@@ -3551,8 +3893,39 @@ class WebViewActivity : ComponentActivity() {
      * button); media keys toggle and seek the page's <video>.
      */
     private fun handleTvRemote(event: KeyEvent): Boolean {
-        if (event.action != KeyEvent.ACTION_DOWN) return false
         if (!com.hikari.app.tv.TvMode.isTv) return false
+        com.hikari.app.tv.TvInput.noteKey(event)
+        val isCenter = event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
+            event.keyCode == KeyEvent.KEYCODE_ENTER ||
+            event.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER
+        if (isCenter) {
+            // Hold OK: the browser sheet. A short press keeps the old "tap the
+            // page centre" behaviour, so a site's own player button still works.
+            when (event.action) {
+                KeyEvent.ACTION_DOWN -> {
+                    // Key repeat sends more DOWNs while the button is held;
+                    // one timer per hold is enough.
+                    if (tvHoldRunnable != null) return true
+                    tvHoldFired = false
+                    val hold = Runnable {
+                        tvHoldFired = true
+                        showTvBrowserMenu()
+                    }
+                    tvHoldRunnable = hold
+                    tvHoldHandler.postDelayed(hold, 550L)
+                    return true
+                }
+                KeyEvent.ACTION_UP -> {
+                    tvHoldRunnable?.let { tvHoldHandler.removeCallbacks(it) }
+                    tvHoldRunnable = null
+                    if (!tvHoldFired) remoteTap()
+                    tvHoldFired = false
+                    return true
+                }
+            }
+            return false
+        }
+        if (event.action != KeyEvent.ACTION_DOWN) return false
         return when (event.keyCode) {
             KeyEvent.KEYCODE_DPAD_DOWN -> {
                 webView.scrollBy(0, dp(110)); true
@@ -3565,10 +3938,6 @@ class WebViewActivity : ComponentActivity() {
             }
             KeyEvent.KEYCODE_DPAD_LEFT -> {
                 webView.scrollBy(-dp(140), 0); true
-            }
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
-                remoteTap()
-                true
             }
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
                 webView.evaluateJavascript(
@@ -4085,6 +4454,8 @@ class WebViewActivity : ComponentActivity() {
     override fun onDestroy() {
         verifyHandler.removeCallbacksAndMessages(null)
         scanHandler.removeCallbacksAndMessages(null)
+        tvHoldHandler.removeCallbacksAndMessages(null)
+        hideTvBrowserMenu()
         setKeepScreenOn(false)
         runCatching { popupChild?.destroy() }
         popupChild = null

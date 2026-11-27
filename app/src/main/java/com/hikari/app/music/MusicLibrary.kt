@@ -35,6 +35,8 @@ object MusicLibrary {
     private val K_DOWNLOADS = stringPreferencesKey("downloads")
     private val K_SOURCE = stringPreferencesKey("audio_source")
     private val K_VIDEO_MODE = booleanPreferencesKey("video_mode")
+    /** "deezer" (default) or "ytmusic" — which catalogue feeds Home/Search. */
+    private val K_CATALOG = stringPreferencesKey("music_catalog")
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var store: DataStore<Preferences>? = null
@@ -62,6 +64,11 @@ object MusicLibrary {
     private val _videoMode = MutableStateFlow(false)
     val videoMode: StateFlow<Boolean> = _videoMode.asStateFlow()
 
+    /** Which catalogues Home/Search read: "both" (default), "deezer" or
+     *  "ytmusic". Playback always goes through the same Lucid player. */
+    private val _catalog = MutableStateFlow("both")
+    val catalog: StateFlow<String> = _catalog.asStateFlow()
+
     data class DownloadState(val progress: Float, val running: Boolean, val message: String? = null)
     private val _downloadStates = MutableStateFlow<Map<String, DownloadState>>(emptyMap())
     val downloadStates: StateFlow<Map<String, DownloadState>> = _downloadStates.asStateFlow()
@@ -86,6 +93,21 @@ object MusicLibrary {
         _downloads.value = downloads.filter { downloadFile(it)?.isFile == true }
         _preferLossless.value = (prefs[K_SOURCE] ?: "youtube") == "flac"
         _videoMode.value = prefs[K_VIDEO_MODE] ?: false
+        // One-time move to the merged page: older builds stored a single
+        // catalogue. Anyone who has not explicitly chosen "both" gets the
+        // merged Deezer + YouTube Music feed once.
+        val storedCatalog = prefs[K_CATALOG]
+        val mergedMigration = prefs[booleanPreferencesKey("catalog_merged_v1")] ?: false
+        _catalog.value = when {
+            !mergedMigration -> "both"
+            storedCatalog == "deezer" || storedCatalog == "ytmusic" -> storedCatalog
+            else -> "both"
+        }
+        if (!mergedMigration) {
+            scope.launch {
+                store?.edit { it[booleanPreferencesKey("catalog_merged_v1")] = true }
+            }
+        }
         loaded = true
     }
 
@@ -97,6 +119,14 @@ object MusicLibrary {
         if (index >= 0) list.removeAt(index) else list.add(0, track)
         _liked.value = list
         persist(K_LIKED, tracksJson(list))
+        // A YouTube Music row also updates the account's Liked Music, using
+        // the YouTube tab's existing sign-in. Fire and forget: the local like
+        // is already saved.
+        if (track.videoId.isNotBlank()) {
+            scope.launch {
+                runCatching { YtAccountMusic.syncLike(track, index < 0) }
+            }
+        }
     }
 
     fun addRecent(track: MusicTrack) {
@@ -135,6 +165,20 @@ object MusicLibrary {
         persistPlaylists()
     }
 
+    /** Bulk add for an import: one persist for the whole playlist. */
+    fun addTracksToPlaylist(playlistId: String, additions: List<MusicTrack>) {
+        if (additions.isEmpty()) return
+        val list = _playlists.value.map { playlist ->
+            if (playlist.id != playlistId) playlist
+            else playlist.copy(tracks = playlist.tracks.toMutableList().also { tracks ->
+                val seen = tracks.mapTo(HashSet()) { it.id }
+                additions.forEach { if (seen.add(it.id)) tracks.add(it) }
+            })
+        }
+        _playlists.value = list
+        persistPlaylists()
+    }
+
     fun removeTrackFromPlaylist(playlistId: String, trackId: String) {
         _playlists.value = _playlists.value.map { playlist ->
             if (playlist.id != playlistId) playlist
@@ -146,6 +190,17 @@ object MusicLibrary {
     fun setPreferLossless(value: Boolean) {
         _preferLossless.value = value
         persist(K_SOURCE, if (value) "flac" else "youtube")
+    }
+
+    /** "both", "deezer" or "ytmusic" — see [catalog]. */
+    fun setCatalog(value: String) {
+        val next = when (value) {
+            "deezer", "ytmusic" -> value
+            else -> "both"
+        }
+        if (_catalog.value == next) return
+        _catalog.value = next
+        persist(K_CATALOG, next)
     }
 
     /** Switches the whole page between audio-only and YouTube music videos. */
@@ -170,6 +225,15 @@ object MusicLibrary {
     fun download(track: MusicTrack) {
         if (_downloadStates.value[track.id]?.running == true) return
         if (downloadedFor(track.id) != null) return
+        if (MusicSettings.wifiOnlyDownloads.value && !isOnWifi()) {
+            setDownloadState(
+                track.id,
+                0f,
+                false,
+                "Downloads are set to Wi-Fi only. Connect to Wi-Fi or change Music settings.",
+            )
+            return
+        }
         setDownloadState(track.id, 0f, true, null)
         scope.launch {
             try {
@@ -221,6 +285,16 @@ object MusicLibrary {
                 setDownloadState(track.id, 0f, false, e.message ?: "Download failed")
             }
         }
+    }
+
+    private fun isOnWifi(): Boolean {
+        val ctx = appContext ?: return true
+        return runCatching {
+            val cm = ctx.getSystemService(android.net.ConnectivityManager::class.java) ?: return true
+            val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) ||
+                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET)
+        }.getOrDefault(true)
     }
 
     fun deleteDownload(trackId: String) {

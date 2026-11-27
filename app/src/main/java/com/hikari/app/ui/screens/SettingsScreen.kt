@@ -7520,6 +7520,10 @@ private fun AnimeMetadataIntegrationCard(app: HikariApp) {
     val savedAioUrl by remember { app.store.aioBaseUrlFlow() }.collectAsState(initial = "")
     var draftAioUrl by remember { mutableStateOf("") }
     LaunchedEffect(savedAioUrl) { draftAioUrl = savedAioUrl }
+    val savedAioKey by remember { app.store.aioApiKeyFlow() }.collectAsState(initial = "")
+    var draftAioKey by remember { mutableStateOf("") }
+    LaunchedEffect(savedAioKey) { draftAioKey = savedAioKey }
+    var showTmdbModules by remember { mutableStateOf(false) }
     val savedSimklId by remember { app.store.animeSimklAppIdFlow() }.collectAsState(initial = "")
     var draftSimklId by remember { mutableStateOf("") }
     LaunchedEffect(savedSimklId) { draftSimklId = savedSimklId }
@@ -7637,6 +7641,27 @@ private fun AnimeMetadataIntegrationCard(app: HikariApp) {
                 onValueChange = { draftAioUrl = it },
                 onSave = {
                     scope.launch { runCatching { app.store.setAioBaseUrl(draftAioUrl.trim().trimEnd('/')) } }
+                },
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                tr("AioMetadata API key (optional)"),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                tr("Only for a self-hosted AioMetadata that requires a Bearer token. Leave blank for the public endpoint."),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp, bottom = 10.dp),
+            )
+            ApiKeyEditor(
+                label = "AioMetadata API key",
+                value = draftAioKey,
+                savedValue = savedAioKey,
+                onValueChange = { draftAioKey = it },
+                onSave = {
+                    scope.launch { runCatching { app.store.setAioApiKey(draftAioKey.trim()) } }
                 },
             )
         }
@@ -7839,6 +7864,34 @@ private fun AnimeMetadataIntegrationCard(app: HikariApp) {
                 },
             )
         }
+        Spacer(Modifier.height(14.dp))
+        TextButton(
+            onClick = { showTmdbModules = true },
+            modifier = Modifier.tvPress(previewPass = true, onClick = { showTmdbModules = true }),
+        ) {
+            Icon(Icons.Filled.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(tr("TMDB modules…"))
+        }
+    }
+
+    if (showTmdbModules) {
+        AlertDialog(
+            onDismissRequest = { showTmdbModules = false },
+            title = { Text(tr("TMDB modules")) },
+            text = {
+                Column(
+                    Modifier
+                        .heightIn(max = 460.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    TmdbModulesCard(app)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showTmdbModules = false }) { Text(tr("Done")) }
+            },
+        )
     }
 }
 
@@ -8044,6 +8097,7 @@ private fun WebViewSafetyCard(app: HikariApp) {
     val scope = rememberCoroutineScope()
     var redirectProtection by remember { mutableStateOf(true) }
     var popupProtection by remember { mutableStateOf(true) }
+    var autoplayBest by remember { mutableStateOf(false) }
     var allowedRedirects by remember { mutableStateOf(listOf<String>()) }
     var newAllowedDomain by remember { mutableStateOf("") }
     var popupAllow by remember { mutableStateOf(listOf<String>()) }
@@ -8053,6 +8107,7 @@ private fun WebViewSafetyCard(app: HikariApp) {
     LaunchedEffect(Unit) {
         redirectProtection = app.store.webviewRedirect()
         popupProtection = app.store.webviewPopup()
+        autoplayBest = runCatching { app.store.webviewAutoplayBest() }.getOrDefault(false)
         allowedRedirects = app.store.webviewRedirectAllow()
         popupAllow = app.store.webviewPopupAllow()
         popupBlock = app.store.webviewPopupBlock()
@@ -8081,6 +8136,15 @@ private fun WebViewSafetyCard(app: HikariApp) {
             onCheckedChange = {
                 popupProtection = it
                 scope.launch { runCatching { app.store.setWebviewPopup(it) } }
+            },
+        )
+        SettingsToggle(
+            label = tr("Autoplay the best video"),
+            supporting = tr("When a page offers a stream, open it in the player automatically"),
+            checked = autoplayBest,
+            onCheckedChange = {
+                autoplayBest = it
+                scope.launch { runCatching { app.store.setWebviewAutoplayBest(it) } }
             },
         )
         Spacer(Modifier.height(10.dp))

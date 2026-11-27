@@ -53,4 +53,5 @@
     <string name="websites_save_title">Save this website</string>
     <string name="websites_save_hint">Website name</string>
     <string name="websites_saved">Website saved</string>
+    <string name="music_widget_description">Lucid Music playback controls</string>
 </resources>

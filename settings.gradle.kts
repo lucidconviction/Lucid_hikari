@@ -18,6 +18,10 @@ dependencyResolutionManagement {
 rootProject.name = "hikari"
 include(":app")
 
+// LastWave's MIT-licensed direct USB Audio Class driver (native JNI), used by
+// Music's optional bit-perfect output.
+include(":audio:decent-usb-audio-driver")
+
 // SmartTube's YouTube engine (MediaServiceCore, MIT) — the exact engine the
 // NuvioPlusIPTV fork uses for the YouTube tab. Android-only library modules.
 include(":mediaservicecore:mediaserviceinterfaces")

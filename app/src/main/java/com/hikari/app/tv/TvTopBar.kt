@@ -302,7 +302,7 @@ fun TvHomeHeaderBar(
     Row(
         modifier
             .fillMaxWidth()
-            .padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 2.dp),
+            .padding(start = 20.dp, end = 20.dp, top = 5.dp, bottom = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(

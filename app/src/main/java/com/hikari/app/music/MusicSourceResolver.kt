@@ -92,7 +92,7 @@ object MusicSourceResolver {
             com.hikari.app.youtube.YouTubeContentRegion.apply(context)
             YouTubeServiceManager.instance()
         }.getOrNull() ?: return@withContext null
-        val videoId = ytVideoIds[track.id] ?: run {
+        val videoId = ytVideoIds[track.id] ?: track.videoId.takeIf { it.isNotBlank() } ?: run {
             val groups = runCatching {
                 service.contentService.getSearchObserve("${track.title} ${track.artist}".trim()).blockingFirst()
             }.getOrNull().orEmpty()
@@ -109,10 +109,14 @@ object MusicSourceResolver {
             service.mediaItemService.getFormatInfoObserve(videoId).blockingFirst()
         }.getOrNull() ?: return@withContext null
         val ua = info.clientInfo?.userAgent?.takeIf { it.isNotBlank() }
-        val direct = info.urlFormats.orEmpty()
+        val candidates = info.urlFormats.orEmpty()
             .filter { it.url?.isNotBlank() == true && it.mimeType?.startsWith("video/mp4") == true }
-            .maxByOrNull { it.bitrate?.toLongOrNull() ?: 0L }
-            ?: return@withContext null
+        val ceiling = MusicSettings.downloadQuality.value.maxKbps * 1_000L
+        val direct = (
+            candidates.filter { (it.bitrate?.toLongOrNull() ?: 0L) in 1..ceiling }
+                .maxByOrNull { it.bitrate?.toLongOrNull() ?: 0L }
+                ?: candidates.minByOrNull { it.bitrate?.toLongOrNull() ?: Long.MAX_VALUE }
+            ) ?: return@withContext null
         MusicStream(
             url = direct.url,
             headers = if (ua != null) mapOf("User-Agent" to ua) else emptyMap(),
@@ -123,7 +127,7 @@ object MusicSourceResolver {
     private suspend fun youtube(track: MusicTrack): MusicStream? = withContext(Dispatchers.IO) {
         // The search is expensive; once a track has a known video id, reuse it
         // (mode toggles, replays and auto-next all land here again).
-        val videoId = ytVideoIds[track.id] ?: run {
+        val videoId = ytVideoIds[track.id] ?: track.videoId.takeIf { it.isNotBlank() } ?: run {
             val best = findVideo(track) ?: return@withContext null
             best.videoId?.takeIf { it.isNotBlank() }
         } ?: return@withContext null
@@ -159,8 +163,11 @@ object MusicSourceResolver {
      * app's normal player, with quality, subtitles and picture-in-picture.
      */
     suspend fun videoRequest(track: MusicTrack): YouTubePlayRequest? = withContext(Dispatchers.IO) {
-        val best = findVideo(track) ?: return@withContext null
-        val videoId = best.videoId?.takeIf { it.isNotBlank() } ?: return@withContext null
+        val directId = track.videoId.takeIf { it.isNotBlank() }
+        val videoId = directId ?: run {
+            val best = findVideo(track) ?: return@withContext null
+            best.videoId?.takeIf { it.isNotBlank() }
+        } ?: return@withContext null
         ytVideoIds[track.id] = videoId
         val source = runCatching { YouTubePlayables.resolve(videoId) }
             .getOrDefault(emptyList())
