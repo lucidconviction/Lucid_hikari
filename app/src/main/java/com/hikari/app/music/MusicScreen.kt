@@ -85,6 +85,7 @@ import androidx.navigation.NavHostController
 import com.hikari.app.ui.navigation.LocalTaskbarInset
 import com.hikari.app.ui.navigation.Routes
 import com.hikari.app.ui.components.HikariSectionHeader
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -455,20 +456,43 @@ fun MusicScreen(nav: NavHostController) {
     LaunchedEffect(homeReload, catalog, accountState.signedIn) {
         homeLoading = true
         homeError = null
+        var completed = false
         try {
             val wantsDeezer = catalog != "ytmusic"
             val wantsYouTube = catalog != "deezer"
-            val deezerHome = if (wantsDeezer) {
-                runCatching { DeezerApi.home(force = homeReload > 0) }.getOrNull()
-            } else null
-            val ytHome = if (wantsYouTube) {
-                runCatching { YtMusicCatalog.home() }.getOrNull()
-            } else null
-            val accountHome = if (wantsYouTube && accountState.signedIn) {
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    runCatching { YtAccountMusic.home() }.getOrNull()
-                }
-            } else null
+            // Deezer and YouTube Music are independent services. Waiting for
+            // one before asking the other made the first Music visit the sum
+            // of both latencies; running them together halves that.
+            val (deezerHome, ytHome, accountHome) = kotlinx.coroutines.coroutineScope {
+                val deezer = if (wantsDeezer) {
+                    async {
+                        kotlinx.coroutines.withTimeoutOrNull(10_000L) {
+                            runCatching { DeezerApi.home(force = homeReload > 0) }.getOrNull()
+                        }
+                    }
+                } else null
+                val youtube = if (wantsYouTube) {
+                    async {
+                        kotlinx.coroutines.withTimeoutOrNull(10_000L) {
+                            runCatching { YtMusicCatalog.home() }.getOrNull()
+                        }
+                    }
+                } else null
+                val account = if (wantsYouTube && accountState.signedIn) {
+                    async {
+                        kotlinx.coroutines.withTimeoutOrNull(10_000L) {
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                runCatching { YtAccountMusic.home() }.getOrNull()
+                            }
+                        }
+                    }
+                } else null
+                Triple(
+                    deezer?.await(),
+                    youtube?.await(),
+                    account?.await(),
+                )
+            }
             home = mergeMusicHomes(deezerHome, ytHome, accountHome)
             if (home == null) {
                 homeError = when (catalog) {
@@ -477,6 +501,7 @@ fun MusicScreen(nav: NavHostController) {
                     else -> "Neither Deezer nor YouTube Music answered."
                 }
             }
+            completed = true
         } catch (e: kotlinx.coroutines.CancellationException) {
             // Leaving the Music page cancels this effect. That is not a music
             // error, and its message ("the coroutine scope left the
@@ -484,8 +509,12 @@ fun MusicScreen(nav: NavHostController) {
             throw e
         } catch (e: Throwable) {
             homeError = e.message ?: "Couldn't load music."
+            completed = true
         } finally {
-            homeLoading = false
+            // A replaced loader (account sign-in refresh, catalogue switch)
+            // must not publish `loading = false` while the replacement is
+            // already fetching: that one frame is the error flash.
+            if (completed) homeLoading = false
         }
     }
 

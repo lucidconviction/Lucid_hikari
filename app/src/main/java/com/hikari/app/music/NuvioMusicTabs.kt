@@ -276,7 +276,10 @@ internal fun NuvioHomeTab(
     modifier: Modifier = Modifier,
 ) {
     when {
-        home == null && loading -> NuvioLoading(modifier)
+        // No error yet means "still loading", even during the one-frame gap
+        // when a loader is replaced (account/catalogue change). Without this
+        // the page flashed "Couldn't load music" before the feed appeared.
+        home == null && (loading || error == null) -> NuvioLoading(modifier)
         home == null -> NuvioErrorState(error ?: "Couldn't load music.", onRetry, modifier)
         else -> {
             val hero = home.hero
