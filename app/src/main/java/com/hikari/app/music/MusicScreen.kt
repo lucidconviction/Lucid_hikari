@@ -477,6 +477,11 @@ fun MusicScreen(nav: NavHostController) {
                     else -> "Neither Deezer nor YouTube Music answered."
                 }
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Leaving the Music page cancels this effect. That is not a music
+            // error, and its message ("the coroutine scope left the
+            // composition") must never become the page's error state.
+            throw e
         } catch (e: Throwable) {
             homeError = e.message ?: "Couldn't load music."
         } finally {
