@@ -1,0 +1,1128 @@
+package com.hikari.app.providers
+
+import com.hikari.app.data.CatalogRef
+import com.hikari.app.data.Episode
+import com.hikari.app.data.IptvChannel
+import com.hikari.app.data.IptvPlaylist
+import com.hikari.app.data.JsonPlaylist
+import com.hikari.app.data.MediaItem
+import com.hikari.app.data.MediaType
+import com.hikari.app.data.ProviderConfig
+
+import com.hikari.app.data.ProviderType
+import com.hikari.app.data.XtreamCredentials
+import com.hikari.app.data.StreamSource
+import com.hikari.app.iptv.IptvSearch
+import com.hikari.app.net.Http
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import java.util.zip.GZIPInputStream
+import java.util.zip.GZIPOutputStream
+
+/** F3 — a validated Xtream panel, counted before it is saved. */
+data class XtreamPreview(
+    val channelCount: Int,
+    val serverName: String,
+    val m3uUrl: String,
+    /** Panel-reported account status ("Active" / "Expired" / …). */
+    val status: String = "Unknown",
+    /** Panel-reported expiration in epoch-ms, null when unknown. */
+    val expDate: Long? = null,
+    val isTrial: Boolean? = null,
+    val maxConnections: Int? = null,
+    val activeConnections: Int? = null,
+)
+
+/**
+ * An IPTV playlist as a Hikari provider.
+ *
+ * A playlist (`http://host/get.php?username=…&password=…&type=m3u_plus`, any
+ * other M3U/M3U8 link, or a file the user picked from storage) is a flat list of
+ * channels in groups. Those two things — the groups and the channels — are
+ * exactly what a provider's `catalogs()` and `getCatalog()` already describe, so
+ * IPTV needs no special case anywhere else in the app: it appears in the Home
+ * provider picker like any extension, its channels are found by the global
+ * search, it can be marked as an exception extension, and its channels land in
+ * the player's server list under an "IPTV" heading — because every one of those
+ * places reads the provider contract, and a channel's stream is simply… its
+ * own URL.
+ *
+ * The playlist is parsed ONCE and kept for [TTL_MS]: a 20 000-channel list is
+ * a few hundred kilobytes of names, and re-downloading it for every Home row,
+ * search box keystroke and stream lookup would be worse than useless. A failed
+ * download is remembered too (see [iptvErrors]) so a dead host is not retried
+ * by every call in a pass.
+ */
+class IptvProvider(override val config: ProviderConfig) : ContentProvider {
+
+    companion object {
+        /** Per-provider failure text, shown in the row/notification that
+         *  explains an empty result — same contract as the other engines. */
+        val iptvErrors = ConcurrentHashMap<String, String>()
+
+        /** How many channels each playlist currently holds, for the Extensions
+         *  row ("1 240 channels") without re-parsing anything. */
+        val channelCounts = ConcurrentHashMap<String, Int>()
+
+        /** When each playlist was last read successfully (epoch ms). */
+        private val loadedAt = ConcurrentHashMap<String, Long>()
+
+        /**
+         * A whole parsed playlist is kept per provider so Home, search and the
+         * player's server list do not download it again. That adds up fast:
+         * ten generated Xtream panels, each with tens of thousands of channels,
+         * exhausted the 512 MB heap. Playlists are therefore a bounded resource
+         * — the least recently used ones drop their channel list (the provider
+         * itself stays installed and simply re-reads on its next use).
+         */
+        private const val MAX_CACHED_CHANNELS = 20_000
+
+        /** At most this many playlists are downloaded and parsed at once. */
+        private val loadGate = Semaphore(2)
+
+        private val cacheLock = Any()
+        // Keyed by provider id, NOT held on the provider instance: refreshing
+        // the provider list rebuilds every IptvProvider, and an instance field
+        // meant the whole playlist was downloaded again just for entering the
+        // IPTV tab. The parsed list now survives a provider rebuild.
+        private val cacheById = HashMap<String, List<IptvChannel>>()
+        private val cacheOrder = LinkedHashMap<String, Int>(8, 0.75f, true)
+        private var cachedChannelTotal = 0
+
+        /** Stores a parsed list and evicts the oldest playlists over the budget. */
+        private fun putCache(provider: IptvProvider, list: List<IptvChannel>) {
+            synchronized(cacheLock) {
+                val id = provider.config.id
+                val before = cacheById[id]?.size ?: 0
+                cacheById[id] = list
+                cachedChannelTotal += list.size - before
+                cacheOrder[id] = list.size
+                val entries = cacheOrder.entries.iterator()
+                while (cachedChannelTotal > MAX_CACHED_CHANNELS && entries.hasNext()) {
+                    val entry = entries.next()
+                    if (entry.key == id) continue
+                    cachedChannelTotal -= entry.value
+                    cacheById.remove(entry.key)
+                    entries.remove()
+                }
+            }
+        }
+
+        /** Drops one provider's parsed list and its cache accounting. */
+        private fun dropCache(providerId: String) {
+            synchronized(cacheLock) {
+                cachedChannelTotal -= cacheById.remove(providerId)?.size ?: 0
+                cacheOrder.remove(providerId)
+            }
+        }
+
+        private fun cachedFor(providerId: String): List<IptvChannel>? = synchronized(cacheLock) {
+            val hit = cacheById[providerId] ?: return null
+            // Touching the order map keeps the LRU budget honest.
+            cacheOrder[providerId] = hit.size
+            hit
+        }
+
+        // ---- On-disk channel cache ------------------------------------------
+        // The in-memory cache dies with the process, so every cold launch used
+        // to download and parse every playlist again (up to 45 s each). The
+        // parsed list is now written next to the app's own playlist copies and
+        // read back on the next launch: the IPTV tab paints from it, while a
+        // stale copy is refreshed in the background.
+        private const val DISK_VERSION = 1
+        private val diskScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        private val refreshing = ConcurrentHashMap.newKeySet<String>()
+
+        private fun diskDir(): File? = runCatching {
+            File(com.hikari.app.HikariApp.instance.filesDir, "iptv/cache").apply { mkdirs() }
+        }.getOrNull()
+
+        private fun diskFile(providerId: String): File? = diskDir()?.let {
+            File(it, providerId.replace(Regex("[^A-Za-z0-9._-]"), "_") + ".json.gz")
+        }
+
+        private fun IptvChannel.toCacheJson(): JSONObject = JSONObject().apply {
+            put("name", name)
+            put("url", url)
+            logo?.let { put("logo", it) }
+            thumbnail?.let { put("thumb", it) }
+            put("group", group)
+            tvgId?.let { put("tvg", it) }
+            put("lang", language)
+            put("country", country)
+            if (headers.isNotEmpty()) put("headers", JSONObject(headers as Map<*, *>))
+            drmKid?.let { put("kid", it) }
+            drmKey?.let { put("key", it) }
+            cookie?.let { put("cookie", it) }
+            if (kind.isNotBlank()) put("kind", kind)
+            if (providerId.isNotBlank()) put("provider", providerId)
+        }
+
+        private fun JSONObject.toCachedChannel(): IptvChannel? {
+            val name = optString("name")
+            val url = optString("url")
+            if (name.isBlank() || url.isBlank()) return null
+            val headerMap = optJSONObject("headers")?.let { o ->
+                buildMap {
+                    o.keys().forEach { k -> o.optString(k)?.takeIf { it.isNotBlank() }?.let { put(k, it) } }
+                }
+            }.orEmpty()
+            return IptvChannel(
+                name = name,
+                url = url,
+                logo = optString("logo").takeIf { it.isNotBlank() },
+                thumbnail = optString("thumb").takeIf { it.isNotBlank() },
+                group = optString("group"),
+                tvgId = optString("tvg").takeIf { it.isNotBlank() },
+                language = optString("lang"),
+                country = optString("country"),
+                headers = headerMap,
+                drmKid = optString("kid").takeIf { it.isNotBlank() },
+                drmKey = optString("key").takeIf { it.isNotBlank() },
+                cookie = optString("cookie").takeIf { it.isNotBlank() },
+                kind = optString("kind"),
+                providerId = optString("provider"),
+            )
+        }
+
+        /** Best-effort write: a cache failure must never fail the playlist. */
+        private fun saveDisk(provider: IptvProvider, list: List<IptvChannel>) {
+            val file = diskFile(provider.config.id) ?: return
+            val tmp = File(file.parentFile, file.name + ".tmp")
+            runCatching {
+                GZIPOutputStream(tmp.outputStream().buffered()).bufferedWriter().use { w ->
+                    w.write(
+                        JSONObject()
+                            .put("v", DISK_VERSION)
+                            .put("url", provider.config.url)
+                            .put("at", System.currentTimeMillis())
+                            .toString(),
+                    )
+                    w.write("\n")
+                    list.forEach { channel ->
+                        w.write(channel.toCacheJson().toString())
+                        w.write("\n")
+                    }
+                }
+                if (file.exists()) file.delete()
+                if (!tmp.renameTo(file)) {
+                    tmp.copyTo(file, overwrite = true)
+                    tmp.delete()
+                }
+            }.onFailure { runCatching { tmp.delete() } }
+        }
+
+        /** The last successful read of [provider]'s playlist, with its age. */
+        private fun loadDisk(provider: IptvProvider): Pair<List<IptvChannel>, Long>? {
+            val file = diskFile(provider.config.id) ?: return null
+            if (!file.exists() || file.length() == 0L) return null
+            return runCatching {
+                GZIPInputStream(file.inputStream().buffered()).bufferedReader().use { r ->
+                    val head = JSONObject(r.readLine() ?: return@use null)
+                    if (head.optInt("v") != DISK_VERSION) return@use null
+                    if (head.optString("url") != provider.config.url) return@use null
+                    val at = head.optLong("at")
+                    val out = ArrayList<IptvChannel>(2048)
+                    while (true) {
+                        val line = r.readLine() ?: break
+                        if (line.isBlank()) continue
+                        runCatching { JSONObject(line).toCachedChannel() }.getOrNull()?.let { out += it }
+                    }
+                    if (out.isEmpty()) null else out to at
+                }
+            }.getOrNull()
+        }
+
+        private fun deleteDisk(providerId: String) {
+            runCatching { diskFile(providerId)?.delete() }
+        }
+
+        /** Re-reads a stale playlist off the UI thread, at most once per id. */
+        private fun scheduleRefresh(provider: IptvProvider) {
+            val id = provider.config.id
+            if (!refreshing.add(id)) return
+            diskScope.launch {
+                try {
+                    provider.channels(force = true)
+                } catch (_: Throwable) {
+                    // channels() already recorded the failure for the tile.
+                } finally {
+                    refreshing.remove(id)
+                }
+            }
+        }
+
+        /** How long a parsed playlist is trusted before it is re-read. */
+        const val TTL_MS = 30 * 60 * 1000L
+
+        /** A playlist body is capped at this size before parsing. Xtream
+         *  exports can be 100+ MB (`superott.top` is 127 MB); reading one into
+         *  a String is not possible on a 512 MB heap. The first 8 MB still
+         *  carries thousands of channels and every group, and the connection is
+         *  closed at the cap instead of pulling the rest. */
+        private const val MAX_BYTES = 8 * 1024 * 1024
+
+        /** One Home row / catalog page. */
+        private const val PAGE = 240
+
+        /** Home rows offered per playlist: "All channels" plus this many groups,
+         *  the biggest groups first. A playlist with 900 groups would otherwise
+         *  bury every other extension on Home. */
+        private const val MAX_GROUPS = 24
+
+        private const val ALL = "iptv-all"
+        private const val GROUP_PREFIX = "iptv-group:"
+
+        /**
+         * The catalog id of a playlist's "all channels" shelf. Public, with
+         * [catalogIdForGroup], because the IPTV tab builds the same refs the
+         * provider hands out — a group tile then links straight to the paged
+         * channel grid instead of a second, parallel code path.
+         */
+        const val CATALOG_ALL = ALL
+
+        /** The catalog id of one group's shelf. */
+        fun catalogIdForGroup(group: String): String = GROUP_PREFIX + group
+
+        /** Shelves the IPTV tab builds for its language/category views (see
+         *  [IptvPlaylist.groupKey]): read by [getCatalog], never offered on
+         *  Home, so the tab can bucket channels without a second code path. */
+        private const val LANG_PREFIX = "iptv-lang:"
+        private const val CAT_PREFIX = "iptv-cat:"
+        private const val COUNTRY_PREFIX = "iptv-country:"
+
+        /** The catalog id of one language bucket's shelf. */
+        fun catalogIdForLanguage(language: String): String = LANG_PREFIX + language
+
+        /** The catalog id of one category bucket's shelf. */
+        fun catalogIdForCategory(category: String): String = CAT_PREFIX + category
+
+        /** The catalog id of one country bucket's shelf. */
+        fun catalogIdForCountry(country: String): String = COUNTRY_PREFIX + country
+
+        /**
+         * Drops everything remembered about a removed playlist — its last
+         * failure, its channel count and the "read at" stamp. The provider row
+         * itself is gone, so nothing may keep reporting a playlist that is no
+         * longer installed (see the IPTV tab's remove button).
+         */
+        fun forget(providerId: String) {
+            iptvErrors.remove(providerId)
+            channelCounts.remove(providerId)
+            loadedAt.remove(providerId)
+            dropCache(providerId)
+            deleteDisk(providerId)
+        }
+
+        /** The group name inside a [catalogIdForGroup] id (null for anything
+         *  else, including [CATALOG_ALL]). */
+        fun groupOfCatalogId(id: String): String? =
+            id.takeIf { it.startsWith(GROUP_PREFIX) }?.removePrefix(GROUP_PREFIX)
+
+        private val HEADERS = mapOf(
+            "Accept" to "application/x-mpegurl, application/vnd.apple.mpegurl, text/plain, */*",
+        )
+
+        /** How long a caller waits for the playlist before giving up on it. */
+        private const val FETCH_TIMEOUT_MS = 45_000L
+
+        /** True for a provider that is a playlist (its `url` is the M3U link or
+         *  the local copy of one). */
+        fun isPlaylistSource(url: String): Boolean {
+            val u = url.trim()
+            return u.startsWith("http://") || u.startsWith("https://") || File(u).exists()
+        }
+
+        /** Channels of [url] without needing a provider instance — used by the
+         *  Add dialog to say how many channels a link holds before saving it.
+         *  M3U and JSON playlists (plain or `TERAPLAY_ENC:`-encrypted — see
+         *  [JsonPlaylist]) both count; a Stremio manifest is refused with the
+         *  address of the flow that takes it. */
+        suspend fun preview(url: String): Result<Int> = withContext(Dispatchers.IO) {
+            val cached = previewCache[url]
+            if (cached != null) return@withContext Result.success(cached)
+            val text = readSource(url) ?: return@withContext Result.failure(
+                Exception("Could not download that playlist — check the link."),
+            )
+            if (isManifestText(text)) {
+                return@withContext Result.failure(
+                    Exception("That is a Stremio addon link — add it in Extensions → Add Stremio instead."),
+                )
+            }
+            val json = JsonPlaylist.parse(text)
+            if (json != null) {
+                if (json.tmdbKey != null && json.channels.isEmpty()) {
+                    return@withContext Result.failure(
+                        Exception("That file is a playlist config (its TMDB key was saved) — it holds no channels to list."),
+                    )
+                }
+                previewCache[url] = json.channels.size
+                return@withContext Result.success(json.channels.size)
+            }
+            val list = IptvPlaylist.parse(text, base = url)
+            val n = if (list.isEmpty() && url.startsWith("http")) 1 else list.size
+            if (n == 0) return@withContext Result.failure(Exception("No channels found in that playlist."))
+            previewCache[url] = n
+            Result.success(n)
+        }
+
+        /** A playlist CONFIG's TMDB key (`{"name","tmdb_api_key"}` — no
+         *  channels): key + label, else nulls. Used by the Add dialog to save
+         *  the key instead of listing nothing. */
+        suspend fun readPlaylistConfigKey(url: String): Pair<String?, String?> =
+            withContext(Dispatchers.IO) {
+                val text = readSource(url) ?: return@withContext null to null
+                val parsed = com.hikari.app.data.JsonPlaylist.parse(text)
+                    ?: return@withContext null to null
+                if (parsed.channels.isNotEmpty() || parsed.tmdbKey.isNullOrBlank()) {
+                    return@withContext null to null
+                }
+                parsed.tmdbKey to parsed.label
+            }
+
+        private val previewCache = ConcurrentHashMap<String, Int>()
+
+        /** True when a downloaded body is a Stremio addon manifest, not a
+         *  playlist of any kind. */
+        private fun isManifestText(text: String): Boolean =
+            runCatching { com.hikari.app.data.JsonPlaylist.looksLikeStremioManifest(text) }.getOrDefault(false)
+
+        /** Reads the playlist body from a URL or a file. Blocking — call from IO. */
+        private fun readSource(url: String): String? {
+            val u = url.trim()
+            if (u.startsWith("http://") || u.startsWith("https://")) {
+                // Bounded read, not fetchStringRobust: that helper materialises
+                // the whole body before anyone can apply a cap.
+                return Http.fetchStringCapped(u, HEADERS, MAX_BYTES).getOrNull()
+            }
+            val f = File(u)
+            if (!f.exists() || !f.isFile) return null
+            return runCatching {
+                f.inputStream().use { input ->
+                    val buf = ByteArray(MAX_BYTES)
+                    var read = 0
+                    while (read < buf.size) {
+                        val n = input.read(buf, read, buf.size - read)
+                        if (n <= 0) break
+                        read += n
+                    }
+                    String(buf, 0, read, Charsets.UTF_8)
+                }
+            }.getOrNull()
+        }
+
+        /** F3 — a validated Xtream panel, counted before it is saved. */
+        // NOTE: XtreamPreview is now a top-level class in this file.
+
+        /**
+         * Validates an Xtream panel and counts its channels BEFORE the playlist
+         * is saved, so a dead host or a wrong password is reported in the Add
+         * dialog instead of becoming an empty tile the user has to notice later.
+         *
+         * Two requests, in order:
+         *  1. `player_api.php?username=…&password=…` — the panel's own auth
+         *     check. A 401/403 here is a bad username or password; anything
+         *     else is a host problem. That is what separates "wrong password"
+         *     from "host down", which the generic "could not download this
+         *     playlist" the old path showed could not.
+         *  2. `get.php?username=…&password=…&type=m3u_plus` — the channel
+         *     list, parsed the same way every other playlist is, so the count
+         *     is real.
+         *
+         * Both run on [Dispatchers.IO] through the shared OkHttp client (the
+         * same one [readSource] uses for M3U), off the main thread, with the
+         * same fetch timeout every playlist gets.
+         */
+        suspend fun previewXtream(creds: XtreamCredentials): Result<XtreamPreview> =
+            withContext(Dispatchers.IO) {
+                // Run the auth check and the M3U download in parallel — the
+                // two requests are independent and the M3U is the slow one,
+                // so waiting for both serially doubled the "adding…" wait.
+                val infoDeferred = async { fetchWithStatus(creds.apiInfoUrl()) }
+                val listDeferred = async { fetchWithStatus(creds.m3uUrl()) }
+                val info = infoDeferred.await()
+                val infoText: String? = info.getOrNull()
+                if (infoText == null) {
+                    return@withContext Result.failure(
+                        Exception(
+                            describeXtreamFailure(
+                                info.exceptionOrNull()?.message ?: "Could not reach the panel",
+                                creds,
+                            ),
+                        ),
+                    )
+                }
+                val listReq = listDeferred.await()
+                val text = listReq.getOrNull()
+                if (text == null) {
+                    return@withContext Result.failure(
+                        Exception(
+                            describeXtreamFailure(
+                                listReq.exceptionOrNull()?.message ?: "Could not download the channel list",
+                                creds,
+                            ),
+                        ),
+                    )
+                }
+                val list = IptvPlaylist.parse(text, base = creds.m3uUrl())
+                if (list.isEmpty()) {
+                    return@withContext Result.failure(
+                        Exception("That panel answered but listed no channels — check the panel URL."),
+                    )
+                }
+                // Populate the preview cache so the add flow's own [preview] call
+                // later hits the cache and skips the redundant get.php download.
+                previewCache[creds.m3uUrl()] = list.size
+                // Parse account info from the panel response for richer preview
+                val accountInfo: org.json.JSONObject? = runCatching {
+                    org.json.JSONObject(infoText)
+                }.getOrNull()
+                val userInfo = accountInfo?.optJSONObject("user_info")
+                val isAct = userInfo?.optInt("is_active", 0) == 1
+                val expSec = userInfo?.optLong("exp_date", 0L)
+                val expDateMs = if (expSec != null && expSec > 0L) expSec * 1000L else null
+                val maxConn = userInfo?.optInt("max_connections", 0).takeIf { it != null && it > 0 }
+                val activeConn = userInfo?.optInt("active_connections", 0).takeIf { it != null && it > 0 }
+                Result.success(
+                    XtreamPreview(
+                        channelCount = list.size,
+                        serverName = xtreamServerName(infoText, creds),
+                        m3uUrl = creds.m3uUrl(),
+                        status = if (isAct) "Active" else "Unknown",
+                        expDate = expDateMs,
+                        isTrial = userInfo?.optInt("is_trial", 0) == 1,
+                        maxConnections = maxConn,
+                        activeConnections = activeConn,
+                    ),
+                )
+            }
+
+        /**
+         * One request, auth only: hits `player_api.php?username=…&password=…`
+         * (the panel's own login check) and reports success/failure — used by
+         * the Add dialog's "Test / Fill" button so the user knows whether the
+         * credentials work BEFORE hitting Add. A 401/403 is the "wrong
+         * password" case the Add flow would otherwise have silently saved; a
+         * 200 (a `user_info` / `server_info` JSON object, or even `[]`) is the
+         * "these credentials log in" case. Runs on [Dispatchers.IO] through the
+         * same shared OkHttp client and [FETCH_TIMEOUT_MS] as every other
+         * playlist fetch.
+         */
+        suspend fun validateXtream(creds: XtreamCredentials): Result<Unit> =
+            withContext(Dispatchers.IO) {
+                fetchWithStatus(creds.apiInfoUrl()).fold(
+                    onSuccess = { Result.success(Unit) },
+                    onFailure = {
+                        Result.failure(
+                            Exception(
+                                describeXtreamFailure(
+                                    it.message ?: "Could not reach the panel",
+                                    creds,
+                                ),
+                            ),
+                        )
+                    },
+                )
+            }
+
+        /**
+         * One GET through the shared client with [FETCH_TIMEOUT_MS], returned as
+         * a [Result] whose failure message says WHICH way it failed —
+         * "HTTP 401 from host", "HTTP 403 from host", "timed out reaching host",
+         * or the underlying exception text. [previewXtream] needs that detail so
+         * a wrong password is not reported the same way as a dead host.
+         */
+        private suspend fun fetchWithStatus(url: String): Result<String> =
+            withTimeoutOrNull(FETCH_TIMEOUT_MS) {
+                runCatching {
+                    Http.get(url, HEADERS).use { resp ->
+                        if (!resp.isSuccessful) {
+                            Result.failure(
+                                Exception("HTTP ${resp.code} from ${url.substringAfter("://")}"),
+                            )
+                        } else {
+                            Result.success(resp.body?.string().orEmpty())
+                        }
+                    }
+                }.getOrNull()
+                    ?: Result.failure(Exception("timed out reaching ${url.substringAfter("://")}"))
+            } ?: Result.failure(Exception("timed out reaching ${url.substringAfter("://")}"))
+
+        /** One line the user can act on, for a panel request that did not work. */
+        private fun describeXtreamFailure(msg: String, creds: XtreamCredentials): String {
+            val host = creds.baseUrl.substringAfter("://").substringBefore('/')
+                .ifBlank { creds.baseUrl }
+            return when {
+                msg.startsWith("HTTP 401") || msg.startsWith("HTTP 403") ->
+                    "Wrong username or password for $host — check the Xtream panel credentials and try again."
+                msg.startsWith("HTTP 404") ->
+                    "$host is not an Xtream panel (HTTP 404) — check the panel URL."
+                msg.startsWith("HTTP 4") ->
+                    "The panel at $host refused the request ($msg) — check the URL and credentials."
+                msg.startsWith("HTTP 5") ->
+                    "The panel at $host is having trouble ($msg) — try again in a minute."
+                msg.startsWith("timed out", ignoreCase = true) ->
+                    "Timed out reaching $host — check the panel address and your connection."
+                else -> "Could not reach the Xtream panel at $host — $msg"
+            }
+        }
+
+        /** The panel's own name, from its `server_info` JSON, else the host. */
+        private fun xtreamServerName(infoText: String, creds: XtreamCredentials): String =
+            runCatching {
+                val obj = JSONObject(infoText)
+                val info = obj.optJSONObject("server_info")
+                info?.getString("name")?.takeIf { it.isNotBlank() }
+                    ?: info?.getString("hostname")?.takeIf { it.isNotBlank() }
+            }.getOrNull()
+                ?: creds.baseUrl.substringAfter("://").substringBefore('/')
+                    .ifBlank { "IPTV" }
+    }
+
+    private val loadLock = Mutex()
+
+    private val selfCheckUrl = config.url.trim()
+
+    /** The name the user gave the playlist, else the host it came from. */
+    val displayName: String
+        get() = config.name.ifBlank {
+            config.url.substringAfter("://").substringBefore('/').ifBlank { "IPTV" }
+        }
+
+    /**
+     * The playlist's channels, downloaded and parsed at most once per [TTL_MS].
+     * [force] re-reads it (the folder's Refresh action). A failed read leaves any
+     * previously parsed list in place, so a dead panel does not empty Home.
+     */
+    suspend fun channels(force: Boolean = false): List<IptvChannel> = loadLock.withLock {
+        val now = System.currentTimeMillis()
+        val cached = cachedFor(config.id)
+        if (!force && cached != null) {
+            // Stale-while-revalidate: the tab never waits for a whole M3U
+            // download just because the 30-minute window elapsed. The cached
+            // list paints now; the fresh copy lands for the next visit.
+            if (now - (loadedAt[config.id] ?: 0L) < TTL_MS) return@withLock cached
+            scheduleRefresh(this)
+            return@withLock cached
+        }
+        if (!force) {
+            // First call after a process restart: the parsed list written on
+            // the last successful read is the difference between "IPTV opens
+            // instantly" and "IPTV downloads every playlist again".
+            val disk = withContext(Dispatchers.IO) { loadDisk(this@IptvProvider) }
+            if (disk != null) {
+                putCache(this, disk.first)
+                loadedAt[config.id] = disk.second
+                channelCounts[config.id] = disk.first.size
+                if (now - disk.second < TTL_MS) return@withLock disk.first
+                scheduleRefresh(this)
+                return@withLock disk.first
+            }
+        }
+        // A link with no `#EXTINF` at all is a bare m3u8/m3u stream rather than a
+        // list: the URL itself is the one channel. That is what makes "just paste
+        // my m3u8 link" work.
+        //
+        // A NETWORK STREAM is that same idea taken further: it is one link the
+        // user pasted, whatever is behind it, so it needs no download at all to
+        // know what it holds — and asking for one would fetch a whole hosting
+        // page (a Terabox share, an MDisk page) only to throw it away. Its one
+        // channel is built straight from the config; what the link holds is
+        // worked out when it is played (see [com.hikari.app.data.NetworkStream]).
+        if (com.hikari.app.data.NetworkStream.isStream(config)) {
+            val one = singleStreamChannel()
+            if (one == null) {
+                iptvErrors[config.id] = "This network stream has no link — remove it and add it again."
+                return@withLock cached ?: emptyList()
+            }
+            iptvErrors.remove(config.id)
+            putCache(this, listOf(one))
+            loadedAt[config.id] = System.currentTimeMillis()
+            channelCounts[config.id] = 1
+            return@withLock listOf(one)
+        }
+        val xtreamCreds = com.hikari.app.data.XtreamCredentials.fromUrl(selfCheckUrl)
+        val list = loadGate.withPermit {
+            runCatching {
+                withTimeoutOrNull(FETCH_TIMEOUT_MS) {
+                    withContext(Dispatchers.IO) {
+                        // F3 — Xtream panel detection: if the URL looks like an
+                        // Xtream panel login, fetch the m3u_plus export instead
+                        // of parsing the raw config directly.
+                        if (xtreamCreds != null) {
+                            val xtreamUrl = xtreamCreds.m3uUrl()
+                            // Bounded: a panel can export 100+ MB. An HTML error
+                            // page parses as zero channels and must not be turned
+                            // into a one-channel "stream" below.
+                            val text = Http.fetchStringCapped(xtreamUrl, HEADERS, MAX_BYTES).getOrNull()
+                            if (text == null ||
+                                (!text.contains("#EXTM3U", true) && !text.contains("#EXTINF", true))
+                            ) {
+                                null
+                            } else {
+                                IptvPlaylist.parse(text, base = xtreamUrl)
+                            }
+                        } else {
+                            val text = readSource(selfCheckUrl)
+                            // The playlist's own address is handed to the parser so a
+                            // relative `tvg-logo` resolves to a real URL (see
+                            // IptvPlaylist.resolveLogo). JSON playlists (plain or
+                            // TERAPLAY_ENC:-encrypted) parse by their own reader — and
+                            // stay JSON: falling through to the M3U reader would list
+                            // a config object as channels.
+                            if (text == null) null
+                            else com.hikari.app.data.JsonPlaylist.parse(text)?.channels
+                                ?: IptvPlaylist.parse(text, base = selfCheckUrl)
+                        }
+                    }
+                }
+            }.getOrNull()
+        }
+        if (list == null) {
+            iptvErrors[config.id] = if (selfCheckUrl.startsWith("http")) {
+                "Could not download this playlist — the host may be down, or the link may have expired."
+            } else {
+                "This playlist file is missing from the app's storage — re-add it."
+            }
+            return@withLock cached ?: emptyList()
+        }
+        val resolved = if (list.isEmpty() && xtreamCreds == null) {
+            singleStreamChannel().let { if (it == null) emptyList() else listOf(it) }
+        } else {
+            list
+        }
+        if (resolved.isEmpty()) {
+            iptvErrors[config.id] = if (xtreamCreds != null) {
+                "This Xtream panel answered, but its playlist held no channels — it may have expired."
+            } else {
+                "No channels found in this playlist."
+            }
+            return@withLock cached ?: emptyList()
+        }
+        // Tag each channel with this provider's ID so the player can resolve HLS streams
+        val tagged = resolved.map { ch -> ch.copy(providerId = config.id) }
+        iptvErrors.remove(config.id)
+        putCache(this, tagged)
+        loadedAt[config.id] = System.currentTimeMillis()
+        channelCounts[config.id] = tagged.size
+        withContext(Dispatchers.IO) { saveDisk(this@IptvProvider, tagged) }
+        tagged
+    }
+
+    /** The channels already in memory, without touching the network. Null when
+     *  this playlist has never been loaded — the quick-channel matcher uses this
+     *  first so opening the IPTV tab or the multi-view picker does not kick off
+     *  nine 45-second downloads just to list preset channels. */
+    fun cachedChannels(): List<IptvChannel>? = cachedFor(config.id)
+
+    /** When [config.url] is a stream rather than a playlist (an m3u8/m3u link
+     *  pasted straight in), that stream is the playlist's only channel. */
+    /** Display name for a saved torrent (mirrors the Add dialog's). */
+    private fun torrentName(link: String): String {
+        if (com.hikari.app.data.NetworkStream.isBareInfoHash(link)) {
+            return "Torrent · " + link.take(8).uppercase()
+        }
+        Regex("[?&]dn=([^&]+)").find(link)?.let { m ->
+            runCatching { java.net.URLDecoder.decode(m.groupValues[1], "UTF-8") }.getOrNull()
+                ?.trim()?.takeIf { it.isNotBlank() }?.let { return it }
+        }
+        if (!link.startsWith("magnet:", ignoreCase = true)) {
+            link.substringBefore('?').trimEnd('/').substringAfterLast('/')
+                .substringBeforeLast('.').ifBlank { null }?.let { return it }
+        }
+        val hash = Regex("btih:([a-zA-Z0-9]+)").find(link)?.groupValues?.getOrNull(1)
+        return if (hash.isNullOrBlank()) "Torrent" else "Torrent · " + hash.take(8).uppercase()
+    }
+
+    private fun singleStreamChannel(): IptvChannel? {
+        // A saved torrent IS the channel: no download, no parse — the magnet
+        // (kept verbatim by the Add dialog) is what the player resolves.
+        if (com.hikari.app.data.NetworkStream.isTorrentLink(config.url)) {
+            return IptvChannel(
+                name = config.name.ifBlank { torrentName(config.url) },
+                url = config.url,
+                group = "",
+                providerId = config.id,
+            )
+        }
+        val u = selfCheckUrl
+        if (!u.startsWith("http://") && !u.startsWith("https://")) return null
+        val name = config.name.ifBlank {
+            u.substringBefore('?').trimEnd('/').substringAfterLast('/').substringBeforeLast('.')
+                .ifBlank { u.substringAfter("://").substringBefore('/') }
+        }
+        return IptvChannel(name = name, url = u, group = "", providerId = config.id)
+    }
+
+    /** Channels inside one catalog ref, shared by catalogs and scoped search. */
+    private fun channelsInCatalog(all: List<IptvChannel>, refId: String): List<IptvChannel> = when {
+        refId == ALL -> all
+        refId.startsWith(GROUP_PREFIX) -> groupChannels(all, refId.removePrefix(GROUP_PREFIX))
+        refId.startsWith(LANG_PREFIX) -> all.filter { IptvPlaylist.languageOf(it) == refId.removePrefix(LANG_PREFIX) }
+        refId.startsWith(CAT_PREFIX) -> all.filter { IptvPlaylist.categoryOf(it) == refId.removePrefix(CAT_PREFIX) }
+        refId.startsWith(COUNTRY_PREFIX) -> all.filter { IptvPlaylist.countryOf(it) == refId.removePrefix(COUNTRY_PREFIX) }
+        else -> emptyList()
+    }
+
+    override suspend fun catalogs(): List<CatalogRef> {
+        val all = channels()
+        if (all.isEmpty()) return emptyList()
+        val out = ArrayList<CatalogRef>()
+        // A torrent is one file, not a channel list: a single shelf named
+        // after the stream, never an "All channels" shelf plus group tiles.
+        if (com.hikari.app.data.NetworkStream.isTorrentConfig(config)) {
+            out += CatalogRef(config.id, MediaType.MOVIE, ALL, all.first().name, "torrent")
+            return out
+        }
+        // A NETWORK STREAM is one file, not a channel list either: a single shelf named
+        // after the stream — never an "All channels" shelf plus an "Ungrouped" tile
+        // (see [com.hikari.app.data.NetworkStream]).
+        if (com.hikari.app.data.NetworkStream.isStream(config)) {
+            out += CatalogRef(config.id, MediaType.MOVIE, ALL, all.first().name, "stream")
+            return out
+        }
+        out += CatalogRef(config.id, MediaType.MOVIE, ALL, "All channels", "channel")
+        val groups = all.groupBy { IptvPlaylist.groupOf(it) }
+            .entries
+            .sortedWith(
+                compareByDescending<Map.Entry<String, List<IptvChannel>>> { it.value.size }
+                    .thenBy { it.key.lowercase() },
+            )
+        for (g in groups.take(MAX_GROUPS)) {
+            out += CatalogRef(config.id, MediaType.MOVIE, GROUP_PREFIX + g.key, g.key, "channel")
+        }
+        return out
+    }
+
+    /** Channels after [group] filtering, shared by catalogs and streams. */
+    private fun groupChannels(all: List<IptvChannel>, group: String): List<IptvChannel> =
+        all.filter { IptvPlaylist.groupOf(it) == group }
+
+    override suspend fun getCatalog(ref: CatalogRef, page: Int): List<MediaItem> {
+        val all = channels()
+        val list = channelsInCatalog(all, ref.id)
+        if (list.isEmpty()) return emptyList()
+        val from = (page.coerceAtLeast(1) - 1) * PAGE
+        if (from >= list.size) return emptyList()
+        return list.subList(from, minOf(from + PAGE, list.size)).map { toItem(it) }
+    }
+
+    override suspend fun search(query: String, page: Int): List<MediaItem> {
+        val q = query.trim()
+        if (q.isBlank()) return emptyList()
+        val all = channels()
+        val hit = IptvSearch.filter(q, all) { listOf(it.name, it.group) }
+        if (hit.isEmpty()) return emptyList()
+        val from = (page.coerceAtLeast(1) - 1) * PAGE
+        if (from >= hit.size) return emptyList()
+        return hit.subList(from, minOf(from + PAGE, hit.size)).map { toItem(it) }
+    }
+
+    /**
+     * Search INSIDE one catalog (a group / language / category / country tile):
+     * the same name/group match as [search], but scoped to the tile's channels
+     * first — so searching "sony" inside Germany never offers a channel from
+     * another country. Same paging as [getCatalog].
+     */
+    suspend fun searchInCatalog(refId: String, query: String, page: Int): List<MediaItem> {
+        val q = query.trim()
+        if (q.isBlank()) return emptyList()
+        val scoped = channelsInCatalog(channels(), refId)
+        val hit = IptvSearch.filter(q, scoped) { listOf(it.name, it.group) }
+        if (hit.isEmpty()) return emptyList()
+        val from = (page.coerceAtLeast(1) - 1) * PAGE
+        if (from >= hit.size) return emptyList()
+        return hit.subList(from, minOf(from + PAGE, hit.size)).map { toItem(it) }
+    }
+
+    /**
+     * A channel's stream IS its URL — there is nothing to extract, which is why
+     * an IPTV playlist is the fastest source in the app: the server list gets
+     * the exact link the playlist declared, with the playlist's own group as its
+     * secondary line.
+     *
+     * The exception is a NETWORK STREAM (see [com.hikari.app.data.NetworkStream]):
+     * a link the user pasted as one file on some host, where what is behind the
+     * link has to be worked out before it can be played. That happens here, on
+     * Play — the moment every other engine does its own extraction.
+     */
+    override suspend fun getStreams(item: MediaItem, episode: Episode?): List<StreamSource> {
+        val all = channels()
+        val channel = all.firstOrNull { it.url == item.id }
+            ?: all.firstOrNull { it.name.equals(item.title, ignoreCase = true) }
+            ?: if (item.id.startsWith("http")) {
+                IptvChannel(
+                    name = item.title,
+                    url = item.id,
+                    logo = item.posterUrl,
+                    group = item.overview.orEmpty(),
+                    providerId = item.providerId,
+                )
+            } else {
+                null
+            }
+            ?: run {
+                iptvErrors[config.id] = "That channel is no longer in this playlist."
+                return emptyList()
+            }
+        val url = channel.url
+        // A torrent link plays through the torrent engine even when the row
+        // predates the MARKER (legacy rows saved without it): resolve first,
+        // whatever the row carries, so an old torrent entry plays instead of
+        // handing a magnet to the player as a plain URL.
+        if (com.hikari.app.data.NetworkStream.isTorrentLink(url)) {
+            val resolved = com.hikari.app.data.NetworkStream.resolve(
+                rawUrl = url,
+                label = channel.name,
+                providerId = config.id,
+                providerName = displayName,
+            )
+            if (resolved.isEmpty()) {
+                iptvErrors[config.id] = "That torrent could not be opened — it may have no peers yet."
+                return emptyList()
+            }
+            return resolved
+        }
+        // A NETWORK STREAM is not a URL the player can open as it stands: it is
+        // a link to a FILE on some host, and what is behind it has to be worked
+        // out first (an m3u8, a Terabox share, an MDisk page, a download page an
+        // installed CloudStream extractor knows). That happens here, on Play —
+        // the same moment every other engine does its extraction — and the
+        // sources it answers with are the channel's servers.
+        if (com.hikari.app.data.NetworkStream.isStream(config)) {
+            val resolved = com.hikari.app.data.NetworkStream.resolve(
+                rawUrl = url,
+                label = channel.name,
+                providerId = config.id,
+                providerName = displayName,
+            )
+            if (resolved.isEmpty()) {
+                iptvErrors[config.id] = "That link could not be opened — it may have expired."
+                return emptyList()
+            }
+            return resolved
+        }
+        // A Terabox-family share inside a playlist resolves the same way a
+        // pasted one does — the share page is fetched and its files listed at
+        // play time (see [com.hikari.app.data.NetworkStream]).
+        if (channel.kind == com.hikari.app.data.IptvChannel.KIND_TERABOX ||
+            com.hikari.app.data.NetworkStream.isBoxShare(url)
+        ) {
+            val resolved = com.hikari.app.data.NetworkStream.resolve(
+                rawUrl = url,
+                label = channel.name,
+                providerId = config.id,
+                providerName = displayName,
+            )
+            if (resolved.isEmpty()) {
+                iptvErrors[config.id] = "That share could not be opened — it may have expired or need a password."
+                return emptyList()
+            }
+            return resolved
+        }
+        // An embed page (sports embeds and the like): run the shared embed
+        // engine first so it plays directly; when nothing extracts, hand the
+        // page itself over as a link row, exactly like a Stremio externalUrl.
+        if (channel.kind == com.hikari.app.data.IptvChannel.KIND_EMBED) {
+            val extracted = withTimeoutOrNull(20_000L) {
+                com.hikari.app.cs3.FallbackResolver.resolveEmbedUrl(url, referer = null)
+            }.orEmpty()
+            if (extracted.isNotEmpty()) return extracted
+            return listOf(
+                StreamSource(
+                    name = channel.name,
+                    url = url,
+                    headers = channelHeaders(channel),
+                    externalUrl = true,
+                    provider = ProviderType.IPTV.groupLabel,
+                    providerId = config.id,
+                    providerName = displayName,
+                    thumbnail = channel.artwork,
+                ),
+            )
+        }
+        val drm = if (!channel.drmKid.isNullOrBlank() && !channel.drmKey.isNullOrBlank()) {
+            com.hikari.app.data.DrmSpec(kid = channel.drmKid, key = channel.drmKey)
+        } else null
+        return listOf(
+            StreamSource(
+                name = channel.name,
+                url = url,
+                headers = channelHeaders(channel),
+                isM3u8 = isHlsUrl(url),
+                isMpd = url.substringBefore('?').contains(".mpd", ignoreCase = true),
+                drm = drm,
+                provider = ProviderType.IPTV.groupLabel,
+                providerId = config.id,
+                providerName = displayName,
+                thumbnail = channel.artwork,
+            ),
+        )
+    }
+
+    /** Lower-cased path without query, for container sniffing. */
+    private fun isHlsUrl(url: String): Boolean {
+        val u = url.substringBefore('?').lowercase()
+        return u.contains(".m3u8") || u.endsWith(".ts") || u.endsWith(".m3u")
+    }
+
+    /**
+     * Headers a channel plays with: the playlist's own `#EXTVLCOPT` headers
+     * first (the provider put them there because the CDN demands them), then
+     * the playlist origin as Referer fallback + desktop UA. Live HLS panels
+     * 403 bare requests the same way Fastream does — a headerless channel is
+     * the "m3u8 channels not streaming" report.
+     */
+    private fun channelHeaders(channel: IptvChannel): Map<String, String> {
+        val out = LinkedHashMap<String, String>()
+        channel.headers.forEach { (k, v) ->
+            if (k.isNotBlank() && v.isNotBlank()) out[k] = v
+        }
+        if (!channel.cookie.isNullOrBlank() && out.keys.none { it.equals("Cookie", true) }) {
+            out["Cookie"] = channel.cookie
+        }
+        if (out.keys.none { it.equals("Referer", true) || it.equals("Referrer", true) }) {
+            runCatching {
+                val base = selfCheckUrl.trim()
+                val i = base.indexOf("://")
+                if (i > 0) {
+                    val host = base.substring(i + 3).substringBefore('/').substringBefore('?').substringBefore('#')
+                    if (host.isNotBlank()) {
+                        val scheme = base.substring(0, i + 3)
+                        out["Referer"] = "$scheme$host/"
+                    }
+                }
+            }
+        }
+        if (out.keys.none { it.equals("User-Agent", true) }) {
+            out["User-Agent"] = Http.UA
+        }
+        return out
+    }
+
+    override suspend fun getMeta(item: MediaItem): MediaItem = item
+
+    /** A channel has no episodes — it is one stream, playing continuously. */
+    override suspend fun getEpisodes(item: MediaItem): List<Episode>? = null
+
+    private fun toItem(c: IptvChannel): MediaItem = MediaItem(
+        providerId = config.id,
+        id = c.url,
+        title = c.name,
+        type = MediaType.MOVIE,
+        posterUrl = c.artwork,
+        overview = IptvPlaylist.groupOf(c).takeIf { it != "Ungrouped" },
+        // "torrent" keeps saved magnets out of the live-channel treatment
+        // (LIVE tile, live playback) — see Artwork and PlayerActivity. "stream"
+        // does the same for network streams: one file, played as VOD.
+        rawType = when {
+            com.hikari.app.data.NetworkStream.isTorrentLink(c.url) -> "torrent"
+            com.hikari.app.data.NetworkStream.isStream(config) -> "stream"
+            else -> "channel"
+        },
+    )
+
+    /** Re-reads the playlist on the next call. */
+    fun invalidate() {
+        loadedAt.remove(config.id)
+        dropCache(config.id)
+    }
+}
+
+/**
+ * Every channel across every installed IPTV playlist, fast.
+ *
+ * Two-tier, and the tier is the whole point: cached playlists return their
+ *  in-memory copy straight away (the first time the user plays a channel from a
+ *  playlist it is loaded and stays for [IptvProvider.TTL_MS]), so opening the
+ *  IPTV tab or the multi-view quick-channel picker never fires a 45-second
+ *  download per playlist. Only playlists with nothing cached are fetched, and
+ *  those are fetched CONCURRENTLY rather than one after another — the old loop
+ *  awaited each `p.channels()` in turn, so ten slow playlists cost ten times
+ *  as long. [force] re-downloads every playlist regardless of cache — the
+ *  multi-view picker's "refresh" path.
+ */
+/**
+ * Scans every playlist for channels matching [predicate], keeping only the
+ * matches.
+ *
+ * Quick Channels used [gatherIptvChannels], which caps at the first 60k
+ * channels. A viewer with fifteen 20k-channel playlists could therefore get
+ * "no matching channels" for a US channel that lives in playlist 12. This
+ * walks them all two at a time and never retains more than one playlist's
+ * channel list plus the matches.
+ */
+suspend fun gatherIptvMatches(
+    playlists: List<IptvProvider>,
+    force: Boolean = false,
+    limit: Int = 5_000,
+    onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
+    predicate: (IptvChannel) -> Boolean,
+): List<IptvChannel> = withContext(Dispatchers.IO) {
+    val out = ArrayList<IptvChannel>(minOf(limit, 1_024))
+    var done = 0
+    for (chunk in playlists.chunked(2)) {
+        if (out.size >= limit) break
+        val fresh = chunk.map { p ->
+            async { runCatching { p.channels(force = force) }.getOrNull().orEmpty() }
+        }.awaitAll()
+        for (list in fresh) {
+            for (ch in list) {
+                if (out.size >= limit) break
+                if (runCatching { predicate(ch) }.getOrDefault(false)) out += ch
+            }
+        }
+        done += chunk.size
+        onProgress(done.coerceAtMost(playlists.size), playlists.size)
+    }
+    out
+}
+
+suspend fun gatherIptvChannels(
+    playlists: List<IptvProvider>,
+    force: Boolean = false,
+    limit: Int = 60_000,
+): List<IptvChannel> = withContext(Dispatchers.IO) {
+    val out = ArrayList<IptvChannel>(minOf(limit, 2_048))
+    val cold = ArrayList<IptvProvider>(playlists.size)
+    if (!force) {
+        for (p in playlists) {
+            val cached = p.cachedChannels()
+            if (cached == null) {
+                cold += p
+            } else if (out.size < limit) {
+                out.addAll(cached.take(limit - out.size))
+            }
+        }
+    } else {
+        cold += playlists
+    }
+    // Two playlists at a time, never the whole list at once: each one is a
+    // multi-megabyte download plus a parse, and twenty of them in parallel is
+    // what took the heap out on the reported 512 MB device.
+    for (chunk in cold.chunked(2)) {
+        if (out.size >= limit) break
+        val fresh = chunk.map { p ->
+            async { runCatching { p.channels(force = force) }.getOrNull().orEmpty() }
+        }.awaitAll()
+        for (list in fresh) {
+            if (out.size >= limit) break
+            out.addAll(list.take(limit - out.size))
+        }
+    }
+    out
+}
